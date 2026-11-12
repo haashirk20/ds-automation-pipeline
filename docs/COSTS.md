@@ -64,9 +64,9 @@ Haiku 5.5 $0.10 in, $0.50 out. Output figures include adaptive-thinking tokens.
 | Weekly strategy review | Sonnet 5.5 | 4–5 | 15,000 / 4,000 | $0.30 |
 | Per-platform titles, captions, hashtags | Haiku 5.5 | 60 | 3,000 / 1,500 | $0.06 |
 | Claim check | Haiku 5.5 | 80 | 3,000 / 500 | $0.04 |
-| QA vision, 6 frames × 4 renders | Haiku 5.5 | 60 | 17,000 / 1,200 | $0.14 |
+| QA vision, 6 frames × 4 renders (planned) | Haiku 5.5 | 60 | 17,000 / 1,200 | $0.14 |
 | Clip check against the source photo | Haiku 5.5 | ~36 | 3,500 / 300 | $0.02 |
-| Product image tagging, error classification | Haiku 5.5 | few | small | < $0.05 |
+| Product image tagging, error classification (planned) | Haiku 5.5 | few | small | < $0.05 |
 | Opus 5.5 escalation (off by default) | Opus 5.5 | 0 | 20,000 / 4,000 | $0.16 each |
 | **Total** | | | | **~$3.30** |
 

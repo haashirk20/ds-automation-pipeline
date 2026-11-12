@@ -315,9 +315,8 @@ Checks are code first, then a Haiku pass.
 **Text printed on photos.** Six of the ten photos are supplier infographics that state features the
 description does not: three heat levels, zip front, plush lining, machine washable, a 10,000 mAh
 power bank. The photos are Shopify data, and the supplier's printed claims are not checked facts.
-Default: they are not used as claims (`claims.fromPhotos: false`). If the owner turns it on, care,
-safety and battery claims stay excluded, and anything that contradicts the description loses to
-the description. The better fix is to add the true facts to the Shopify description.
+They are not used as claims, and there is no switch for it: nothing in the pipeline reads claims
+from photos. The fix is to add the true facts to the Shopify description.
 
 ## D-22 Open-Higgsfield-AI: not used (2026-11-11)
 

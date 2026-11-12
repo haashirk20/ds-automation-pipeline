@@ -61,7 +61,7 @@ flowchart LR
 3. **Script.** Sonnet 5.5 writes the script for the chosen hook as structured JSON: four beats, each
    with the spoken line, the on-screen line and the photos to show.
 4. **Claim check.** Code checks word count, price strings and banned phrases. Haiku 5.5 then checks
-   every claim against the brief. A failure regenerates the script, twice at most.
+   every claim against the brief. A failure regenerates the script once.
 5. **Voice.** Kokoro synthesizes the lines on the VM and returns word timings.
 6. **Hero clip (Tier 1 or 2 only).** The router checks price and remaining budget, generates one
    3–4 second image-to-video clip, and checks it against the source photo.
@@ -153,11 +153,11 @@ burst of posts.
 
 **Brief.** Built from Shopify data only. Each fact records its source field. Tags are used for
 angle selection and never as claims ("bestseller" is a tag on a product published three days ago).
-Haiku 5.5 with vision tags each photo once: product shot, lifestyle or infographic, the colour
-variant shown, and a crop rectangle free of printed text. The renderer uses the crop. Claims that
-appear only as text printed on a photo ("three heat levels", "machine washable") are not used
-unless `claims.fromPhotos` is turned on, and care, safety and battery claims are never taken from
-a photo. The brief also extracts mandatory disclosures.
+Each photo's usable shots come from `config/photo-tags.json`, which the owner can edit: a crop
+free of printed text, what it shows and the colour variant. A photo with no entry is used whole.
+Tagging photos automatically with a vision model is planned and not built. Claims that appear
+only as text printed on a photo ("three heat levels", "machine washable") are never used. The
+brief also extracts mandatory disclosures.
 
 **Hook library.** Sonnet 5.5 generates hooks in six frameworks: problem-agitate, curiosity gap,
 bold claim backed by product data, POV, comparison, objection-flip. Each hook stores its on-screen
@@ -168,13 +168,14 @@ are added. The library starts at 48 and refills by 24 whenever it is below the f
 figure of 20 is a minimum, not the target: two slots a day use 28 hooks in every 14-day window.
 
 **Script.** Four beats: hook (0–2 s), benefit or demo (2–10 s), offer (10–13 s), call to action
-with shop name and URL (13–15 s). About 35–40 spoken words. Each caption chunk has two strings:
+with shop name and URL (13–15 s). 24 to 32 spoken words: the voice speaks about 2.5 words a second. Each caption chunk has two strings:
 what is said ("forty-nine ninety-nine") and what is shown ("$49.99").
 
 **Voice and caption timing.** Kokoro-82M runs through a small Python CLI and returns a WAV plus
 per-word start and end times. Captions are the script itself, timed by the synthesizer. No speech
-recognition is involved, so a caption can never disagree with the script. If the voice-over runs
-past 14.5 seconds the script is regenerated shorter.
+recognition is involved, so a caption can never disagree with the script. Speech must end by
+14.8 seconds. If it runs long the voice is synthesized again slightly faster, up to 1.12×, and
+after that the script is regenerated.
 
 **Music.** A small Python tool synthesizes an instrumental bed from the slot's seed, so every ad has
 its own and we own all of it. Tracks the owner adds to `assets/music/` with a manifest entry take
@@ -256,14 +257,14 @@ Nothing is published without passing.
 |---|---|---|
 | Container, codec, size, frame rate | `ffprobe` | MP4, H.264, `yuv420p`, 1080×1920, 30 fps |
 | Duration | `ffprobe` | 14.0–16.0 s |
-| Audio present and loud enough | `ffmpeg` `loudnorm` in measure mode | AAC stream, −14 ±1.5 LUFS, true peak ≤ −1 dBTP |
+| Audio present and loud enough | `ffmpeg` `loudnorm` in measure mode | AAC stream, −14 ±1.5 LUFS, true peak at most −0.7 dBTP |
 | Black frames | Every frame decoded to 32×57 greyscale; mean brightness computed in code | No dark run longer than 0.3 s |
 | Frozen picture | The same frames; difference between neighbours | No still run longer than 2.5 s |
 | Silence | `ffmpeg` `silencedetect` | None longer than 1.5 s |
 | File size | `stat` | Under the smallest platform limit |
 | Captions inside safe zone | Layout code and a unit test | By construction |
 | Captions legible | Computed from the layout: font size, and contrast ratio against the caption plate | At least 56 px and 4.5:1 |
-| Clipped or overlapping text, price and shop name on the end card, overall look | Haiku 5.5 vision on 6 frames, scored against a rubric | Rubric passes. Optional, on by default |
+| Clipped or overlapping text, price and shop name on the end card, overall look | Haiku 5.5 vision on 6 frames, scored against a rubric | Planned. Not built yet |
 
 A failure re-renders with the next template, twice at most. Then the slot fails and alerts.
 
@@ -275,7 +276,7 @@ FFmpeg here is the binary that ships with Remotion. It has no `blackdetect`, `fr
 | Step | Model | Notes |
 |---|---|---|
 | Hooks, scripts, weekly review | `claude-sonnet-5-5` | |
-| Per-platform copy, claim check, QA vision, photo tagging, error classification | `claude-haiku-5-5` | |
+| Per-platform copy and claim checks. Planned and not built: QA vision, photo tagging, error classification | `claude-haiku-5-5` | |
 | Diagnosis after repeated failures | `claude-opus-5-5` | Behind `llm.escalationEnabled`, off by default |
 
 Rules for every call:
@@ -439,7 +440,7 @@ The orchestrator plans, routes, reviews diffs and keeps `DECISIONS.md` current.
    expected to work and is unverified until the Phase 5 test. Fallback: App Review and Business Verification.
 4. **Thin product data.** Few facts make for similar scripts. Adding heat settings, warm-up time,
    washing instructions and shipping time to the Shopify description improves every ad.
-5. **Supplier photos** may carry embedded text or watermarks. Photo tagging routes around them.
+5. **Supplier photos** may carry embedded text or watermarks. The owner's crop file, `config/photo-tags.json`, routes around them.
 6. **Tokens expire or get revoked.** `doctor`, daily checks and early alerts. Re-authorizing is one command.
 7. **Shopify's public JSON endpoint rate-limits** (HTTP 429 seen twice during research). Admin API
    credentials remove this. The last good brief is reused on failure.
