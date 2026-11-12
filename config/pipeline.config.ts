@@ -11,14 +11,15 @@ export default {
     // Slot index i on every enabled platform publishes the same master edit,
     // so every enabled platform needs the same NUMBER of slots.
     // cta: what the end card tells the viewer to do on that platform.
-    // safe: pixels kept clear of text on each edge of the 1080x1920 frame. These are starting values
-    // from third-party guides; check them against a real post and adjust.
-    youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 250, bottom: 560, left: 60, right: 180 } },
-    facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 270, bottom: 672, left: 65, right: 65 } },
+    // safe: pixels kept clear of text on each edge of the 1080x1920 frame. Estimates for organic
+    // posts (the published figures are for paid ads and reserve more). Check them against a real
+    // post on each platform and adjust.
+    youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 200, bottom: 480, left: 60, right: 160 } },
+    facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
     // Instagram and TikTok caption links are not clickable: put the store link in each bio.
-    instagram: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 270, bottom: 672, left: 65, right: 120 } },
+    instagram: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
     // mode: 'bridge' (public, through a hosted bridge) | 'direct' (own app, private only) | 'inbox' (drafts)
-    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 250, bottom: 620, left: 60, right: 180 }, mode: 'bridge' },
+    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 520, left: 60, right: 160 }, mode: 'bridge' },
   },
   // The name ads say and show. null uses the store name Shopify reports (still "Merry Marts").
   brand: { name: 'Giftwell' },

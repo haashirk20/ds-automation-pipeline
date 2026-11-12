@@ -273,11 +273,13 @@ One encode satisfies all four platforms: MP4, H.264 High, `yuv420p`, 1080×1920,
 8 Mbps, AAC-LC 48 kHz stereo, `+faststart`, 15 s ±1 s, roughly 15 MB. Loudness target −14 LUFS
 integrated, true peak ≤ −1 dBTP (platform targets unverified).
 
-**Safe zones.** Official pages did not load during research. The working numbers are from
-third-party guides to Meta's Reels spec: keep text out of the top 14%, bottom 35% and outer 6% on
-each side. On 1080×1920 that is the rectangle x 65–1015, y 270–1248. Each platform has its own
-preset in config, starting from this rectangle, and Phase 5 test posts are checked by eye against
-the real UI **(unverified until then)**.
+**Safe zones.** Official pages did not load during research. Third-party guides to Meta's Reels
+ad spec say to keep text out of the top 14%, bottom 35% and outer 6%. That reserve is for paid ads,
+which carry a button and a longer caption, and on 1080×1920 it leaves text less than half the
+frame. The config starts from smaller estimates for organic posts: about 200–220 px at the top,
+480–520 px at the bottom, 60 px on the left and 120–160 px on the right for the action buttons.
+Each platform has its own preset, and Phase 5 test posts are checked by eye against the real UI
+**(unverified until then)**. Only text is kept inside the safe zone. Photos use the whole frame.
 
 ## What the owner has to set up
 

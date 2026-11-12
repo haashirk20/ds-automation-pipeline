@@ -7,6 +7,7 @@ import { assembleEdl, ttsLines } from '../creative/assemble.ts';
 import { makeBed } from '../music/index.ts';
 import { synthesize } from '../tts/index.ts';
 import { ff } from './ffmpeg.ts';
+import { runQa } from '../qa/index.ts';
 import { renderEdl, renderSheet } from './render.ts';
 
 const Fixture = z.object({
@@ -20,14 +21,15 @@ const SHEET_TIMES = [0.5, 1.5, 4, 7, 9.5, 11.5, 13, 14.5];
 export async function runSamples(config: Config, _now: Date): Promise<void> {
   const fx = Fixture.parse(JSON.parse(readFileSync('tests/fixtures/samples/samples.json', 'utf8')));
   const out = path.resolve(env.outDir(), 'samples');
+  const failures: string[] = [];
   for (const [i, s] of fx.samples.entries()) {
     const work = path.join(out, 'work', s.id);
     mkdirSync(work, { recursive: true });
     const t0 = Date.now();
     const voiceWav = path.join(work, 'voice.wav');
-    // Speed 1.0 first; a fixture script that runs long for its voice is sped up in steps (as the producer will).
+    // Speed 1.0 first; a script that runs long for its voice is sped up a little, then rejected.
     let tts = await synthesize({ lines: ttsLines(s.script), voice: s.voice, speed: 1.0, gapMs: 180, outWav: voiceWav });
-    for (const speed of [1.1, 1.2, 1.3]) {
+    for (const speed of [1.06, 1.12]) {
       if (Math.max(...tts.lines.map((l) => l.endMs)) <= 14800) break;
       tts = await synthesize({ lines: ttsLines(s.script), voice: s.voice, speed, gapMs: 180, outWav: voiceWav });
     }
@@ -54,6 +56,10 @@ export async function runSamples(config: Config, _now: Date): Promise<void> {
       const file = path.join(out, platform === 'facebook' ? `${s.id}.mp4` : `${s.id}-${platform}.mp4`);
       const r0 = Date.now();
       await renderEdl({ edl, platform, config, outFile: file });
+      const qa = await runQa(file);
+      const failed = qa.checks.filter((k) => !k.pass);
+      if (failed.length) failures.push(`${path.basename(file)}: ${failed.map((k) => `${k.name} ${k.value} (limit ${k.limit})`).join('; ')}`);
+      console.log(JSON.stringify({ qa: qa.pass ? 'pass' : 'FAIL', failed: failed.map((k) => `${k.name} ${k.value}`) }));
       console.log(JSON.stringify({ sample: s.id, platform, speechEndMs: speechEnd, durationMs: edl.durationMs, renderSec: Math.round((Date.now() - r0) / 100) / 10, file }));
     }
     // Contact sheet from the facebook render.
@@ -66,4 +72,5 @@ export async function runSamples(config: Config, _now: Date): Promise<void> {
     await renderSheet(frames, path.join(out, `${s.id}.sheet.png`));
     console.log(JSON.stringify({ sample: s.id, totalSec: Math.round((Date.now() - t0) / 1000) }));
   }
+  if (failures.length) throw new Error(`QA failed:\n${failures.join('\n')}`);
 }

@@ -51,9 +51,9 @@
         "kind": "lifestyle",
         "variant": "Beige",
         "crop": {
-          "x": 0.13,
+          "x": 0.2,
           "y": 0.13,
-          "w": 0.31,
+          "w": 0.24,
           "h": 0.47
         },
         "note": "Woman wearing the beige shawl while using a laptop on a sofa"
@@ -151,7 +151,7 @@
         "crop": {
           "x": 0.55,
           "y": 0.0,
-          "w": 0.42,
+          "w": 0.39,
           "h": 0.62
         },
         "note": "Woman in the beige shawl holding a coffee cup by a window, a suitcase beside her"
