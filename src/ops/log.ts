@@ -27,7 +27,8 @@ function write(level: string, msg: string, fields: Record<string, unknown> = {})
   // The logger's own timestamp is the one allowed clock read outside cli.ts.
   // Core fields come last so caller fields cannot overwrite them.
   const line = JSON.stringify({ ...(redact(fields) as object), ts: new Date().toISOString(), level, msg: scrub(msg) });
-  process.stdout.write(line + '\n');
+  // stderr, so a command's stdout carries only its result (for example `ingest --print`).
+  process.stderr.write(line + '\n');
 }
 
 export const log = {

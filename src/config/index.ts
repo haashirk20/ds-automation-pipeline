@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import raw from '../../config/pipeline.config.ts';
+import { SafeZone } from '../contracts.ts';
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM');
-const base = { enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1) };
+const base = { enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1), cta: z.string().min(1), safe: SafeZone };
 
 const schema = z
   .object({
@@ -27,6 +28,8 @@ const schema = z
       uploadTimeoutMinutes: z.number().positive(),
       timeoutMinutes: z.number().positive(),
     }),
+    creative: z.object({ voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
+    claims: z.object({ fromPhotos: z.boolean() }),
     render: z.object({ produceTimeoutMinutes: z.number().positive(), maxAttempts: z.number().int().min(1) }),
     disclosure: z.object({ tier0: z.boolean() }),
     watchdogMinutes: z.number().positive(),
@@ -61,4 +64,8 @@ export const env = {
   telegramToken: () => process.env.ALERT_TELEGRAM_BOT_TOKEN || undefined,
   telegramChat: () => process.env.ALERT_TELEGRAM_CHAT_ID || undefined,
   healthcheckUrl: () => process.env.HEALTHCHECK_URL || undefined,
+  shop: () => process.env.SHOPIFY_SHOP || undefined, // e.g. my-store.myshopify.com
+  shopifyClientId: () => process.env.SHOPIFY_CLIENT_ID || undefined,
+  shopifyClientSecret: () => process.env.SHOPIFY_CLIENT_SECRET || undefined,
+  llmStub: () => process.env.LLM_STUB === '1', // model calls return fixtures
 };

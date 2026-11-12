@@ -79,8 +79,8 @@ test('alert: failed send is recorded but not de-duplicated; delivered send is', 
   const db = fresh();
   process.env.ALERT_DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/123/abcSECRETtoken99';
   const lines: string[] = [];
-  const origWrite = process.stdout.write;
-  process.stdout.write = ((s: string) => { lines.push(String(s)); return true; }) as typeof process.stdout.write;
+  const origWrite = process.stderr.write;
+  process.stderr.write = ((s: string) => { lines.push(String(s)); return true; }) as typeof process.stderr.write;
   const t = new Date('2026-11-12T00:00:00Z');
   try {
     await withFetch([500, 'throw', 200], async (calls) => {
@@ -90,7 +90,7 @@ test('alert: failed send is recorded but not de-duplicated; delivered send is', 
       await alert(db, 'k', 'a', 'm', t); // deduplicated
       assert.equal(calls.length, 3);
     });
-  } finally { process.stdout.write = origWrite; delete process.env.ALERT_DISCORD_WEBHOOK; }
+  } finally { process.stderr.write = origWrite; delete process.env.ALERT_DISCORD_WEBHOOK; }
   assert.deepEqual(db.prepare('SELECT delivered FROM events ORDER BY id').all().map((r) => r.delivered), [0, 0, 1]);
   assert.ok(lines.length > 0);
   assert.ok(!lines.join('').match(/abcSECRETtoken99|discord\.com\/api/));

@@ -21,3 +21,8 @@
 | pytest (PyPI, dev, tools/music) | 8.4.2 | MIT | Tests for bed.py | unittest (more boilerplate) |
 
 Built-ins used instead of packages: `node:test`, `node:assert`, `node:sqlite`, `fetch`, `process.loadEnvFile`, `Intl`.
+| remotion, @remotion/bundler, @remotion/renderer (npm, runtime) | 4.0.543 | Remotion licence: source-available, free up to 3 employees | Renders the ads from React templates. Ships FFmpeg 7.1 and ffprobe | HyperFrames, FFmpeg filtergraphs, MoviePy (D-03) |
+| react, react-dom (npm, runtime) | 19.3.1 | MIT | Required by Remotion | None |
+| @anthropic-ai/sdk (npm, runtime) | 1.8.0 | Apache-2.0 | All model calls | Raw `fetch` (loses typed errors and helpers) |
+| @fontsource/anton, @fontsource/inter, @fontsource/fraunces (npm, runtime) | 5.3.0 | OFL-1.1 | Fonts on disk, so rendering needs no network | Google Fonts at render time (needs network), font files committed to the repo |
+| @types/react, @types/react-dom (npm, dev) | 19.3.0 | MIT | Types for the templates | None |

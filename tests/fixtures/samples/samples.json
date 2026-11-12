@@ -1,0 +1,121 @@
+{
+  "brief": {
+    "version": 1,
+    "sourceHash": "fixture",
+    "shop": { "name": "Merry Marts", "domain": "shopgiftwell.myshopify.com", "currency": "CAD", "shipsTo": ["CA"] },
+    "product": {
+      "handle": "snugwrap-heated-shawl-wrap",
+      "title": "Heated Shawl Wrap",
+      "url": "https://shopgiftwell.myshopify.com/products/snugwrap-heated-shawl-wrap",
+      "type": "USB heated wrap",
+      "priceText": "$49.99",
+      "colors": ["Beige", "Green", "Red"]
+    },
+    "facts": [
+      { "id": "f-title", "text": "The product is a Heated Shawl Wrap.", "source": "title" },
+      { "id": "f-heat", "text": "Its function is heating.", "source": "description" },
+      { "id": "f-usb", "text": "It is a USB heated wrap.", "source": "product type" },
+      { "id": "f-wear", "text": "It is wearable.", "source": "description" },
+      { "id": "f-size", "text": "It measures 150 × 80 cm.", "source": "description" },
+      { "id": "f-gift", "text": "It comes in gift-box packaging.", "source": "description" },
+      { "id": "f-colors", "text": "It comes in Beige, Green and Red.", "source": "options" },
+      { "id": "f-plush", "text": "Materials include plush fabric and waffle-knit fabric.", "source": "description" },
+      { "id": "f-price", "text": "It costs $49.99 CAD.", "source": "price" },
+      { "id": "f-ship", "text": "The store ships to Canada.", "source": "shop" }
+    ],
+    "disclosures": ["Power bank not included."],
+    "angles": ["gift", "winter", "new"],
+    "shots": [
+      { "id": "model-beige", "file": "assets/snugwrap-heated-shawl-wrap/1079793b-a669-4827-81a6-da657ad9a4fd.jpg", "width": 1080, "height": 1080, "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.52, "y": 0.0, "w": 0.48, "h": 0.78 }, "note": "Woman wearing the beige shawl, eyes closed and relaxed, bright window behind her" },
+      { "id": "folded-beige", "file": "assets/snugwrap-heated-shawl-wrap/1079793b-a669-4827-81a6-da657ad9a4fd.jpg", "width": 1080, "height": 1080, "kind": "product", "variant": "Beige", "crop": { "x": 0.22, "y": 0.7, "w": 0.44, "h": 0.28 }, "note": "Folded beige shawl, close-up of the knit and the power button" },
+      { "id": "product-red", "file": "assets/snugwrap-heated-shawl-wrap/60a6d100-6a08-4079-9c32-1fa25323f21a.jpg", "width": 1495, "height": 1500, "kind": "product", "variant": "Red", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Red shawl on a white background, front view" },
+      { "id": "working-beige", "file": "assets/snugwrap-heated-shawl-wrap/b227ae20-6a78-4b9d-999e-4829d4e75f8d.jpg", "width": 1500, "height": 1500, "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.13, "y": 0.13, "w": 0.31, "h": 0.47 }, "note": "Woman wearing the beige shawl while using a laptop on a sofa" },
+      { "id": "loose-throw", "file": "assets/snugwrap-heated-shawl-wrap/b227ae20-6a78-4b9d-999e-4829d4e75f8d.jpg", "width": 1500, "height": 1500, "kind": "lifestyle", "variant": null, "crop": { "x": 0.62, "y": 0.13, "w": 0.34, "h": 0.47 }, "note": "Black-and-white photo of a woman huddled under an ordinary loose blanket, looking cold. Not our product: use only as the 'before' picture" },
+      { "id": "product-green", "file": "assets/snugwrap-heated-shawl-wrap/7ec3c2c0-c2f1-4423-a8fd-4ec78194ef15.jpg", "width": 1486, "height": 1500, "kind": "product", "variant": "Green", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Green shawl on a white background, front view" },
+      { "id": "product-beige", "file": "assets/snugwrap-heated-shawl-wrap/2f744baf-7123-499a-9354-04ae5876f963.jpg", "width": 1490, "height": 1500, "kind": "product", "variant": "Beige", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Beige shawl on a white background, front view" },
+      { "id": "model-red", "file": "assets/snugwrap-heated-shawl-wrap/745d73e5-494f-43ba-9954-5f98c2deffe7_trans.jpg", "width": 800, "height": 800, "kind": "lifestyle", "variant": "Red", "crop": { "x": 0.55, "y": 0.1, "w": 0.45, "h": 0.9 }, "note": "Smiling woman wearing the red shawl, holding a white mug" },
+      { "id": "product-plain", "file": "assets/snugwrap-heated-shawl-wrap/915515e8-bfad-4a1e-b8cf-6831af298408.jpg", "width": 800, "height": 800, "kind": "product", "variant": "Beige", "crop": { "x": 0.1, "y": 0.0, "w": 0.8, "h": 1.0 }, "note": "Beige shawl with grey lining on a white background" },
+      { "id": "mug-beige", "file": "assets/snugwrap-heated-shawl-wrap/651abd0e-c630-42f1-a3a1-dfe1969430ba.jpg", "width": 1500, "height": 1500, "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.55, "y": 0.0, "w": 0.42, "h": 0.62 }, "note": "Woman in the beige shawl holding a coffee cup by a window, a suitcase beside her" }
+    ],
+    "rules": { "discountClaims": false, "reviewClaims": false, "claimsFromPhotos": false }
+  },
+  "samples": [
+    {
+      "id": "sample-1-kinetic-bold",
+      "template": "kinetic-bold",
+      "palette": { "bg": "#1F1412", "ink": "#FFFFFF", "accent": "#E3B23C", "plate": "#000000" },
+      "voice": "af_heart",
+      "musicSeed": 101,
+      "script": {
+        "hook": { "framework": "problem-agitate", "headline": "Still cold on the couch?" },
+        "beats": [
+          { "kind": "hook", "chunks": [{ "say": "Still cold on the couch?", "show": "Still cold on the couch?" }], "shotIds": ["loose-throw"], "factIds": [] },
+          {
+            "kind": "benefit",
+            "chunks": [
+              { "say": "This shawl heats up,", "show": "This shawl heats up" },
+              { "say": "and you wear it.", "show": "and you wear it" },
+              { "say": "Plug it into USB", "show": "Plug it into USB" },
+              { "say": "and stay wrapped in warmth.", "show": "stay wrapped in warmth" }
+            ],
+            "shotIds": ["model-beige", "folded-beige", "working-beige"],
+            "factIds": ["f-heat", "f-wear", "f-usb"]
+          },
+          { "kind": "offer", "chunks": [{ "say": "Three colours.", "show": "3 colours" }, { "say": "Forty-nine ninety-nine.", "show": "$49.99" }], "shotIds": ["product-red", "product-green", "product-beige"], "factIds": ["f-colors", "f-price"] },
+          { "kind": "cta", "chunks": [{ "say": "Get yours at Merry Marts.", "show": "Get yours at Merry Marts" }], "shotIds": ["product-plain"], "factIds": [] }
+        ]
+      }
+    },
+    {
+      "id": "sample-2-cozy-soft",
+      "template": "cozy-soft",
+      "palette": { "bg": "#F4E9DC", "ink": "#3A2A20", "accent": "#B5503C", "plate": "#FFFFFF" },
+      "voice": "af_bella",
+      "musicSeed": 202,
+      "script": {
+        "hook": { "framework": "bold-claim", "headline": "A blanket you can actually wear" },
+        "beats": [
+          { "kind": "hook", "chunks": [{ "say": "A blanket you can actually wear.", "show": "A blanket you can actually wear" }], "shotIds": ["model-red"], "factIds": ["f-wear"] },
+          {
+            "kind": "benefit",
+            "chunks": [
+              { "say": "A heated shawl wrap,", "show": "A heated shawl wrap" },
+              { "say": "powered by USB.", "show": "powered by USB" },
+              { "say": "Soft plush fabric,", "show": "Soft plush fabric" },
+              { "say": "a hundred and fifty by eighty centimetres.", "show": "150 × 80 cm" }
+            ],
+            "shotIds": ["mug-beige", "folded-beige", "model-beige"],
+            "factIds": ["f-title", "f-heat", "f-usb", "f-plush", "f-size"]
+          },
+          { "kind": "offer", "chunks": [{ "say": "Beige, green or red.", "show": "Beige, green or red" }, { "say": "Forty-nine ninety-nine.", "show": "$49.99" }], "shotIds": ["product-beige", "product-green", "product-red"], "factIds": ["f-colors", "f-price"] },
+          { "kind": "cta", "chunks": [{ "say": "Find it at Merry Marts.", "show": "Find it at Merry Marts" }], "shotIds": ["product-plain"], "factIds": [] }
+        ]
+      }
+    },
+    {
+      "id": "sample-3-gift-guide",
+      "template": "gift-guide",
+      "palette": { "bg": "#1F3B2C", "ink": "#FFF8EC", "accent": "#D9A441", "plate": "#12241B" },
+      "voice": "am_michael",
+      "musicSeed": 303,
+      "script": {
+        "hook": { "framework": "curiosity-gap", "headline": "The winter gift they'll actually use" },
+        "beats": [
+          { "kind": "hook", "chunks": [{ "say": "The winter gift they'll actually use.", "show": "The winter gift they'll actually use" }], "shotIds": ["model-beige"], "factIds": [] },
+          {
+            "kind": "benefit",
+            "chunks": [
+              { "say": "A wearable heated shawl.", "show": "A wearable heated shawl" },
+              { "say": "It plugs into USB,", "show": "It plugs into USB" },
+              { "say": "and comes in gift-box packaging.", "show": "Gift-box packaging" }
+            ],
+            "shotIds": ["working-beige", "folded-beige", "mug-beige"],
+            "factIds": ["f-wear", "f-heat", "f-usb", "f-gift"]
+          },
+          { "kind": "offer", "chunks": [{ "say": "Three colours, forty-nine ninety-nine,", "show": "3 colours · $49.99" }, { "say": "shipped in Canada.", "show": "Ships in Canada" }], "shotIds": ["product-green", "product-red", "product-beige"], "factIds": ["f-colors", "f-price", "f-ship"] },
+          { "kind": "cta", "chunks": [{ "say": "Shop Merry Marts today.", "show": "Shop Merry Marts today" }], "shotIds": ["product-plain"], "factIds": [] }
+        ]
+      }
+    }
+  ]
+}

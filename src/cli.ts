@@ -5,20 +5,22 @@ import { hasAlertChannel } from './ops/alert.ts';
 import { kvGet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
 import { publishers } from './publish/registry.ts';
+import { runSamples } from './render/samples.ts';
 import { planDay } from './scheduler/planner.ts';
+import { runIngest } from './shopify/index.ts';
 import { run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | doctor | health';
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | ingest [--print] | samples | doctor | health';
 const ENV_NAMES = ['DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL'];
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' } },
+    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' } },
   });
   const cmd = positionals[0];
-  if (!['run', 'plan', 'publish', 'doctor', 'health'].includes(cmd)) {
+  if (!['run', 'plan', 'publish', 'ingest', 'samples', 'doctor', 'health'].includes(cmd)) {
     console.error(USAGE);
     return 2;
   }
@@ -40,9 +42,14 @@ async function main(): Promise<number> {
   if (cmd === 'doctor') return doctor(clock());
 
   const config = loadConfig();
+  if (cmd === 'samples') {
+    await runSamples(config, clock());
+    return 0;
+  }
   const db = openDb(env.dataDir());
   const deps = { db, config, publishers };
   if (cmd === 'run') await run(deps, clock, !!values.once);
+  else if (cmd === 'ingest') await runIngest(db, config, clock(), { print: !!values.print });
   else if (cmd === 'plan') {
     const now = clock();
     planDay(db, config, values.date ?? localDateOf(now, config.timezone), now);

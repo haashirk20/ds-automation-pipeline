@@ -9,13 +9,25 @@ export default {
     // Facebook app in Development mode, LinkedIn draft. The owner switches to 'public' when ready.
     // Slot index i on every enabled platform publishes the same master edit,
     // so every enabled platform needs the same NUMBER of slots.
-    youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'] },
-    facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'] },
+    // cta: what the end card tells the viewer to do on that platform.
+    // safe: pixels kept clear of text on each edge of the 1080x1920 frame. These are starting values
+    // from third-party guides; check them against a real post and adjust.
+    youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 250, bottom: 560, left: 60, right: 180 } },
+    facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 270, bottom: 672, left: 65, right: 65 } },
     // target: 'organization' | 'member'
-    linkedin: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], target: 'member' },
-    // mode: 'bridge' | 'direct' | 'inbox'
-    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], mode: 'direct' },
+    linkedin: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link below', safe: { top: 150, bottom: 300, left: 60, right: 60 }, target: 'member' },
+    // mode: 'bridge' | 'direct' | 'inbox'. Put the store link in the TikTok bio: caption links are not clickable.
+    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 250, bottom: 620, left: 60, right: 180 }, mode: 'direct' },
   },
+  creative: {
+    // Kokoro voices to rotate through. See tools/tts/tts.py for the allowed list.
+    voices: ['af_heart', 'af_bella', 'am_michael'],
+    // A synthesized bed under the voice. gainDb is relative to the bed's own level.
+    music: { enabled: true, gainDb: -8 },
+  },
+  // Claims printed only on product photos are not used unless this is true. Care, safety and battery
+  // claims are never taken from a photo.
+  claims: { fromPhotos: false },
   publish: {
     // Past this lateness a publication is skipped, not posted.
     maxLatenessMinutes: 360,
