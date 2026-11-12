@@ -14,6 +14,22 @@ Updated 2026-11-12.
 | 7 Deploy | | |
 | 8 Feedback | | |
 
+## In progress when work last stopped (2026-11-12)
+
+Four implementers were mid-task and their files are uncommitted in the working tree. Each must be
+finished, checked and reviewed before it is committed:
+
+- Ingest: `src/shopify/`, migration 002, `tests/shopify.test.ts`.
+- Render pipeline: `templates/`, `src/render/render.ts`, `src/render/samples.ts`, `src/tts/`, `src/music/`, `src/creative/assemble.ts`.
+- QA gate: `src/qa/`, `tests/qa.test.ts`.
+- Model client and creative steps: `src/llm/`, `src/creative/{hooks,script,claims,copy}.ts`, `prompts/`, migration 003.
+
+Still to do in Phase 3 after those: a design pass giving the three templates distinct looks, the
+real `produceSlot` that joins the pieces, and the three sample ads in `out/samples/`.
+
+Higgsfield cost preflight (no spend): a 5 s vertical clip is 10 credits on `kling3_0` and 35 on
+`seedance_2_5`.
+
 ## What has been seen working
 
 - **Phase 1.** 41 tests pass and the type check is clean. A simulated day in `DRY_RUN` plans two
