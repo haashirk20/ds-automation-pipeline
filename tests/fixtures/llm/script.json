@@ -1,0 +1,87 @@
+{
+  "hook": {
+    "framework": "problem-agitate",
+    "headline": "Still cold on the couch?"
+  },
+  "beats": [
+    {
+      "kind": "hook",
+      "chunks": [
+        {
+          "say": "Still cold on the couch?",
+          "show": "Still cold on the couch?"
+        }
+      ],
+      "shotIds": [
+        "loose-throw"
+      ],
+      "factIds": []
+    },
+    {
+      "kind": "benefit",
+      "chunks": [
+        {
+          "say": "This shawl heats up,",
+          "show": "This shawl heats up"
+        },
+        {
+          "say": "and you wear it.",
+          "show": "and you wear it"
+        },
+        {
+          "say": "Plug it into USB",
+          "show": "Plug it into USB"
+        },
+        {
+          "say": "and stay wrapped in warmth.",
+          "show": "stay wrapped in warmth"
+        }
+      ],
+      "shotIds": [
+        "model-beige",
+        "folded-beige",
+        "working-beige"
+      ],
+      "factIds": [
+        "f-heat",
+        "f-wear",
+        "f-usb"
+      ]
+    },
+    {
+      "kind": "offer",
+      "chunks": [
+        {
+          "say": "Three colours.",
+          "show": "3 colours"
+        },
+        {
+          "say": "Forty-nine ninety-nine.",
+          "show": "$49.99"
+        }
+      ],
+      "shotIds": [
+        "product-red",
+        "product-green",
+        "product-beige"
+      ],
+      "factIds": [
+        "f-colors",
+        "f-price"
+      ]
+    },
+    {
+      "kind": "cta",
+      "chunks": [
+        {
+          "say": "Get yours at Giftwell.",
+          "show": "Get yours at Giftwell"
+        }
+      ],
+      "shotIds": [
+        "product-plain"
+      ],
+      "factIds": []
+    }
+  ]
+}

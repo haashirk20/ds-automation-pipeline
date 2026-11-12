@@ -1,0 +1,194 @@
+{
+  "hooks": [
+    {
+      "framework": "problem-agitate",
+      "headline": "Still cold on the couch?",
+      "say": "Still cold on the couch?",
+      "factIds": []
+    },
+    {
+      "framework": "problem-agitate",
+      "headline": "Cold hands, cold feet, cold desk",
+      "say": "Cold hands, cold feet, cold desk.",
+      "factIds": []
+    },
+    {
+      "framework": "problem-agitate",
+      "headline": "Your blanket slips off again",
+      "say": "Your blanket slips off again.",
+      "factIds": []
+    },
+    {
+      "framework": "problem-agitate",
+      "headline": "Thermostat up, still shivering?",
+      "say": "Thermostat up, still shivering?",
+      "factIds": []
+    },
+    {
+      "framework": "curiosity-gap",
+      "headline": "The winter gift they'll actually use",
+      "say": "The winter gift they'll actually use.",
+      "factIds": []
+    },
+    {
+      "framework": "curiosity-gap",
+      "headline": "What if your blanket was wearable?",
+      "say": "What if your blanket was wearable?",
+      "factIds": [
+        "f-wear"
+      ]
+    },
+    {
+      "framework": "curiosity-gap",
+      "headline": "This shawl does something odd",
+      "say": "This shawl does something odd.",
+      "factIds": [
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "curiosity-gap",
+      "headline": "Plug in your shawl. Yes, really.",
+      "say": "Plug in your shawl. Yes, really.",
+      "factIds": [
+        "f-usb"
+      ]
+    },
+    {
+      "framework": "bold-claim",
+      "headline": "A blanket you can actually wear",
+      "say": "A blanket you can actually wear.",
+      "factIds": [
+        "f-wear"
+      ]
+    },
+    {
+      "framework": "bold-claim",
+      "headline": "A shawl that heats up",
+      "say": "A shawl that heats up.",
+      "factIds": [
+        "f-heat",
+        "f-title"
+      ]
+    },
+    {
+      "framework": "bold-claim",
+      "headline": "Warmth that runs on USB",
+      "say": "Warmth that runs on USB.",
+      "factIds": [
+        "f-usb",
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "bold-claim",
+      "headline": "Wrap up in plush, heated fabric",
+      "say": "Wrap up in plush, heated fabric.",
+      "factIds": [
+        "f-plush",
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "pov",
+      "headline": "POV: your shawl is warm too",
+      "say": "Point of view: your shawl is warm.",
+      "factIds": [
+        "f-heat",
+        "f-wear"
+      ]
+    },
+    {
+      "framework": "pov",
+      "headline": "POV: working from the sofa, wrapped up",
+      "say": "Point of view: working from the sofa.",
+      "factIds": [
+        "f-wear"
+      ]
+    },
+    {
+      "framework": "pov",
+      "headline": "POV: you unwrap the gift box",
+      "say": "Point of view: you unwrap this gift.",
+      "factIds": [
+        "f-gift"
+      ]
+    },
+    {
+      "framework": "pov",
+      "headline": "POV: coffee, window, heated shawl",
+      "say": "Point of view: coffee, window, heated shawl.",
+      "factIds": [
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "comparison",
+      "headline": "Ordinary blanket, meet the heated one",
+      "say": "Ordinary blanket, meet the heated one.",
+      "factIds": [
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "comparison",
+      "headline": "Throw blanket or heated shawl?",
+      "say": "Throw blanket or heated shawl?",
+      "factIds": [
+        "f-heat",
+        "f-wear"
+      ]
+    },
+    {
+      "framework": "comparison",
+      "headline": "Not a blanket. A wearable heater.",
+      "say": "Not a blanket. A wearable heater.",
+      "factIds": [
+        "f-wear",
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "comparison",
+      "headline": "Plain scarf versus USB heated wrap",
+      "say": "Plain scarf versus USB heated wrap.",
+      "factIds": [
+        "f-usb"
+      ]
+    },
+    {
+      "framework": "objection-flip",
+      "headline": "Too big to wear? Not this one",
+      "say": "Too big to wear? Not this one.",
+      "factIds": [
+        "f-wear",
+        "f-size"
+      ]
+    },
+    {
+      "framework": "objection-flip",
+      "headline": "Heated, and still plush",
+      "say": "Heated, and still plush.",
+      "factIds": [
+        "f-plush",
+        "f-heat"
+      ]
+    },
+    {
+      "framework": "objection-flip",
+      "headline": "Hard to gift? Meet the gift-box shawl",
+      "say": "Hard to gift? Meet the gift-box shawl.",
+      "factIds": [
+        "f-gift"
+      ]
+    },
+    {
+      "framework": "objection-flip",
+      "headline": "Cords are annoying. This one is worth it",
+      "say": "Cords are annoying. This one's worth it.",
+      "factIds": [
+        "f-usb"
+      ]
+    }
+  ]
+}

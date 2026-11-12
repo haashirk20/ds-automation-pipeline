@@ -1,0 +1,52 @@
+{
+  "verdicts": [
+    {
+      "chunk": 1,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 2,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 3,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 4,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 5,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 6,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 7,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    },
+    {
+      "chunk": 8,
+      "supported": true,
+      "factId": null,
+      "reason": "Supported by the cited facts."
+    }
+  ]
+}
