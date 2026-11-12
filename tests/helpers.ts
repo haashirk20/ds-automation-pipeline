@@ -5,7 +5,7 @@ import { openDb } from '../src/db/index.ts';
 import { parseConfig } from '../src/config/index.ts';
 import raw from '../config/pipeline.config.ts';
 import { planDay } from '../src/scheduler/planner.ts';
-import { produceSlot } from '../src/render/produce.ts';
+import { makeProducer } from '../src/scheduler/loop.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
 export const config = parseConfig(raw);
@@ -20,12 +20,24 @@ export function fresh() {
   return openDb(process.env.DATA_DIR);
 }
 
+// Stands in for the real producer: same claim, placeholder renders with copy, no media.
+export async function stubProduce(db: ReturnType<typeof openDb>, id: string, now: Date) {
+  const ts = now.toISOString();
+  if (db.prepare("UPDATE slots SET status = 'producing', attempt = attempt + 1, updated_at = ? WHERE id = ? AND status = 'planned'").run(ts, id).changes !== 1) return;
+  for (const p of ['youtube', 'facebook', 'instagram', 'tiktok']) {
+    db.prepare("INSERT OR REPLACE INTO renders (slot_id, platform, file_path, qa_pass, qa_json, title, caption, created_at) VALUES (?,?,?,1,'{}',?,?,?)").run(id, p, `/x/${id}/${p}.mp4`, `title ${p}`, `caption ${p}`, ts);
+  }
+  db.prepare("UPDATE slots SET tier = 't0', status = 'ready', updated_at = ? WHERE id = ?").run(ts, id);
+}
+
+export const stubProducer = (db: ReturnType<typeof openDb>) => makeProducer((id, now) => stubProduce(db, id, now));
+
 // Plans and stub-produces 2026-11-12 slots (21:30 Toronto the evening before).
 export async function readyDb() {
   const db = fresh();
   const t = new Date('2026-11-12T02:30:00Z');
   planDay(db, config, '2026-11-12', t);
-  for (const id of ['2026-11-12#1', '2026-11-12#2']) await produceSlot(db, config, id, t);
+  for (const id of ['2026-11-12#1', '2026-11-12#2']) await stubProduce(db, id, t);
   return db;
 }
 

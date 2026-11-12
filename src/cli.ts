@@ -2,25 +2,25 @@ import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { env, loadConfig } from './config/index.ts';
 import { hasAlertChannel } from './ops/alert.ts';
-import { kvGet, openDb, schemaVersion } from './db/index.ts';
+import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
 import { publishers } from './publish/registry.ts';
 import { runSamples } from './render/samples.ts';
 import { planDay } from './scheduler/planner.ts';
 import { runIngest } from './shopify/index.ts';
-import { run } from './scheduler/loop.ts';
+import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | ingest [--print] | samples | doctor | health';
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples | doctor | health';
 const ENV_NAMES = ['DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL'];
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' } },
+    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' } },
   });
   const cmd = positionals[0];
-  if (!['run', 'plan', 'publish', 'ingest', 'samples', 'doctor', 'health'].includes(cmd)) {
+  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health'].includes(cmd)) {
     console.error(USAGE);
     return 2;
   }
@@ -47,10 +47,23 @@ async function main(): Promise<number> {
     return 0;
   }
   const db = openDb(env.dataDir());
-  const deps = { db, config, publishers };
+  const ingest = async (now: Date) => {
+    await runIngest(db, config, now, { print: false });
+    kvSet(db, 'ingest_at', now.toISOString());
+  };
+  const deps = { db, config, publishers, producer: makeProducer(childSpawn(config)), ingest, wait: !!values.once };
   if (cmd === 'run') await run(deps, clock, !!values.once);
-  else if (cmd === 'ingest') await runIngest(db, config, clock(), { print: !!values.print });
-  else if (cmd === 'plan') {
+  else if (cmd === 'produce') {
+    if (!values.slot) {
+      console.error(USAGE);
+      return 2;
+    }
+    const { produceSlot } = await import('./render/produce.ts'); // loads Remotion; only the child needs it
+    await produceSlot(db, config, values.slot, clock());
+  } else if (cmd === 'ingest') {
+    await runIngest(db, config, clock(), { print: !!values.print });
+    kvSet(db, 'ingest_at', clock().toISOString());
+  } else if (cmd === 'plan') {
     const now = clock();
     planDay(db, config, values.date ?? localDateOf(now, config.timezone), now);
   } else await publishDue(db, config, publishers, clock());

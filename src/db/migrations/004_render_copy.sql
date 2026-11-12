@@ -1,0 +1,3 @@
+ALTER TABLE renders ADD COLUMN title TEXT;
+ALTER TABLE renders ADD COLUMN caption TEXT;
+ALTER TABLE renders ADD COLUMN ai_json TEXT;

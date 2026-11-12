@@ -109,7 +109,15 @@ function record(db: Db, now: Date, req: { purpose: string; slotId?: string }, mo
 export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, now: Date): Promise<T> {
   if (env.llmStub()) {
     const file = join(import.meta.dirname, '../../tests/fixtures/llm', `${req.purpose}.json`);
-    const out = req.schema.parse(JSON.parse(readFileSync(file, 'utf8')));
+    const fixture = JSON.parse(readFileSync(file, 'utf8'));
+    // The fixtures were written for the sample brief. The stub makes them fit the brief and the hook it is given:
+    // the script opens with the asked-for hook, and fact ids the brief does not have are dropped.
+    const known = new Set<string>((req.system.match(/"id": "(f-[^"]+)"/g) ?? []).map((m) => m.slice(7, -1)));
+    const ask = req.purpose === 'script' ? /headline \(show\): (.+)\nsay: (.+)\n/.exec(req.user) : null;
+    if (ask) fixture.beats[0].chunks = [{ say: ask[2], show: ask[1] }];
+    for (const b of fixture.beats ?? []) b.factIds = b.factIds.filter((f: string) => known.has(f));
+    for (const v of fixture.verdicts ?? []) if (v.factId && !known.has(v.factId)) v.factId = null;
+    const out = req.schema.parse(fixture);
     record(db, now, req, 'stub', { input_tokens: 0, output_tokens: 0 }, 0);
     return out;
   }

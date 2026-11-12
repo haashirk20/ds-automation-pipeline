@@ -2,14 +2,15 @@ import type { Db } from '../db/index.ts';
 import { env, type Config } from '../config/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
+import { Edl } from '../contracts.ts';
 import { AmbiguousError, ClaimLostError, PermanentError, RetryableError, type Publisher } from './types.ts';
 
-type Row = { slot_id: string; platform: string; scheduled_at: string; attempt: number; handle_json: string | null; claimed_at: string | null; file_path: string | null; tier: string | null };
+type Row = { slot_id: string; platform: string; scheduled_at: string; attempt: number; handle_json: string | null; claimed_at: string | null; file_path: string | null; tier: string | null; title: string | null; caption: string | null; ai_json: string | null };
 
 // The claim time is the fencing token: every write after a claim must carry it.
 const COLS = new Set(['error', 'post_id', 'post_url', 'published_at', 'next_attempt_at', 'handle_json', 'claimed_at']);
 
-const SELECT = `SELECT p.slot_id, p.platform, p.scheduled_at, p.attempt, p.handle_json, p.claimed_at, r.file_path, s.tier
+const SELECT = `SELECT p.slot_id, p.platform, p.scheduled_at, p.attempt, p.handle_json, p.claimed_at, r.file_path, s.tier, r.title, r.caption, r.ai_json
   FROM publications p
   LEFT JOIN slots s ON s.id = p.slot_id
   LEFT JOIN renders r ON r.slot_id = p.slot_id AND r.platform = p.platform AND r.qa_pass = 1`;
@@ -17,7 +18,12 @@ const SELECT = `SELECT p.slot_id, p.platform, p.scheduled_at, p.attempt, p.handl
 export async function publishDue(db: Db, config: Config, publishers: Record<string, Publisher>, now: Date): Promise<void> {
   const ts = now.toISOString();
   const platformCfg = (p: Row) => config.platforms[p.platform as keyof Config['platforms']];
-  const aiDisclosure = (p: Row) => p.tier !== 't0' || config.disclosure.tier0;
+  // Visuals or music made by AI always need the label; a synthetic voice only when tier0 disclosure is on.
+  // Renders without an ai record fall back to the tier rule.
+  const aiDisclosure = (p: Row) => {
+    const ai = Edl.shape.ai.safeParse(p.ai_json ? JSON.parse(p.ai_json) : null);
+    return ai.success ? ai.data.visuals || ai.data.music || (ai.data.voice && config.disclosure.tier0) : p.tier !== 't0' || config.disclosure.tier0;
+  };
 
   // Fenced write: only succeeds while this process still owns the claim.
   const write = (p: Row, token: string, state: string, f: Record<string, unknown> = {}): boolean => {
@@ -48,8 +54,8 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
       result = await Promise.race([
         pub.publish({
           filePath: p.file_path,
-          title: p.slot_id,
-          caption: '',
+          title: p.title ?? p.slot_id,
+          caption: p.caption ?? '',
           aiDisclosure: aiDisclosure(p),
           visibility: platformCfg(p).visibility,
           idempotencyKey: `${p.slot_id}:${p.platform}`,
@@ -119,7 +125,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
   const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];
   for (const p of due) {
     if (env.dryRun()) {
-      log.info('dry-run publish', { slot: p.slot_id, platform: p.platform, title: p.slot_id, caption: '', aiDisclosure: aiDisclosure(p), visibility: platformCfg(p).visibility, file: p.file_path });
+      log.info('dry-run publish', { slot: p.slot_id, platform: p.platform, title: p.title ?? p.slot_id, caption: p.caption ?? '', aiDisclosure: aiDisclosure(p), visibility: platformCfg(p).visibility, file: p.file_path });
       db.prepare("UPDATE publications SET state = 'published', dry_run = 1, post_id = 'dry-run', published_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(ts, p.slot_id, p.platform);
       continue;
     }

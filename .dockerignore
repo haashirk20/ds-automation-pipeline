@@ -10,3 +10,6 @@ third_party
 .env.*
 .claude
 .mcp.json
+**/.venv
+**/__pycache__
+**/.pytest_cache

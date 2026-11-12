@@ -8,6 +8,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    shm_size: "1gb"
     tmpfs: [/tmp]
     env_file:
       - path: .env

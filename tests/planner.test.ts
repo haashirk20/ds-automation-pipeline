@@ -4,7 +4,7 @@ import { produceSlot } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { tick } from '../src/scheduler/loop.ts';
 import { publishers } from '../src/publish/registry.ts';
-import { config, fresh } from './helpers.ts';
+import { config, fresh, stubProducer } from './helpers.ts';
 
 const count = (db: ReturnType<typeof fresh>, t: string) => (db.prepare(`SELECT count(*) c FROM ${t}`).get() as { c: number }).c;
 
@@ -27,7 +27,7 @@ test('only future slots are planned', () => {
 
 test('tick: nothing before produceAt, plans after', async () => {
   const db = fresh();
-  const deps = { db, config, publishers };
+  const deps = { db, config, publishers, producer: stubProducer(db), wait: true };
   await tick(deps, new Date('2026-11-12T01:30:00Z'));
   assert.equal(count(db, 'slots'), 0);
   await tick(deps, new Date('2026-11-12T02:30:00Z'));
@@ -37,7 +37,7 @@ test('tick: nothing before produceAt, plans after', async () => {
 
 test('stuck producing slot returns to planned, then fails after maxAttempts', async () => {
   const db = fresh();
-  const deps = { db, config, publishers };
+  const deps = { db, config, publishers, producer: stubProducer(db), wait: true };
   const t0 = new Date('2026-11-12T02:30:00Z');
   planDay(db, config, '2026-11-12', t0);
   const status = () => db.prepare("SELECT status, attempt FROM slots WHERE id = '2026-11-12#1'").get() as any;
@@ -56,9 +56,12 @@ test('produce claim is atomic: only a planned slot is produced, once', async () 
   const db = fresh();
   const t = new Date('2026-11-12T02:30:00Z');
   planDay(db, config, '2026-11-12', t);
-  await Promise.all([produceSlot(db, config, '2026-11-12#1', t), produceSlot(db, config, '2026-11-12#1', t)]);
-  const s = db.prepare("SELECT status, attempt FROM slots WHERE id = '2026-11-12#1'").get() as any;
-  assert.deepEqual([s.status, s.attempt], ['ready', 1]);
-  await produceSlot(db, config, '2026-11-12#1', t);
+  const ingest = async () => { throw new Error('no store'); };
+  await Promise.all([produceSlot(db, config, '2026-11-12#1', t, { ingest }), produceSlot(db, config, '2026-11-12#1', t, { ingest })]);
+  const s = db.prepare("SELECT status, attempt, error FROM slots WHERE id = '2026-11-12#1'").get() as any;
+  assert.deepEqual([s.status, s.attempt], ['failed', 1]); // no brief and the ingest fails: a clear failure
+  assert.match(s.error, /no store/);
+  assert.equal(count(db, 'events'), 1);
+  await produceSlot(db, config, '2026-11-12#1', t, { ingest });
   assert.equal((db.prepare("SELECT attempt FROM slots WHERE id = '2026-11-12#1'").get() as any).attempt, 1);
 });
