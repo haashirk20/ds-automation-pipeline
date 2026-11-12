@@ -1,7 +1,7 @@
 # Architecture
 
 A single container on a small VM turns the store's Shopify product into two 15-second vertical ads
-a day and publishes each one to YouTube Shorts, Facebook Page Reels, LinkedIn and TikTok. The
+a day and publishes each one to YouTube Shorts, Facebook Page Reels, Instagram Reels and TikTok. The
 pipeline is ordinary code driven by a SQLite database. Language models are called only at the
 creative and judgment steps listed under "Model use at runtime". Nothing listens on a network port.
 
@@ -11,7 +11,7 @@ Read from the live store on 2026-11-11:
 
 | | |
 |---|---|
-| Store | Merry Marts, Oakville, Ontario. Prices in CAD. Ships to Canada only |
+| Store | Giftwell (formerly Merry Marts), Oakville, Ontario. Prices in CAD. Ships to Canada only |
 | Products | 1: Heated Shawl Wrap (`snugwrap-heated-shawl-wrap`), $49.99 CAD |
 | Variants | Beige, Green, Red. One size, 150 × 80 cm |
 | Photos | 10, square, 800–1500 px. Six are supplier infographics with claims printed on them |
@@ -45,7 +45,7 @@ flowchart LR
   PROD -- "tier 1 and 2 only" --> CLIP["fal.ai / Higgsfield API"]
   PUB --> YT["YouTube Data API"]
   PUB --> FB["Facebook Reels API"]
-  PUB --> LI["LinkedIn Videos + Posts API"]
+  PUB --> IG["Instagram Reels API"]
   PUB --> TT["TikTok bridge API"]
   OPS --> ALERT["Discord or Telegram"]
   OPS --> HC["healthchecks.io"]
@@ -135,7 +135,7 @@ database **before** the next step, and on any retry it asks the platform about t
 |---|---|---|
 | YouTube | Resumable session URI | `PUT` with `Content-Range: bytes */<size>` returns the finished video or the resume offset |
 | Facebook | `video_id` from `upload_phase=start` | `GET /{video-id}?fields=status` |
-| LinkedIn (direct) | Video URN from `initializeUpload`, then the post ID from the `x-restli-id` header | Company Page: list the author's recent posts and look for one whose media is that URN. Personal profile: there is no read scope, so a lost response on the final call is `needs_attention` |
+| Instagram | Container ID from the first call | `GET /{container-id}?fields=status_code`: `PUBLISHED` means done, `FINISHED` means publish it, `EXPIRED` or `ERROR` means start again |
 | TikTok (own app) | `publish_id` from `init` | `/v2/post/publish/status/fetch/` |
 | Bridge | Our own reference sent with the create call, then the bridge post ID | Bridge status endpoint, or a search of recent bridge posts for our reference. If the bridge offers neither an idempotency key nor a searchable reference, a lost response is `needs_attention` |
 
@@ -211,7 +211,7 @@ Phase 8 replaces uniform sampling with learned weights.
 Weights are computed in code. The model does not set them.
 
 - **Metric.** Per post: average watch time divided by video length, where the platform reports it
-  (YouTube Analytics, Facebook video insights, LinkedIn video analytics). Otherwise likes plus
+  (YouTube Analytics, Facebook video insights, Instagram media insights). Otherwise likes plus
   comments plus shares, divided by views. Metrics are read 48 hours after publishing.
 - **Normalizing.** A post is a win if it beats the median of the last 30 days on its own platform.
   Platforms are never compared with each other.
@@ -221,7 +221,7 @@ Weights are computed in code. The model does not set them.
 - **Review.** Once a week Sonnet 5.5 reads the results table and writes a short commentary for the
   daily summary, plus angle suggestions for the next hook refill.
 - **Gaps.** A platform without readable metrics is left out of the ranking: TikTok unless the bridge
-  exposes analytics, and LinkedIn personal profiles.
+  exposes analytics.
 
 ## Tier router and budget
 
@@ -329,10 +329,11 @@ live in the database, inside the data volume. `DRY_RUN=1` does everything except
 and records what it would have sent.
 
 Each platform has `visibility: 'private' | 'public'`, default `private`: YouTube unlisted, TikTok
-`SELF_ONLY`, Facebook with the app in Development mode, LinkedIn draft. A fresh install cannot post
+`SELF_ONLY`, Facebook with the app in Development mode, Instagram uploaded and processed but not
+published. A fresh install cannot post
 publicly until the owner changes it. This is how the Phase 5 test posts are made.
 
-One-time authorization is a CLI: `pipeline auth youtube|tiktok|linkedin|meta`. It runs on the VM
+One-time authorization is a CLI: `pipeline auth youtube|meta|tiktok` (`meta` covers Facebook and Instagram). It runs on the VM
 through an SSH port-forward, so the browser on the owner's machine completes a loopback redirect.
 
 ## Operations
@@ -349,9 +350,9 @@ through an SSH port-forward, so the browser on the owner's machine completes a l
 - **Backups.** Nightly `VACUUM INTO` snapshot of the database, which includes tokens. restic
   encrypts the snapshot file and sends it to R2. Seven daily and four weekly copies are kept. The
   restic password and R2 keys must also be kept somewhere off the VM. After a restore, tokens that
-  rotated since the snapshot are stale, so TikTok and LinkedIn are authorized again.
+  rotated since the snapshot are stale, so a platform with rotating tokens (TikTok in direct mode) is authorized again.
 - **`pipeline doctor`.** Checks config, secrets present, token validity and expiry dates, API
-  reachability, FFmpeg, fonts, disk, migrations and the LinkedIn version sunset date.
+  reachability, FFmpeg, fonts, disk, migrations and the Graph API version in use.
 
 ## Security
 
@@ -375,7 +376,7 @@ src/                 one TypeScript package; each folder is a module
   tts/               wrapper around the Python CLI
   render/  qa/       Remotion render and platform derivations; QA gate
   router/            tier choice, budget ledger, clip providers
-  publish/           youtube, facebook, linkedin, tiktok, bridge, oauth, idempotency
+  publish/           youtube, facebook, instagram, tiktok, bridge, oauth, idempotency
   scheduler/  ops/   tick loop and planner; alerts, housekeeping, backup, doctor
   feedback/          metrics pull and ranking
 templates/           Remotion compositions (React)
@@ -434,7 +435,8 @@ The orchestrator plans, routes, reviews diffs and keeps `DECISIONS.md` current.
    spam policy describes. Variation and per-platform cadence reduce this. See `PLATFORMS.md`.
 2. **TikTok depends on a third-party bridge** for public posts. The adapter is replaceable and the
    fallback is drafts with a manual tap.
-3. **LinkedIn Company Page approval** may be refused or slow. Fallback: personal profile or bridge.
+3. **Meta app access.** Publishing to our own Page and Instagram account with Standard Access is
+   expected to work and is unverified until the Phase 5 test. Fallback: App Review and Business Verification.
 4. **Thin product data.** Few facts make for similar scripts. Adding heat settings, warm-up time,
    washing instructions and shipping time to the Shopify description improves every ad.
 5. **Supplier photos** may carry embedded text or watermarks. Photo tagging routes around them.

@@ -12,7 +12,7 @@ Items marked **(unverified)** were not confirmed on an official page.
 | Anthropic API | ~$3.30 | $10 | Sonnet 5.5 + Haiku 5.5 |
 | Tier 1 clips (open-weight, hosted) | ~$5 | $15 | 40% of slots |
 | Tier 2 clips (premium) | ~$4 | $25 | 10% of slots |
-| Bridge for TikTok and LinkedIn | $0–16 | — | Zernio's two free accounts, or Upload-Post |
+| Bridge for TikTok | $0–16 | — | Zernio's free accounts, or Upload-Post |
 | Backups, alerts, monitoring, music | $0 | — | Free tiers, owned assets |
 | Remotion licence | $0 | — | Free up to 3 employees. $100 a month minimum above that |
 | **Total** | **~$22–45** | **≤ $91 worst case** | Worst case = every cap hit, $24 bridge, $17 VM |

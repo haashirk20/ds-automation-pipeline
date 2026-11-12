@@ -34,7 +34,7 @@ export const AT_SLOT1 = new Date('2026-11-12T17:20:00Z'); // 12:20 Toronto
 export function fakePublishers(impl: Publisher['publish'] = async () => ({ postId: 'p1', postUrl: 'u1' })) {
   const calls: unknown[] = [];
   const publishers = Object.fromEntries(
-    ['youtube', 'facebook', 'linkedin', 'tiktok'].map((platform) => [platform, { platform, publish: async (i: Parameters<Publisher['publish']>[0]) => { calls.push(i); return impl(i); } }]),
+    ['youtube', 'facebook', 'instagram', 'tiktok'].map((platform) => [platform, { platform, publish: async (i: Parameters<Publisher['publish']>[0]) => { calls.push(i); return impl(i); } }]),
   );
   return { publishers, calls };
 }

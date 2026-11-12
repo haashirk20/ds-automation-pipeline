@@ -1,7 +1,7 @@
 # Shopify product → video ad → publisher
 
 An unattended pipeline. One Shopify product goes in. Two 15-second vertical ads a day come out and
-are published to YouTube Shorts, Facebook Page Reels, LinkedIn and TikTok.
+are published to YouTube Shorts, Facebook Page Reels, Instagram Reels and TikTok.
 
 Read `docs/ARCHITECTURE.md` before a structural change and `docs/DECISIONS.md` before proposing a
 tool, service or dependency. `docs/PLATFORMS.md` holds the API facts the publishers depend on.
@@ -46,6 +46,22 @@ docker compose up -d                       # the whole deployment
 - Built-ins first: `fetch`, `node:sqlite`, `node:test`, `process.loadEnvFile`.
 - Tests go in `tests/` and use a fresh temporary `DATA_DIR`.
 - One JSON object per log line. Use the logger so redaction applies.
+
+## Reading web pages
+
+Use the Playwright CLI (`playwright-cli`, installed globally), not Firecrawl. Run it from a scratch
+directory, because it writes snapshot files where it runs:
+
+```bash
+playwright-cli open "https://example.com/docs/page"      # later pages: playwright-cli goto <url>
+playwright-cli eval "() => document.body.innerText" \
+  | python3 -I -c "import sys,json; t=sys.stdin.read(); i=t.find('\"'); print(json.loads(t[i:t.rfind('\"')+1]))" > page.txt
+grep -n -i "what you are looking for" page.txt
+playwright-cli close
+```
+
+Quote the line that decides a question, with its URL. Mark anything not read from the source as
+unverified.
 
 ## Working in phases
 

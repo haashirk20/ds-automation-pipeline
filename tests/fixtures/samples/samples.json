@@ -2,7 +2,7 @@
   "brief": {
     "version": 1,
     "sourceHash": "fixture",
-    "shop": { "name": "Merry Marts", "domain": "shopgiftwell.myshopify.com", "currency": "CAD", "shipsTo": ["CA"] },
+    "shop": { "name": "Giftwell", "domain": "shopgiftwell.myshopify.com", "currency": "CAD", "shipsTo": ["CA"] },
     "product": {
       "handle": "snugwrap-heated-shawl-wrap",
       "title": "Heated Shawl Wrap",
@@ -62,7 +62,7 @@
             "factIds": ["f-heat", "f-wear", "f-usb"]
           },
           { "kind": "offer", "chunks": [{ "say": "Three colours.", "show": "3 colours" }, { "say": "Forty-nine ninety-nine.", "show": "$49.99" }], "shotIds": ["product-red", "product-green", "product-beige"], "factIds": ["f-colors", "f-price"] },
-          { "kind": "cta", "chunks": [{ "say": "Get yours at Merry Marts.", "show": "Get yours at Merry Marts" }], "shotIds": ["product-plain"], "factIds": [] }
+          { "kind": "cta", "chunks": [{ "say": "Get yours at Giftwell.", "show": "Get yours at Giftwell" }], "shotIds": ["product-plain"], "factIds": [] }
         ]
       }
     },
@@ -88,7 +88,7 @@
             "factIds": ["f-title", "f-heat", "f-usb", "f-plush", "f-size"]
           },
           { "kind": "offer", "chunks": [{ "say": "Beige, green or red.", "show": "Beige, green or red" }, { "say": "Forty-nine ninety-nine.", "show": "$49.99" }], "shotIds": ["product-beige", "product-green", "product-red"], "factIds": ["f-colors", "f-price"] },
-          { "kind": "cta", "chunks": [{ "say": "Find it at Merry Marts.", "show": "Find it at Merry Marts" }], "shotIds": ["product-plain"], "factIds": [] }
+          { "kind": "cta", "chunks": [{ "say": "Find it at Giftwell.", "show": "Find it at Giftwell" }], "shotIds": ["product-plain"], "factIds": [] }
         ]
       }
     },
@@ -113,7 +113,7 @@
             "factIds": ["f-wear", "f-heat", "f-usb", "f-gift"]
           },
           { "kind": "offer", "chunks": [{ "say": "Three colours, forty-nine ninety-nine,", "show": "3 colours · $49.99" }, { "say": "shipped in Canada.", "show": "Ships in Canada" }], "shotIds": ["product-green", "product-red", "product-beige"], "factIds": ["f-colors", "f-price", "f-ship"] },
-          { "kind": "cta", "chunks": [{ "say": "Shop Merry Marts today.", "show": "Shop Merry Marts today" }], "shotIds": ["product-plain"], "factIds": [] }
+          { "kind": "cta", "chunks": [{ "say": "Shop Giftwell today.", "show": "Shop Giftwell today" }], "shotIds": ["product-plain"], "factIds": [] }
         ]
       }
     }

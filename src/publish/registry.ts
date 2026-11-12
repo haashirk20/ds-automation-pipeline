@@ -8,5 +8,5 @@ const stub = (platform: string): Publisher => ({
 });
 
 export const publishers: Record<string, Publisher> = Object.fromEntries(
-  ['youtube', 'facebook', 'linkedin', 'tiktok'].map((p) => [p, stub(p)]),
+  ['youtube', 'facebook', 'instagram', 'tiktok'].map((p) => [p, stub(p)]),
 );

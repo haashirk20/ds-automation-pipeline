@@ -19,7 +19,7 @@ const schema = z
     platforms: z.object({
       youtube: z.object(base),
       facebook: z.object(base),
-      linkedin: z.object({ ...base, target: z.enum(['organization', 'member']) }),
+      instagram: z.object(base),
       tiktok: z.object({ ...base, mode: z.enum(['bridge', 'direct', 'inbox']) }),
     }),
     publish: z.object({

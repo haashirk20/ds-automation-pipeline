@@ -6,7 +6,8 @@ export default {
   produceAt: '21:00',
   platforms: {
     // visibility: 'public' | 'private'. Private means YouTube unlisted, TikTok SELF_ONLY,
-    // Facebook app in Development mode, LinkedIn draft. The owner switches to 'public' when ready.
+    // Facebook app in Development mode, Instagram uploaded and processed but not published.
+    // The owner switches to 'public' when ready.
     // Slot index i on every enabled platform publishes the same master edit,
     // so every enabled platform needs the same NUMBER of slots.
     // cta: what the end card tells the viewer to do on that platform.
@@ -14,10 +15,10 @@ export default {
     // from third-party guides; check them against a real post and adjust.
     youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 250, bottom: 560, left: 60, right: 180 } },
     facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 270, bottom: 672, left: 65, right: 65 } },
-    // target: 'organization' | 'member'
-    linkedin: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link below', safe: { top: 150, bottom: 300, left: 60, right: 60 }, target: 'member' },
-    // mode: 'bridge' | 'direct' | 'inbox'. Put the store link in the TikTok bio: caption links are not clickable.
-    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 250, bottom: 620, left: 60, right: 180 }, mode: 'direct' },
+    // Instagram and TikTok caption links are not clickable: put the store link in each bio.
+    instagram: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 270, bottom: 672, left: 65, right: 120 } },
+    // mode: 'bridge' (public, through a hosted bridge) | 'direct' (own app, private only) | 'inbox' (drafts)
+    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 250, bottom: 620, left: 60, right: 180 }, mode: 'bridge' },
   },
   creative: {
     // Kokoro voices to rotate through. See tools/tts/tts.py for the allowed list.

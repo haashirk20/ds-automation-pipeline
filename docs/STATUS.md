@@ -5,7 +5,7 @@ Updated 2026-11-12.
 | Phase | State | Exit criterion met |
 |---|---|---|
 | 0 Research and plan | Done, reviewed by Opus, revised | Yes |
-| 1 Scaffold | Done, reviewed by Opus, fixes applied | Natively yes. `docker compose up` not run: see blockers |
+| 1 Scaffold | Done, reviewed by Opus, fixes applied | Yes: `docker compose up` runs healthy as a non-root user |
 | 2 Ingest | In progress | |
 | 3 Creative | In progress: voice and music tools built, render engine proven | |
 | 4 Tiers | | |
@@ -14,24 +14,32 @@ Updated 2026-11-12.
 | 7 Deploy | | |
 | 8 Feedback | | |
 
-## In progress when work last stopped (2026-11-12)
+## Decisions from the owner (2026-11-12)
 
-Four implementers were mid-task and their files are uncommitted in the working tree. Each must be
-finished, checked and reviewed before it is committed:
+- The fourth platform is Instagram Reels. LinkedIn is dropped.
+- TikTok goes through a hosted bridge.
+- The store is now called Giftwell and has three employees.
+- Web pages are read with the Playwright CLI.
+- API keys arrive on 2026-11-13.
 
-- Ingest: `src/shopify/`, migration 002, `tests/shopify.test.ts`.
-- Render pipeline: `templates/`, `src/render/render.ts`, `src/render/samples.ts`, `src/tts/`, `src/music/`, `src/creative/assemble.ts`.
-- QA gate: `src/qa/`, `tests/qa.test.ts`.
-- Model client and creative steps: `src/llm/`, `src/creative/{hooks,script,claims,copy}.ts`, `prompts/`, migration 003.
+## In progress
 
-Still to do in Phase 3 after those: a design pass giving the three templates distinct looks, the
-real `produceSlot` that joins the pieces, and the three sample ads in `out/samples/`.
+- Ingest: `src/shopify/`, migration 002.
+- Render pipeline: `templates/`, `src/render/`, `src/tts/`, `src/music/`, `src/creative/assemble.ts`.
+- Model client and creative steps: `src/llm/`, `src/creative/`, `prompts/`, migration 003.
+
+After those: a design pass giving the three templates distinct looks, the real `produceSlot` that
+joins the pieces, a Docker image that can render, and the three sample ads in `out/samples/`.
 
 Higgsfield cost preflight (no spend): a 5 s vertical clip is 10 credits on `kling3_0` and 35 on
 `seedance_2_5`.
 
 ## What has been seen working
 
+- **Docker.** The image builds from the pinned base digest in 27 s, `docker compose up` reaches
+  healthy, `doctor` exits 0 inside the container, and the process runs as uid 1000.
+- **QA gate.** Ten checks on a 15 s file in 0.4 s. On two real renders it failed exactly the
+  checks it should have: missing audio, wrong duration, quiet audio.
 - **Phase 1.** 41 tests pass and the type check is clean. A simulated day in `DRY_RUN` plans two
   slots, stub-produces them and publishes slot 1 to four platforms once, with no duplicates when
   the same minute runs again. Covered by tests: atomic claim, fencing against a late finisher, a
@@ -45,18 +53,16 @@ Higgsfield cost preflight (no spend): a 5 s vertical clip is 10 credits on `klin
 
 ## Not verified
 
-- **Docker.** The Dockerfile, `compose.yaml` and the CI Docker steps have never been executed.
+- **The Docker image for rendering.** The current image runs the scheduler with stubs. Chromium, Python and the voice model are not in it yet.
 - **Anything that calls a model.** There is no Anthropic API key here, so model steps run on fixtures.
 - **Audio by ear.** Speech and music are checked by measurement only. The owner should listen to the samples.
 - **Platform facts** reported by research agents and not re-checked first-hand. `PLATFORMS.md` marks them.
 
 ## Blockers
 
-- **Docker is not usable in this WSL distro.** Docker Desktop is installed on Windows with WSL
-  integration off, and there is no passwordless sudo.
-- **No Anthropic API key.**
+- **No Anthropic API key yet.** Model steps run on fixtures.
 - **The Shopify connector is present but not signed in.** The public product feed is used
-  instead. It rate-limits (HTTP 429 seen three times).
+  instead. It rate-limits (HTTP 429 seen several times).
 
 The Higgsfield MCP server is connected: plan "ultra", 523 credits on 2026-11-12, no TikTok account
 linked. Nothing has been spent.

@@ -8,7 +8,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | ID | Component | Chosen |
 |---|---|---|
 | D-01 | Publishing layer | Direct platform APIs |
-| D-02 | TikTok public posting, LinkedIn Page | Hosted bridge with an audited app (owner picks the vendor) |
+| D-02 | TikTok public posting | Hosted bridge with an audited app |
 | D-03 | Render engine | Remotion |
 | D-04 | Language and repo shape | TypeScript on Node 24, one package |
 | D-05 | Voice | Kokoro-82M through a Python CLI |
@@ -33,6 +33,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-24 | HTTP and SDKs | Built-in `fetch`; no platform SDKs |
 | D-25 | FFmpeg | The binary Remotion ships |
 | D-26 | Feedback ranking | Thompson sampling in code |
+| D-27 | Fourth platform | Instagram Reels, replacing LinkedIn |
 
 ---
 
@@ -43,7 +44,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 **Why not Postiz.** It was the leading candidate and was checked against its source code:
 
 - It removes no approval step. Self-hosting needs our own developer app on every platform, so the
-  TikTok audit and LinkedIn review apply exactly as they do to direct calls.
+  TikTok audit applies exactly as it does to direct calls.
 - Its YouTube settings have no `containsSyntheticMedia` field, so it cannot set YouTube's AI disclosure.
 - Its Facebook provider posts to `/{page}/videos` by URL. It does not use the Reels endpoint and
   needs the media on a public HTTPS URL.
@@ -77,16 +78,12 @@ service. A bridge is a multi-tenant product, which is the use case TikTok does a
 **Cost.** $0–24 a month. Zernio: first two connected accounts free, then $6 per account, unlimited
 posts. Upload-Post: $16 a month billed yearly, unlimited uploads. Capped vendors are rejected.
 
-**LinkedIn.** The same bridge is the recommended route to the LinkedIn Company Page, on the second
-free account. It needs no Community Management API review and no 60-day re-authorization. Posting
-directly stays available in config for an owner who would rather not depend on the bridge there.
-
 **Condition.** The bridge must accept an idempotency key or a reference we can search for.
 Otherwise a lost response on the create call stops and waits for a person, because retrying could
 post twice.
 
-**Status.** Vendor claims are verified with one real post before the adapter is committed. The
-owner creates the account. The TikTok publisher takes a `mode` so the bridge can be swapped, and
+**Status.** The owner chose the bridge route on 2026-11-12. Vendor claims are verified with one
+real post before the adapter is committed. The owner creates the account. The TikTok publisher takes a `mode` so the bridge can be swapped, and
 `direct` mode (own app, private) stays for testing.
 
 **Revisit when.** TikTok changes its audit rules, or the bridge changes price or terms.
@@ -101,7 +98,8 @@ HyperFrames is fully permissive but its maturity could not be established. FFmpe
 and boring, and every new template would be a filtergraph that is hard to read and hard to vary.
 
 **Licence.** Remotion is source-available, not open source. It is free for "a for-profit
-organization with up to 3 employees". **Assumption: Merry Marts has three or fewer employees.**
+organization with up to 3 employees". The owner confirmed on 2026-11-12 that the company (Giftwell, formerly Merry Marts) has three
+employees, which is inside the free tier. A fourth employee triggers the paid licence.
 Above that, the automation licence has a $100 a month minimum, and HyperFrames becomes the
 alternative. `@remotion/transitions` shows `UNLICENSED` on npm and is not used.
 
@@ -289,7 +287,7 @@ means nothing to secure.
 **Alternatives.** Docker secrets. SOPS or age-encrypted files. A cloud secret manager.
 
 **Why.** Static secrets belong in `.env`, as the brief requires. Tokens that rotate (TikTok,
-LinkedIn) must be written back atomically by the process, and `.env` is read-only configuration, so
+direct mode) must be written back atomically by the process, and `.env` is read-only configuration, so
 they live in the database on the data volume and are covered by the encrypted backup. One VM and
 one operator do not justify a secret manager.
 
@@ -300,8 +298,8 @@ one operator do not justify a secret manager.
 **Why.** Each render's manifest says whether visuals, voice or music are synthetic. Tier 1 and 2
 always set the flags. Tier 0 (real photos, synthetic voice) is a grey area on every platform, and
 the default is to disclose: the published policies penalize missing labels, not present ones.
-`disclosure.tier0` can turn it off. LinkedIn has no flag, so a render with AI-generated footage
-adds one line to the post text. Embedding C2PA metadata was considered and dropped: it needs a
+`disclosure.tier0` can turn it off. Instagram's API has no flag, so a render with AI-generated
+footage adds one line to the caption. Embedding C2PA metadata was considered and dropped: it needs a
 signing certificate, and a self-signed one is not trusted. See the matrix in `PLATFORMS.md`.
 
 ## D-21 Claims: Shopify fields only (2026-11-11)
@@ -365,6 +363,19 @@ option and balances winners against untried options without a tuning knob, which
 needs. Sonnet's weekly review writes commentary and suggests angles for new hooks, which is
 creative work. The metric is defined in `ARCHITECTURE.md`, "Feedback loop".
 
+## D-27 Fourth platform: Instagram Reels, replacing LinkedIn (2026-11-12)
+
+**Alternatives.** LinkedIn Company Page. LinkedIn personal profile.
+
+**Why.** The owner's decision. It also removes the hardest approval in the plan: LinkedIn Page
+posting needs a reviewed app for a registered legal entity, and a personal profile needs a manual
+login every 60 days. Instagram uses the Meta app and the non-expiring Page token that Facebook
+already needs, so it adds no approval and no second credential, and its audience fits a consumer
+gift better.
+
+**Cost of the choice.** Instagram has no private or unlisted post, so its test stops one step
+short of publishing. Its API has no AI-disclosure field. See `PLATFORMS.md`.
+
 ---
 
 ## Paid services
@@ -375,18 +386,17 @@ creative work. The metric is defined in `ARCHITECTURE.md`, "Feedback loop".
 | VM | The pipeline has to run somewhere | $0–17 | — |
 | Hosted open-weight video (fal.ai) | A GPU is needed; renting one ourselves is not cheaper (D-09) | ~$5 | $15 |
 | Higgsfield API | Premium models are closed | ~$4 | $25 |
-| Bridge | TikTok will not audit an internal tool, and LinkedIn gates Page posting (D-02) | $0–24 | — |
+| Bridge | TikTok will not audit an internal tool (D-02) | $0–24 | — |
 | Remotion | Free at this company size. Not open source (D-03) | $0, or $100 above 3 employees | — |
 
-## Assumptions to confirm with the owner
+## Open questions for the owner
 
-1. Merry Marts has three or fewer employees (Remotion licence, D-03).
-2. TikTok route: bridge, or drafts finished by hand (D-02).
-3. LinkedIn route: Company Page through the bridge, Company Page direct (registered legal entity
-   and a review), or personal profile (re-authorize every 60 days).
-4. Tags such as "bestseller" stay out of ad claims (D-21).
-5. Claims printed only on the product photos stay out of ads, or the facts are added to the
+1. Tags such as "bestseller" stay out of ad claims (D-21).
+2. Claims printed only on the product photos stay out of ads, or the facts are added to the
    Shopify description (D-21).
+
+Settled on 2026-11-12: three employees (D-03), TikTok through the bridge (D-02), Instagram Reels
+as the fourth platform (D-27).
 
 ## Attempts abandoned
 

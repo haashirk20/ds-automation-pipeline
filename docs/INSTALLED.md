@@ -26,3 +26,4 @@ Built-ins used instead of packages: `node:test`, `node:assert`, `node:sqlite`, `
 | @anthropic-ai/sdk (npm, runtime) | 1.8.0 | Apache-2.0 | All model calls | Raw `fetch` (loses typed errors and helpers) |
 | @fontsource/anton, @fontsource/inter, @fontsource/fraunces (npm, runtime) | 5.3.0 | OFL-1.1 | Fonts on disk, so rendering needs no network | Google Fonts at render time (needs network), font files committed to the repo |
 | @types/react, @types/react-dom (npm, dev) | 19.3.0 | MIT | Types for the templates | None |
+| @playwright/cli (npm, global, build-time only) | 0.1.24 | Apache-2.0 | Reading web pages during research, at the owner's request | Firecrawl (credits ran out mid-task), the Playwright MCP server |

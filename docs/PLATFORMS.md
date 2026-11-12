@@ -8,19 +8,19 @@ facts on this page changed in the last 12 months, so re-check anything here befo
 
 ## Summary
 
-| Platform | Private test post (Phase 5 exit) | Public, unattended posting | Blocking step | Lead time |
+| Platform | Private test (Phase 5 exit) | Public, unattended posting | Blocking step | Lead time |
 |---|---|---|---|---|
 | YouTube Shorts | Same day, `privacyStatus: "unlisted"` | Same day | Publish the OAuth consent screen to "In production" | minutes |
 | Facebook Page Reels | Same day: app in Development mode, visible to app roles only | Switch app to Live, Standard Access | None expected. Fallback: App Review + Business Verification | minutes (weeks if fallback) |
 | TikTok | Same day through a Sandbox app: `SELF_ONLY`, account set to private | **Not possible with our own app.** TikTok's audit excludes internal tools. Needs a hosted bridge with an audited app | Pick a bridge and create the account | same day |
-| LinkedIn | Same day on a personal profile | Company Page through the bridge, same day. Direct needs the Community Management API (legal entity, dedicated app). A personal profile works but needs re-authorizing every 60 days | Bridge account, or LinkedIn review for the direct route | same day, or days to weeks (unverified) |
+| Instagram Reels | Same day: upload and process, stop before publishing | Same day: set `visibility` to `public` | None expected: same Meta app and token as Facebook. Fallback: App Review | minutes |
 
 The three findings that decide feasibility:
 
 1. **TikTok will not audit this tool.** Public posting through our own TikTok app is off the table.
 2. **YouTube removed the private lock on 2026-11-02.** No audit is needed for public uploads.
-3. **LinkedIn Company Page posting is gated** behind an approval that needs a registered legal
-   entity. The same bridge that solves TikTok avoids it.
+3. **Facebook and Instagram share one Meta app and one token**, so the fourth platform adds no new
+   approval step.
 
 ---
 
@@ -182,51 +182,54 @@ self-claim whether the video was created with AI."
 
 ---
 
-## LinkedIn
+## Instagram — Reels
 
-**Flow.** `POST /rest/videos?action=initializeUpload` → `PUT` each 4,194,304-byte part →
-`POST /rest/videos?action=finalizeUpload` with the part ETags → `POST /rest/posts` with
-`content.media.id` set to the video URN. Headers on every call: `LinkedIn-Version: YYYYMM` and
-`X-Restli-Protocol-Version: 2.0.0`.
-[Videos API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api)
+Checked first-hand on 2026-11-12 in Meta's content publishing guide and media reference.
 
-**Targets**
+**Flow.**
+1. `POST https://graph.facebook.com/v27.0/{ig-user-id}/media` with `media_type=REELS`, `upload_type=resumable`, `caption` and `share_to_feed=true` → container ID.
+2. `POST https://rupload.facebook.com/ig-api-upload/v27.0/{container-id}` with headers `offset: 0` and `file_size` and the bytes.
+3. `GET /{container-id}?fields=status_code` until `FINISHED`.
+4. `POST /{ig-user-id}/media_publish` with `creation_id={container-id}` → media ID.
 
-| Target | Product | Scope | Review | Refresh token |
-|---|---|---|---|---|
-| Company Page | Community Management API | `w_organization_social`, `r_organization_social` | Yes. "only available to registered legal organizations", verified business email, and it "must be the only product associated with a developer application". Standard tier needs a screencast | Yes, 365 days |
-| Personal profile | Share on LinkedIn (self-serve) | `w_member_social` | No | No **(unverified)**: re-authorize every 60 days |
-| Either, via bridge | Bridge's own approved app | — | No | Handled by the bridge |
+[Content publishing](https://developers.facebook.com/docs/instagram-platform/content-publishing),
+[IG User media](https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media)
 
-Video upload with `w_member_social` alone is expected to work and is confirmed in Phase 5
-**(unverified until then)**.
+Resumable upload is "Only for apps that have implemented Facebook Login for Business." The other
+route is `video_url`, which Meta fetches from "a public server". The pipeline uses the resumable
+upload, so it needs no public host.
 
-**Recommended route.** The bridge, on the second of its two free accounts. It posts to the Company
-Page through the bridge's approved app, needs no review, and never needs the 60-day
-re-authorization that the personal route does and that breaks unattended running. The direct
-Company Page route is the alternative once LinkedIn approves an app. The personal route has one
-more limit: with no read scope, the pipeline cannot check whether a post exists after a lost
-response, so that case stops and waits for a person.
+**Account.** A professional (Business or Creator) Instagram account linked to the Facebook Page.
+The Instagram user ID is read from the Page (`/{page-id}?fields=instagram_business_account`). The
+same Meta app and the same non-expiring Page token serve Facebook and Instagram.
 
-**Limits.** Development tier: 500 calls per app per day, 100 per member. Video: 3 seconds to
-30 minutes, 75 KB to 500 MB, MP4. No published daily post cap.
+**Permissions.** `instagram_basic` and `instagram_content_publish`, plus the Page permissions
+listed under Facebook. Standard Access covers users with a role on the app **(unverified until the
+Phase 5 test)**.
 
-**Versioning.** Each `LinkedIn-Version` is supported for at least a year. The pipeline pins one and
-`doctor` warns 60 days before its sunset.
+**Limits.** "Instagram accounts are limited to 100 API-published posts within a 24-hour moving
+period", enforced at `media_publish`. `GET /{ig-user-id}/content_publishing_limit` reports usage.
+Reels: MP4 or MOV with the moov atom at the front, 23–60 fps, 9:16 recommended, at most 25 Mbps,
+3 seconds to 15 minutes, at most 300 MB.
 
-**Tokens.** Access token 60 days. A token that cannot refresh raises an alert 14, 7 and 1 days
-before expiry.
+**Container states.** `IN_PROGRESS`, `FINISHED`, `PUBLISHED`, `ERROR`, `EXPIRED`. A container that
+is not published within 24 hours expires. The publisher reads the state before any retry, so a
+lost response to `media_publish` cannot cause a second post.
 
-**AI disclosure.** No API flag. LinkedIn shows a label when the file carries C2PA metadata, which
-our renders do not. When a render contains AI-generated footage, the post text ends with the line
-"Video includes AI-generated footage."
+**No private posts.** Professional accounts are public and the API has no unlisted mode. With
+`visibility: 'private'` the pipeline uploads the Reel and waits for `FINISHED`, which proves the
+token, the upload and Instagram's processing, and then does not publish. The container expires on
+its own.
 
-**No private posts.** LinkedIn has no unlisted mode. The test post is a draft
-(`lifecycleState: "DRAFT"`) or a connections-only post deleted after verification, whichever the
-API accepts for the chosen target.
+**AI disclosure.** The media reference lists no AI-disclosure parameter. Instagram adds its own
+"AI info" label when it detects AI content. When a render contains AI-generated footage, the
+caption ends with the line "Video includes AI-generated footage."
 
-**Metrics.** Organization: `videoAnalytics` (`VIDEO_VIEW`, `VIEWER`, `TIME_WATCHED`). Member posts
-need `r_member_postAnalytics`.
+**Links.** Caption links are not clickable. The call to action is "Link in bio", and the store link
+goes in the profile.
+
+**Metrics.** `GET /{ig-media-id}/insights` for views, reach, likes, comments, shares, saves and
+watch time **(metric names unverified; several were renamed in 2025)**.
 
 ---
 
@@ -234,9 +237,9 @@ need `r_member_postAnalytics`.
 
 Computed per render from its manifest. No one sets these by hand.
 
-| What the render contains | TikTok `is_aigc` | YouTube `containsSyntheticMedia` | Facebook `is_ai_generated` | LinkedIn |
+| What the render contains | TikTok `is_aigc` | YouTube `containsSyntheticMedia` | Facebook `is_ai_generated` | Instagram |
 |---|---|---|---|---|
-| AI-generated video clip (Tier 1 or 2) | true | true | true | A line in the post text |
+| AI-generated video clip (Tier 1 or 2) | true | true | true | A line in the caption |
 | AI-generated music | true | true | true | — |
 | Real photos, motion graphics, synthetic voice only (Tier 0) | `disclosure.tier0`, default true | `disclosure.tier0`, default true | `disclosure.tier0`, default true | — |
 
@@ -250,7 +253,7 @@ can be removed and a labeled one is not penalized by the published policies.
 | YouTube | Mass-produced similar content "with minimal changes" | Strikes, termination |
 | TikTok | "ineligible for the FYF if it includes unoriginal or reused material without anything new" | Reach suppression, posting restrictions |
 | Facebook | Duplicates are demoted; repeated reuse reduces distribution | Reach suppression |
-| LinkedIn | Policy text not fetched **(unverified)** | Unknown |
+| Instagram | Recommendations favour original content; duplicates are not recommended to non-followers (policy text not fetched) **(unverified)** | Reach suppression |
 
 The store has **one product and ten photos**. Sixty posts a month per platform about one product is
 the pattern these policies describe. What the pipeline does about it:
@@ -283,7 +286,7 @@ the real UI **(unverified until then)**.
 | YouTube | Google Cloud project, enable YouTube Data API v3 and YouTube Analytics API, consent screen External + In production, Desktop OAuth client | 15 min |
 | Facebook | Meta app (type Business), user token from Graph API Explorer, switch app to Live | 15 min |
 | TikTok | Sandbox app for the test post (Login Kit + Content Posting API, Desktop redirect). Bridge account for public posting | 20 min |
-| LinkedIn | Developer app with Share on LinkedIn (personal), or a separate app requesting Community Management API (Page) | 10 min, plus review for the Page route |
+| Instagram | Make the Instagram account a professional account and link it to the Facebook Page. Add the Instagram permissions to the same Meta app | 10 min |
 
 The store already serves `/policies/privacy-policy` and `/policies/terms-of-service`, which cover
 the privacy and terms URLs these developer portals ask for.

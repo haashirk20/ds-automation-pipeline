@@ -2,7 +2,7 @@
 // in the same commit.
 import { z } from 'zod';
 
-export const PLATFORMS = ['youtube', 'facebook', 'linkedin', 'tiktok'] as const;
+export const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
 export const Platform = z.enum(PLATFORMS);
 export type Platform = z.infer<typeof Platform>;
 
