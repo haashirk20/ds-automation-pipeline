@@ -20,6 +20,8 @@ export default {
     // mode: 'bridge' (public, through a hosted bridge) | 'direct' (own app, private only) | 'inbox' (drafts)
     tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 250, bottom: 620, left: 60, right: 180 }, mode: 'bridge' },
   },
+  // The name ads say and show. null uses the store name Shopify reports (still "Merry Marts").
+  brand: { name: 'Giftwell' },
   creative: {
     // Kokoro voices to rotate through. See tools/tts/tts.py for the allowed list.
     voices: ['af_heart', 'af_bella', 'am_michael'],

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseConfig } from '../src/config/index.ts';
 import { migrate, schemaVersion } from '../src/db/index.ts';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { alert } from '../src/ops/alert.ts';
@@ -31,9 +31,10 @@ test('config validation failures', () => {
 
 test('migrations apply once', () => {
   const db = fresh();
-  assert.equal(schemaVersion(db), 1);
+  const files = readdirSync(new URL('../src/db/migrations', import.meta.url)).filter((f) => f.endsWith('.sql')).length;
+  assert.equal(schemaVersion(db), files);
   migrate(db);
-  assert.equal(schemaVersion(db), 1);
+  assert.equal(schemaVersion(db), files);
   assert.equal(db.prepare("SELECT count(*) c FROM sqlite_master WHERE name IN ('slots','kv','publications')").get()?.c, 3);
 });
 

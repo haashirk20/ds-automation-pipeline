@@ -28,6 +28,7 @@ const schema = z
       uploadTimeoutMinutes: z.number().positive(),
       timeoutMinutes: z.number().positive(),
     }),
+    brand: z.object({ name: z.string().min(1).nullable() }),
     creative: z.object({ voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
     claims: z.object({ fromPhotos: z.boolean() }),
     llm: z.object({
