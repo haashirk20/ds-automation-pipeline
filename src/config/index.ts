@@ -30,6 +30,12 @@ const schema = z
     }),
     creative: z.object({ voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
     claims: z.object({ fromPhotos: z.boolean() }),
+    llm: z.object({
+      models: z.object({ script: z.string(), copy: z.string(), qa: z.string(), escalation: z.string() }),
+      monthlyCapUsd: z.number().positive(),
+      escalationEnabled: z.boolean(),
+    }),
+    hooks: z.object({ noRepeatDays: z.number().int().min(0), poolFactor: z.number().min(1) }),
     render: z.object({ produceTimeoutMinutes: z.number().positive(), maxAttempts: z.number().int().min(1) }),
     disclosure: z.object({ tier0: z.boolean() }),
     watchdogMinutes: z.number().positive(),

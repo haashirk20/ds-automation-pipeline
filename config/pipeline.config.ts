@@ -28,6 +28,16 @@ export default {
   // Claims printed only on product photos are not used unless this is true. Care, safety and battery
   // claims are never taken from a photo.
   claims: { fromPhotos: false },
+  llm: {
+    models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5', escalation: 'claude-opus-5-5' },
+    // At this spend in a calendar month (UTC) model calls stop and approved scripts are reused.
+    monthlyCapUsd: 10,
+    // Opus diagnosis after repeated failures.
+    escalationEnabled: false,
+  },
+  // A hook is not reused within noRepeatDays. The library is kept at
+  // noRepeatDays x slots per day x poolFactor hooks or more.
+  hooks: { noRepeatDays: 14, poolFactor: 1.5 },
   publish: {
     // Past this lateness a publication is skipped, not posted.
     maxLatenessMinutes: 360,
