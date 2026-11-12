@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+data
+out
+tests
+docs
+third_party
+.env
+.env.*
+.claude
+.mcp.json

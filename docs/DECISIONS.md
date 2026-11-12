@@ -8,7 +8,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | ID | Component | Chosen |
 |---|---|---|
 | D-01 | Publishing layer | Direct platform APIs |
-| D-02 | TikTok public posting | Hosted bridge with an audited app (owner picks the vendor) |
+| D-02 | TikTok public posting, LinkedIn Page | Hosted bridge with an audited app (owner picks the vendor) |
 | D-03 | Render engine | Remotion |
 | D-04 | Language and repo shape | TypeScript on Node 24, one package |
 | D-05 | Voice | Kokoro-82M through a Python CLI |
@@ -22,7 +22,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-13 | Hosting and provisioning | Any Ubuntu VM, one setup script |
 | D-14 | Backups | restic to Cloudflare R2 |
 | D-15 | Alerts and monitoring | One webhook plus a dead-man's switch |
-| D-16 | Music | Owned or CC0 tracks with a licence manifest |
+| D-16 | Music | Beds synthesized by our own code |
 | D-17 | Platform derivations | One master edit rendered four times |
 | D-18 | Media delivery | Upload bytes directly; no public media host |
 | D-19 | Secrets and tokens | `.env` plus a token table in the database |
@@ -31,6 +31,8 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-22 | Open-Higgsfield-AI | Not used |
 | D-23 | Configuration format | A typed TypeScript file |
 | D-24 | HTTP and SDKs | Built-in `fetch`; no platform SDKs |
+| D-25 | FFmpeg | The binary Remotion ships |
+| D-26 | Feedback ranking | Thompson sampling in code |
 
 ---
 
@@ -75,6 +77,14 @@ service. A bridge is a multi-tenant product, which is the use case TikTok does a
 **Cost.** $0–24 a month. Zernio: first two connected accounts free, then $6 per account, unlimited
 posts. Upload-Post: $16 a month billed yearly, unlimited uploads. Capped vendors are rejected.
 
+**LinkedIn.** The same bridge is the recommended route to the LinkedIn Company Page, on the second
+free account. It needs no Community Management API review and no 60-day re-authorization. Posting
+directly stays available in config for an owner who would rather not depend on the bridge there.
+
+**Condition.** The bridge must accept an idempotency key or a reference we can search for.
+Otherwise a lost response on the create call stops and waits for a person, because retrying could
+post twice.
+
 **Status.** Vendor claims are verified with one real post before the adapter is committed. The
 owner creates the account. The TikTok publisher takes a `mode` so the bridge can be swapped, and
 `direct` mode (own app, private) stays for testing.
@@ -90,9 +100,10 @@ made. Remotion is the mature tool for that and renders frame-exact on CPU, on x8
 HyperFrames is fully permissive but its maturity could not be established. FFmpeg alone is light
 and boring, and every new template would be a filtergraph that is hard to read and hard to vary.
 
-**Licence.** Free for "a for-profit organization with up to 3 employees". **Assumption: Merry Marts
-has three or fewer employees.** Above that, the automation licence has a $100 a month minimum, and
-HyperFrames becomes the alternative. `@remotion/transitions` shows `UNLICENSED` on npm and is not used.
+**Licence.** Remotion is source-available, not open source. It is free for "a for-profit
+organization with up to 3 employees". **Assumption: Merry Marts has three or fewer employees.**
+Above that, the automation licence has a $100 a month minimum, and HyperFrames becomes the
+alternative. `@remotion/transitions` shows `UNLICENSED` on npm and is not used.
 
 ## D-04 Language and repo shape: TypeScript on Node 24, one package (2026-11-11)
 
@@ -154,7 +165,8 @@ The saving is at most about $1 a month, for a new subsystem that can fail overni
 endpoint is an on-demand GPU that someone else starts and stops. See `COSTS.md`.
 
 **Cost.** Capped at $15 a month. Provider and model are entries in the router's table. First
-choice is fal.ai LTX-2, confirmed with a real job in Phase 4.
+choice is fal.ai LTX-2, confirmed with a real job in Phase 4. The 50/40/10 tier mix is a
+placeholder until Phase 4 compares Tier 1 and Tier 2 on the same shot.
 
 **Revisit when.** Volume passes a few hundred clips a month.
 
@@ -168,6 +180,11 @@ MCP server stays a build-time convenience. Muapi is the alternative behind the s
 
 **Cost.** Capped at $25 a month. About $0.50 a clip.
 
+**Open point for Phase 4.** The owner's Higgsfield subscription (plan "ultra", 523 credits on
+2026-11-12) is reachable through the MCP server, while the REST API bills a separate prepaid
+balance. Phase 4 checks whether the pipeline can call the MCP server as a plain client, with no
+model in the loop, so that Tier 2 spends credits already paid for. If not, it uses the REST API.
+
 ## D-11 Model calls: Anthropic API, single structured calls (2026-11-11)
 
 **Alternatives.** The Agent SDK. The Batch API. A local model.
@@ -176,8 +193,12 @@ MCP server stays a build-time convenience. Muapi is the alternative behind the s
 cost and variance to a pipeline that is meant to be deterministic around its model calls. The
 Batch API would save under $2 a month. A local model good enough for ad copy needs a GPU.
 
-**Cost.** About $4 a month, capped at $10. Sonnet 5.5 for hooks, scripts and the weekly review.
-Haiku 5.5 for copy, claim checks, vision QA and tagging. Opus 5.5 for escalation, off by default.
+**Cost.** About $3.30 a month, capped at $10. Sonnet 5.5 for hooks, scripts and the weekly review.
+Haiku 5.5 for copy, claim checks, vision QA, tagging and labelling unrecognized errors. Opus 5.5
+for escalation, off by default.
+
+**When the cap is hit or the API is down.** Posting continues from approved scripts whose hooks are
+outside their 14-day window. A spend cap that stopped posting would be a post cap by another name.
 
 ## D-12 Shopify ingest: Admin GraphQL, public JSON as fallback (2026-11-11)
 
@@ -200,8 +221,9 @@ have been the wrong bet. A single idempotent `infra/setup.sh` for Ubuntu 24.04 w
 Serverless would split state and rendering across services to save a VM that costs $10.
 
 **Shortlist.** Hetzner CX33 or CAX21 (about $10–12), Netcup VPS 1000 (about $16), Hostinger KVM 2
-($9–15), Oracle Always Free ($0, with reclaim and capacity risk). GCP and AWS small instances cost
-$25–48 for the same shape. The owner creates the account.
+($9–15). Oracle Always Free is left out: its reclaim rule targets idle instances and this workload
+is idle most of the day. GCP and AWS small instances cost $25–48 for the same shape. The owner
+creates the account.
 
 ## D-14 Backups: restic to Cloudflare R2 (2026-11-11)
 
@@ -211,24 +233,39 @@ $25–48 for the same shape. The owner creates the account.
 nightly encrypted copy with retention is enough: losing a day loses nothing that cannot be
 regenerated. Litestream is a second always-on process. Snapshots are provider-specific and unencrypted.
 
+**Details.** restic backs up a `VACUUM INTO` snapshot, never the live file, which could be copied
+mid-write. The restic password and R2 keys are also kept off the VM by the owner. A restore brings
+back tokens as they were, so platforms whose refresh tokens rotate are authorized again afterwards.
+
 ## D-15 Alerts and monitoring: one webhook plus a dead-man's switch (2026-11-11)
 
 **Alternatives.** Email over SMTP. A self-hosted monitor (Uptime Kuma, Grafana).
 
 **Why.** A Discord or Telegram webhook is one HTTP call with no account to run. It cannot report
 that the VM itself is dead, so the loop pings healthchecks.io (free) and that service emails when
-the pings stop. A self-hosted monitor on the same VM dies with it.
+the pings stop. A second check there is pinged only when the daily summary has been delivered, so
+a dead webhook is noticed too. A self-hosted monitor on the same VM dies with it.
 
-## D-16 Music: owned or CC0 tracks with a licence manifest (2026-11-11)
+## D-16 Music: beds synthesized by our own code (2026-11-12)
 
-**Alternatives.** Generating music at runtime. A stock subscription. Platform music libraries.
+**Alternatives.** A library of CC0 tracks. A stock subscription. An AI music model (ACE-Step 1.5,
+MIT). Platform music libraries.
 
 **Why.** An unattended poster cannot answer a copyright claim. Free libraries allow commercial use,
 and some of their tracks are registered with Content ID by their authors. TikTok limits business
 content to its commercial library or audio the poster has rights to, and no platform library is
-reachable through an API. So the pipeline only plays tracks listed in `assets/music/manifest.json`
-with a licence of CC0 or owned. The library is built once at build time. ACE-Step 1.5 (MIT) is the
-candidate for generating original beds. Generated music counts as AI content for disclosure.
+reachable through an API. A CC0 library was the first choice and could not be assembled (see
+"Attempts abandoned"). So `tools/music/bed.py` synthesizes a short instrumental bed from a seed:
+electric piano, pad, bass and light percussion in numpy. We own the output outright, nothing can
+claim it, every slot gets a different bed, and it is not AI-generated, so it does not trigger the
+AI-music disclosure. It costs nothing and adds no asset to store.
+
+**Cost of the choice.** It is a simple bed, not a produced track. It plays quietly under the voice.
+The owner can drop licensed tracks into `assets/music/` with a manifest entry and they take
+priority. `music.enabled: false` turns music off.
+
+**Revisit when.** The owner supplies tracks, or the bed is judged too plain. ACE-Step run once on a
+rented GPU is the next step up, and its output would count as AI music for disclosure.
 
 ## D-17 Platform derivations: one master edit rendered four times (2026-11-11)
 
@@ -241,10 +278,11 @@ safe zone everywhere. Overlaying with FFmpeg would mean two layout systems.
 
 ## D-18 Media delivery: upload bytes directly (2026-11-11)
 
-**Alternatives.** A public bucket with pull-by-URL.
+**Alternatives.** A public bucket with pull-by-URL. Serving the files from the VM over HTTPS.
 
 **Why.** All four APIs accept a direct upload. Pull-by-URL would need a public HTTPS host, and on
-TikTok a verified domain. Nothing public means nothing to secure.
+TikTok a verified domain. Serving from the VM would open its first inbound port. Nothing public
+means nothing to secure.
 
 ## D-19 Secrets and tokens: `.env` plus a token table (2026-11-11)
 
@@ -262,7 +300,9 @@ one operator do not justify a secret manager.
 **Why.** Each render's manifest says whether visuals, voice or music are synthetic. Tier 1 and 2
 always set the flags. Tier 0 (real photos, synthetic voice) is a grey area on every platform, and
 the default is to disclose: the published policies penalize missing labels, not present ones.
-`disclosure.tier0` can turn it off. See the matrix in `PLATFORMS.md`.
+`disclosure.tier0` can turn it off. LinkedIn has no flag, so a render with AI-generated footage
+adds one line to the post text. Embedding C2PA metadata was considered and dropped: it needs a
+signing certificate, and a self-signed one is not trusted. See the matrix in `PLATFORMS.md`.
 
 ## D-21 Claims: Shopify fields only (2026-11-11)
 
@@ -273,6 +313,13 @@ and price, each with its source field. Tags such as "bestseller" steer the angle
 stated. No discount language without a compare-at price. No review language without review data.
 "Power bank not included" is treated as a mandatory disclosure in every caption and end card.
 Checks are code first, then a Haiku pass.
+
+**Text printed on photos.** Six of the ten photos are supplier infographics that state features the
+description does not: three heat levels, zip front, plush lining, machine washable, a 10,000 mAh
+power bank. The photos are Shopify data, and the supplier's printed claims are not checked facts.
+Default: they are not used as claims (`claims.fromPhotos: false`). If the owner turns it on, care,
+safety and battery claims stay excluded, and anything that contradicts the description loses to
+the description. The better fix is to add the true facts to the Shopify description.
 
 ## D-22 Open-Higgsfield-AI: not used (2026-11-11)
 
@@ -289,11 +336,34 @@ type-checked. It is validated again at startup. Secrets stay in `.env`.
 
 ## D-24 HTTP and SDKs: built-in `fetch` (2026-11-11)
 
-**Alternatives.** `googleapis` and other platform SDKs.
+**Alternatives.** `googleapis` and other platform SDKs. A general HTTP client such as `got` or `axios`.
 
 **Why.** Each platform needs three to five HTTP calls. The SDKs are large, and two of the four
-platforms have no maintained official Node SDK for these endpoints. The Anthropic SDK is the one
-exception and is used for all model calls.
+platforms have no maintained official Node SDK for these endpoints. A general client adds retries
+and timeouts that `fetch` with `AbortSignal.timeout` and our own retry table already cover. The
+Anthropic SDK is the one exception and is used for all model calls.
+
+## D-25 FFmpeg: the binary Remotion ships (2026-11-11)
+
+**Alternatives.** A full FFmpeg from the distribution's packages. The `ffmpeg-static` npm package.
+
+**Why.** Remotion installs FFmpeg 7.1 and `ffprobe` with it, so there is nothing to add. That build
+is minimal: it has `loudnorm`, `silencedetect`, `scale`, `amix` and `volume`, and the H.264, AAC,
+PNG and raw-video encoders, and it lacks `blackdetect`, `freezedetect` and `ebur128`. The two
+missing video checks take about 25 lines of code over frames decoded to 32×57 greyscale, and
+loudness is measured with `loudnorm`. That is less than carrying a second FFmpeg.
+
+**Revisit when.** A filter is needed that cannot be replaced this cheaply.
+
+## D-26 Feedback ranking: Thompson sampling in code (2026-11-11)
+
+**Alternatives.** Let the weekly Sonnet review set the weights. Epsilon-greedy.
+
+**Why.** Weights set by a model would make the sampler non-deterministic and hard to test, and
+choosing what to post next is arithmetic, not judgment. Thompson sampling needs two counters per
+option and balances winners against untried options without a tuning knob, which epsilon-greedy
+needs. Sonnet's weekly review writes commentary and suggests angles for new hooks, which is
+creative work. The metric is defined in `ARCHITECTURE.md`, "Feedback loop".
 
 ---
 
@@ -305,15 +375,26 @@ exception and is used for all model calls.
 | VM | The pipeline has to run somewhere | $0–17 | — |
 | Hosted open-weight video (fal.ai) | A GPU is needed; renting one ourselves is not cheaper (D-09) | ~$5 | $15 |
 | Higgsfield API | Premium models are closed | ~$4 | $25 |
-| TikTok bridge | TikTok will not audit an internal tool (D-02) | $0–24 | — |
+| Bridge | TikTok will not audit an internal tool, and LinkedIn gates Page posting (D-02) | $0–24 | — |
+| Remotion | Free at this company size. Not open source (D-03) | $0, or $100 above 3 employees | — |
 
 ## Assumptions to confirm with the owner
 
 1. Merry Marts has three or fewer employees (Remotion licence, D-03).
-2. Which TikTok route: bridge, or drafts finished by hand (D-02).
-3. LinkedIn target: Company Page, which needs a registered legal entity and a review, or personal profile.
+2. TikTok route: bridge, or drafts finished by hand (D-02).
+3. LinkedIn route: Company Page through the bridge, Company Page direct (registered legal entity
+   and a review), or personal profile (re-authorize every 60 days).
 4. Tags such as "bestseller" stay out of ad claims (D-21).
+5. Claims printed only on the product photos stay out of ads, or the facts are added to the
+   Shopify description (D-21).
 
 ## Attempts abandoned
 
-Record here any tool or API dropped after two failed attempts, with the reason. None yet.
+Record here any tool or API dropped after two failed attempts, with the reason.
+
+- **A CC0 music library (2026-11-12).** Two research passes. FreePD.com has shut down. Free Music
+  Archive's CC0 filter returned a track whose own page says CC BY-NC-ND. OpenGameArt and Musopen
+  refused automated requests, so no track licence could be read from its own page. No track was
+  verified. Replaced by synthesized beds (D-16).
+- **Shopify MCP connector at build time (2026-11-12).** Present in the session but not
+  authenticated. The public product feed is used instead. Nothing at runtime depended on it.

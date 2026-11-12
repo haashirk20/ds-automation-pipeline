@@ -2,8 +2,8 @@
 
 A single container on a small VM turns the store's Shopify product into two 15-second vertical ads
 a day and publishes each one to YouTube Shorts, Facebook Page Reels, LinkedIn and TikTok. The
-pipeline is ordinary code driven by a SQLite database. Language models are called at four creative
-or judgment steps and nowhere else. Nothing listens on a network port.
+pipeline is ordinary code driven by a SQLite database. Language models are called only at the
+creative and judgment steps listed under "Model use at runtime". Nothing listens on a network port.
 
 ## What we are advertising
 
@@ -14,13 +14,14 @@ Read from the live store on 2026-11-11:
 | Store | Merry Marts, Oakville, Ontario. Prices in CAD. Ships to Canada only |
 | Products | 1: Heated Shawl Wrap (`snugwrap-heated-shawl-wrap`), $49.99 CAD |
 | Variants | Beige, Green, Red. One size, 150 × 80 cm |
-| Photos | 10, square, 800–1500 px |
+| Photos | 10, square, 800–1500 px. Six are supplier infographics with claims printed on them |
 | Description | About 60 words: heating function, USB-powered, wearable, materials, gift-box packaging, "Power bank not included" |
 | Reviews, sale price | None |
 
-Two consequences shape the design. The facts available for claims are few, so the claim checker
-matters and every ad carries the "power bank not included" disclosure. And one product with ten
-photos has to carry 60 distinct ads a month, so variation is a first-class part of the system.
+Three consequences shape the design. The facts available for claims are few, so the claim checker
+matters and every ad carries the "power bank not included" disclosure. One product with ten photos
+has to carry 60 distinct ads a month, so variation is a first-class part of the system. And most
+photos carry printed text, so each photo is tagged and cropped to a text-free region before use.
 
 ## Diagram
 
@@ -73,8 +74,8 @@ flowchart LR
     AI-disclosure flag and records the post ID.
 12. **Measure.** Metrics are pulled later and feed the next week's hook and template choices.
 
-Steps 1, 2, 5, 7, 8, 9 (deterministic part), 11 and 12 are plain code. Steps 3, 4, 10 and the vision
-part of 9 call a model. Step 6 calls a video API.
+Steps 1, 2, 5, 7, 8, 9 (deterministic part), 11 and 12 are plain code. Steps 3, 4 and 10, the photo
+tagging in step 2 and the vision part of step 9 call a model. Step 6 calls a video API.
 
 ## Runtime shape
 
@@ -103,7 +104,8 @@ There is no cron, no Redis, no queue broker and no web server. The database is t
 
 ```
 slot:         planned -> producing -> ready -> done
-                              \-> failed          (alert; publications skipped)
+                 ^            |  \-> failed       (alert; publications skipped)
+                 \------------/  a stale 'producing' returns to planned, twice at most
 
 publication:  pending -> uploading -> published
                  |            \-> pending (retry with backoff)
@@ -114,6 +116,16 @@ publication:  pending -> uploading -> published
 A slot ID is `<local date>#<index>`, for example `2026-11-12#1`. A publication is keyed by
 `(slot_id, platform)` with a unique constraint. That key is the idempotency key.
 
+**Claiming.** A publication is claimed with one statement, `UPDATE … SET state='uploading' … WHERE
+state='pending'`, and the upload goes ahead only if that statement changed a row. A manual
+`publish` command running beside the loop cannot take the same row.
+
+**Recovery.** A crash or an out-of-memory kill can leave a row in `producing` or `uploading`. Every
+tick looks for rows that have been in those states longer than their timeout, 30 minutes each. A
+stale `producing` slot goes back to `planned`, and fails with an alert the second time. A stale
+`uploading` publication is checked against its stored handle, as described below. Rows younger
+than the timeout belong to live work and are left alone.
+
 ### Never double-post
 
 Each platform returns a handle early in its upload flow. The publisher writes that handle to the
@@ -123,9 +135,9 @@ database **before** the next step, and on any retry it asks the platform about t
 |---|---|---|
 | YouTube | Resumable session URI | `PUT` with `Content-Range: bytes */<size>` returns the finished video or the resume offset |
 | Facebook | `video_id` from `upload_phase=start` | `GET /{video-id}?fields=status` |
-| LinkedIn | Video URN from `initializeUpload` | List the author's recent posts and look for one whose media is that URN |
+| LinkedIn (direct) | Video URN from `initializeUpload`, then the post ID from the `x-restli-id` header | Company Page: list the author's recent posts and look for one whose media is that URN. Personal profile: there is no read scope, so a lost response on the final call is `needs_attention` |
 | TikTok (own app) | `publish_id` from `init` | `/v2/post/publish/status/fetch/` |
-| TikTok (bridge) | Bridge post ID | Bridge status endpoint |
+| Bridge | Our own reference sent with the create call, then the bridge post ID | Bridge status endpoint, or a search of recent bridge posts for our reference. If the bridge offers neither an idempotency key nor a searchable reference, a lost response is `needs_attention` |
 
 If the state cannot be resolved, the publication becomes `needs_attention` and an alert goes out.
 Missing a post is acceptable. Posting twice is not.
@@ -141,16 +153,19 @@ burst of posts.
 
 **Brief.** Built from Shopify data only. Each fact records its source field. Tags are used for
 angle selection and never as claims ("bestseller" is a tag on a product published three days ago).
-Haiku 5.5 with vision tags each photo once: clean product shot, lifestyle, infographic with text,
-dominant colours. Photos with embedded text are kept away from caption areas. The brief also
-extracts mandatory disclosures.
+Haiku 5.5 with vision tags each photo once: product shot, lifestyle or infographic, the colour
+variant shown, and a crop rectangle free of printed text. The renderer uses the crop. Claims that
+appear only as text printed on a photo ("three heat levels", "machine washable") are not used
+unless `claims.fromPhotos` is turned on, and care, safety and battery claims are never taken from
+a photo. The brief also extracts mandatory disclosures.
 
 **Hook library.** Sonnet 5.5 generates hooks in six frameworks: problem-agitate, curiosity gap,
 bold claim backed by product data, POV, comparison, objection-flip. Each hook stores its on-screen
-text, its spoken line and the facts it relies on. The library starts at 48 and refills when fewer
-than 40 are usable. A hook is usable on a platform if it has not been published there in 14 days.
-With 2 slots a day the system consumes 28 hooks per 14-day window, which is why the user's floor
-of 20 is raised to 40.
+text, its spoken line and the facts it relies on. A hook is usable on a platform if it has not been
+published there in 14 days. The library floor is computed from config as
+`noRepeatDays × slots per day × poolFactor`: 14 × 2 × 1.5 = 42 at the defaults, and more when slots
+are added. The library starts at 48 and refills by 24 whenever it is below the floor. The brief's
+figure of 20 is a minimum, not the target: two slots a day use 28 hooks in every 14-day window.
 
 **Script.** Four beats: hook (0–2 s), benefit or demo (2–10 s), offer (10–13 s), call to action
 with shop name and URL (13–15 s). About 35–40 spoken words. Each caption chunk has two strings:
@@ -161,8 +176,9 @@ per-word start and end times. Captions are the script itself, timed by the synth
 recognition is involved, so a caption can never disagree with the script. If the voice-over runs
 past 14.5 seconds the script is regenerated shorter.
 
-**Music.** A local library with a manifest that records the licence of every track. Only tracks we
-own or CC0 tracks are allowed. Music is ducked under the voice and the mix is normalized to −14 LUFS.
+**Music.** A small Python tool synthesizes an instrumental bed from the slot's seed, so every ad has
+its own and we own all of it. Tracks the owner adds to `assets/music/` with a manifest entry take
+priority. Music is ducked under the voice and the mix is normalized to −14 LUFS.
 
 **Render.** A Remotion composition takes the master edit as props. Templates are React components
 in `templates/`. Phase 3 ships at least three: bold kinetic type, soft lifestyle with lower-third
@@ -188,8 +204,24 @@ Each slot is a point in this space, chosen by a seeded sampler that rejects rece
 | Hero clip | Tier 1 or 2 slots only | New generation each time |
 | Caption and hashtags | Written per slot, per platform | Always new |
 
-Phase 8 replaces uniform sampling with weights learned from metrics, keeping a share of slots for
-exploration.
+Phase 8 replaces uniform sampling with learned weights.
+
+## Feedback loop
+
+Weights are computed in code. The model does not set them.
+
+- **Metric.** Per post: average watch time divided by video length, where the platform reports it
+  (YouTube Analytics, Facebook video insights, LinkedIn video analytics). Otherwise likes plus
+  comments plus shares, divided by views. Metrics are read 48 hours after publishing.
+- **Normalizing.** A post is a win if it beats the median of the last 30 days on its own platform.
+  Platforms are never compared with each other.
+- **Sampler.** Thompson sampling over hook framework and template, each with a win count and a loss
+  count. It favours winners and keeps trying the rest, so no separate exploration share is needed.
+- **Pruning.** A hook with three losses and no win is retired, which triggers the refill.
+- **Review.** Once a week Sonnet 5.5 reads the results table and writes a short commentary for the
+  daily summary, plus angle suggestions for the next hook refill.
+- **Gaps.** A platform without readable metrics is left out of the ranking: TikTok unless the bridge
+  exposes analytics, and LinkedIn personal profiles.
 
 ## Tier router and budget
 
@@ -200,10 +232,21 @@ exploration.
 | 2 | Tier 0 plus one premium-model hook clip (Higgsfield API) | ~$0.50 | 10% |
 
 Before any paid job the router reads the price from its table, checks the provider balance where
-the API offers one, and checks the month's ledger against the cap. If the cap would be exceeded,
-or the call fails twice, the slot falls back to Tier 0. Every job writes a ledger row with quoted
-and actual cost. A generated clip is compared with its source photo by Haiku 5.5 and rejected if
-the product looks different or text has been invented.
+the API offers one, and checks the month's ledger against the cap. It then writes a ledger row
+that reserves the quoted cost, submits the job, and stores the provider's job ID on that row. A
+restart resumes the stored job and does not submit a second one. A failed or rejected job still
+counts at its quoted price. If the cap would be exceeded, or the call fails twice, the slot falls
+back to Tier 0. A generated clip is compared with its source photo by Haiku 5.5 and rejected if the
+product looks different or text has been invented. A rejected clip is regenerated once. After that
+the slot falls back to Tier 0.
+
+The ledger is the first limit. The second is outside our code: each provider account is prepaid,
+topped up by hand to no more than its monthly cap, with auto-reload off, and the Anthropic
+workspace has a spend limit equal to the model cap. A bug in the ledger cannot spend money that is
+not in the account.
+
+The default mix is a starting point. Phase 4 generates the same shot on Tier 1 and on Tier 2 from
+the same photo, and the mix is set from that comparison.
 
 ## QA gate
 
@@ -213,15 +256,19 @@ Nothing is published without passing.
 |---|---|---|
 | Container, codec, size, frame rate | `ffprobe` | MP4, H.264, `yuv420p`, 1080×1920, 30 fps |
 | Duration | `ffprobe` | 14.0–16.0 s |
-| Audio present and loud enough | `ffmpeg` `ebur128` | AAC stream, −14 ±1.5 LUFS, true peak ≤ −1 dBTP |
-| Black frames | `ffmpeg` `blackdetect` | None longer than 0.3 s |
-| Frozen picture | `ffmpeg` `freezedetect` | None longer than 2.5 s |
+| Audio present and loud enough | `ffmpeg` `loudnorm` in measure mode | AAC stream, −14 ±1.5 LUFS, true peak ≤ −1 dBTP |
+| Black frames | Every frame decoded to 32×57 greyscale; mean brightness computed in code | No dark run longer than 0.3 s |
+| Frozen picture | The same frames; difference between neighbours | No still run longer than 2.5 s |
 | Silence | `ffmpeg` `silencedetect` | None longer than 1.5 s |
 | File size | `stat` | Under the smallest platform limit |
 | Captions inside safe zone | Layout code and a unit test | By construction |
-| Legibility, clipped or overlapping text, price and shop name on the end card | Haiku 5.5 vision on 6 frames, scored against a rubric | Rubric passes. Can be turned off |
+| Captions legible | Computed from the layout: font size, and contrast ratio against the caption plate | At least 56 px and 4.5:1 |
+| Clipped or overlapping text, price and shop name on the end card, overall look | Haiku 5.5 vision on 6 frames, scored against a rubric | Rubric passes. Optional, on by default |
 
 A failure re-renders with the next template, twice at most. Then the slot fails and alerts.
+
+FFmpeg here is the binary that ships with Remotion. It has no `blackdetect`, `freezedetect` or
+`ebur128` filter, which is why those checks read raw frames and use `loudnorm`.
 
 ## Model use at runtime
 
@@ -238,8 +285,14 @@ Rules for every call:
   run back to back so they share it.
 - Variety comes from the inputs: framework, angle, and the list of hooks already used. Current
   models reject non-default sampling parameters.
-- Tokens, cache reads and dollar cost are written to `llm_calls` for every call. A monthly cap stops
-  further calls and alerts.
+- Tokens, cache reads and dollar cost are written to `llm_calls` for every call.
+- When the monthly cap is reached, or the API is down, the pipeline keeps posting in degraded mode.
+  It reuses an approved script whose hook is outside its 14-day window, with a new template, photo
+  order, voice and music, and it alerts once. A slot is skipped only when no such script exists.
+- Known failures are classified in code by HTTP status and platform error code. Only an
+  unrecognized error goes to Haiku, with secrets redacted, to be labelled transient, permanent,
+  auth, quota or policy. Transient is retried, which is safe because every retry checks the stored
+  handle first. The label and a one-line summary go into the alert.
 - `stop_reason` is checked before the content is read. A refusal counts as a failed attempt.
 - Product text from Shopify is passed as data. Model output is validated before use: prices must
   match the brief and the only URL allowed is the shop's.
@@ -275,6 +328,10 @@ retention. It is validated at startup and the process refuses to start on an inv
 live in the database, inside the data volume. `DRY_RUN=1` does everything except the publish call
 and records what it would have sent.
 
+Each platform has `visibility: 'private' | 'public'`, default `private`: YouTube unlisted, TikTok
+`SELF_ONLY`, Facebook with the app in Development mode, LinkedIn draft. A fresh install cannot post
+publicly until the owner changes it. This is how the Phase 5 test posts are made.
+
 One-time authorization is a CLI: `pipeline auth youtube|tiktok|linkedin|meta`. It runs on the VM
 through an SSH port-forward, so the browser on the owner's machine completes a loopback redirect.
 
@@ -285,11 +342,14 @@ through an SSH port-forward, so the browser on the owner's machine completes a l
   token expiring or refresh failing, budget cap reached, QA rejecting repeatedly, disk over 80%,
   slot skipped. The same alert is sent at most once every 6 hours.
 - **Daily summary.** Posts published with links, cost month to date, tomorrow's slots, warnings.
-- **Dead-man's switch.** A ping to healthchecks.io every tick. If the VM or process dies, that
-  service emails. An alert that depends on the dead machine would not arrive.
+- **Dead-man's switches.** Two checks at healthchecks.io, which emails when a ping is missed. One is
+  pinged every tick and catches a dead VM or process. The other is pinged only after the daily
+  summary has been delivered and catches a dead webhook, which would otherwise hide every alert.
 - **Housekeeping.** Renders older than 14 days are deleted. Database rows are kept.
-- **Backups.** Nightly snapshot of the database, which includes tokens, encrypted by restic and
-  sent to R2. Seven daily and four weekly copies are kept.
+- **Backups.** Nightly `VACUUM INTO` snapshot of the database, which includes tokens. restic
+  encrypts the snapshot file and sends it to R2. Seven daily and four weekly copies are kept. The
+  restic password and R2 keys must also be kept somewhere off the VM. After a restore, tokens that
+  rotated since the snapshot are stale, so TikTok and LinkedIn are authorized again.
 - **`pipeline doctor`.** Checks config, secrets present, token validity and expiry dates, API
   reachability, FFmpeg, fonts, disk, migrations and the LinkedIn version sunset date.
 
@@ -323,7 +383,8 @@ prompts/             versioned prompt files
 tools/tts/           Kokoro CLI (Python, uv)
 assets/              music with licence manifest, fonts, brand files
 config/              pipeline.config.ts
-infra/               Dockerfile, docker-compose.yml, setup.sh, backup script
+compose.yaml         the deployment
+infra/               Dockerfile, setup.sh, backup script
 tests/               node --test
 docs/                this folder
 .claude/agents/  .claude/skills/  .mcp.json  CLAUDE.md
@@ -338,6 +399,7 @@ not. Splitting later is a mechanical move.
 
 TypeScript runs directly on Node 24, which strips types natively, so there is no build step.
 Tests use the built-in runner. HTTP uses built-in `fetch`. SQLite uses built-in `node:sqlite`.
+FFmpeg is the binary Remotion ships.
 
 ## Build-time agents
 

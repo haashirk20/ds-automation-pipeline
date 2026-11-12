@@ -1,0 +1,64 @@
+import { z } from 'zod';
+import raw from '../../config/pipeline.config.ts';
+
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM');
+const base = { enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1) };
+
+const schema = z
+  .object({
+    timezone: z.string().refine((tz) => {
+      try {
+        new Intl.DateTimeFormat('en', { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'unknown time zone'),
+    produceAt: hhmm,
+    platforms: z.object({
+      youtube: z.object(base),
+      facebook: z.object(base),
+      linkedin: z.object({ ...base, target: z.enum(['organization', 'member']) }),
+      tiktok: z.object({ ...base, mode: z.enum(['bridge', 'direct', 'inbox']) }),
+    }),
+    publish: z.object({
+      maxLatenessMinutes: z.number().positive(),
+      retryMinutes: z.array(z.number().positive()),
+      uploadTimeoutMinutes: z.number().positive(),
+      timeoutMinutes: z.number().positive(),
+    }),
+    render: z.object({ produceTimeoutMinutes: z.number().positive(), maxAttempts: z.number().int().min(1) }),
+    disclosure: z.object({ tier0: z.boolean() }),
+    watchdogMinutes: z.number().positive(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.publish.timeoutMinutes >= c.publish.uploadTimeoutMinutes) ctx.addIssue({ code: 'custom', path: ['publish', 'timeoutMinutes'], message: 'must be less than uploadTimeoutMinutes' });
+    const counts = new Set(Object.values(c.platforms).filter((p) => p.enabled).map((p) => p.slots.length));
+    if (counts.size > 1) ctx.addIssue({ code: 'custom', path: ['platforms'], message: 'enabled platforms must have the same number of slots' });
+  });
+
+export type Config = z.infer<typeof schema>;
+export type PlatformName = keyof Config['platforms'];
+
+// .env is loaded by src/cli.ts only, so tests never read a developer's .env.
+// Throws a readable Error on invalid input.
+export function parseConfig(input: unknown): Config {
+  const r = schema.safeParse(input);
+  if (r.success) return r.data;
+  throw new Error('invalid config:\n' + r.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n'));
+}
+
+export function loadConfig(): Config {
+  return parseConfig(raw);
+}
+
+// Read lazily so tests can change process.env. Never log these values.
+export const env = {
+  dryRun: () => process.env.DRY_RUN === '1',
+  dataDir: () => process.env.DATA_DIR || './data',
+  outDir: () => process.env.OUT_DIR || './out',
+  discordWebhook: () => process.env.ALERT_DISCORD_WEBHOOK || undefined,
+  telegramToken: () => process.env.ALERT_TELEGRAM_BOT_TOKEN || undefined,
+  telegramChat: () => process.env.ALERT_TELEGRAM_CHAT_ID || undefined,
+  healthcheckUrl: () => process.env.HEALTHCHECK_URL || undefined,
+};

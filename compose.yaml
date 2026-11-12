@@ -1,0 +1,38 @@
+services:
+  pipeline:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    tmpfs: [/tmp]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DRY_RUN: ${DRY_RUN:-1}
+      DATA_DIR: /app/data
+      OUT_DIR: /app/out
+    volumes:
+      - pipeline-data:/app/data
+      - pipeline-out:/app/out
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "node", "src/cli.ts", "health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+# Named volumes take their initial ownership (node user) from the image's /app/data and /app/out.
+volumes:
+  pipeline-data:
+  pipeline-out:

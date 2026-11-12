@@ -1,8 +1,10 @@
 # Platform realities
 
-Checked 2026-11-11 against official documentation. Items marked **(unverified)** come from vendor
-pages, press or community reports and must be confirmed by a real API call in Phase 5. Three facts
-on this page changed in the last 12 months, so re-check anything here before relying on it later.
+Researched 2026-11-11 from official documentation, by research agents that quoted their sources.
+The orchestrator re-checked the YouTube revision-history entry and the bridge prices first-hand.
+Everything else is as reported, and each publisher confirms its own facts with a real API call in
+Phase 5. Items marked **(unverified)** come from vendor pages, press or community reports. Three
+facts on this page changed in the last 12 months, so re-check anything here before relying on it later.
 
 ## Summary
 
@@ -11,13 +13,14 @@ on this page changed in the last 12 months, so re-check anything here before rel
 | YouTube Shorts | Same day, `privacyStatus: "unlisted"` | Same day | Publish the OAuth consent screen to "In production" | minutes |
 | Facebook Page Reels | Same day: app in Development mode, visible to app roles only | Switch app to Live, Standard Access | None expected. Fallback: App Review + Business Verification | minutes (weeks if fallback) |
 | TikTok | Same day through a Sandbox app: `SELF_ONLY`, account set to private | **Not possible with our own app.** TikTok's audit excludes internal tools. Needs a hosted bridge with an audited app | Pick a bridge and create the account | same day |
-| LinkedIn | Same day on a personal profile | Company Page needs the Community Management API (legal entity, dedicated app). Personal profile works same day | LinkedIn review for the Page route | days to weeks (unverified) |
+| LinkedIn | Same day on a personal profile | Company Page through the bridge, same day. Direct needs the Community Management API (legal entity, dedicated app). A personal profile works but needs re-authorizing every 60 days | Bridge account, or LinkedIn review for the direct route | same day, or days to weeks (unverified) |
 
 The three findings that decide feasibility:
 
 1. **TikTok will not audit this tool.** Public posting through our own TikTok app is off the table.
 2. **YouTube removed the private lock on 2026-11-02.** No audit is needed for public uploads.
-3. **LinkedIn Company Page posting is gated** behind an approval that needs a registered legal entity.
+3. **LinkedIn Company Page posting is gated** behind an approval that needs a registered legal
+   entity. The same bridge that solves TikTok avoids it.
 
 ---
 
@@ -65,7 +68,8 @@ Bridge shortlist. All rows are vendor claims and get verified with one real post
 | Ayrshare | $149/mo | Unlimited | Rejected: cost |
 
 Selection criteria at integration time: public posting confirmed by a real post, no monthly cap,
-passes `is_aigc` and the brand toggle through, accepts a file upload, has a status endpoint.
+passes `is_aigc` and the brand toggle through, accepts a file upload, has a status endpoint, and
+accepts an idempotency key or a reference we can search for afterwards.
 
 **Limits.** 6 requests per minute per user token. About 15 posts per creator per day, shared across
 all API clients including bridges. Video: MP4/WebM/MOV, H.264/H.265, 23–60 fps, 360–4096 px per
@@ -107,7 +111,8 @@ Shorts flag.
 **Private lock removed.** Revision history, 2026-11-02: "Videos uploaded through the videos.insert
 method from unverified API projects are no longer restricted to private viewing mode." If
 `privacyStatus` is omitted the upload defaults to **public**. The pipeline always sets it
-explicitly, and `DRY_RUN` and test mode use `unlisted`.
+explicitly: `unlisted` while the platform's `visibility` is `private`, and `public` after the owner
+changes it. `DRY_RUN` makes no upload at all.
 [Revision history](https://developers.google.com/youtube/v3/revision_history)
 
 **Quota.** Granular buckets since 2026-06-01: 100 `videos.insert` calls per day in their own
@@ -196,6 +201,13 @@ self-claim whether the video was created with AI."
 Video upload with `w_member_social` alone is expected to work and is confirmed in Phase 5
 **(unverified until then)**.
 
+**Recommended route.** The bridge, on the second of its two free accounts. It posts to the Company
+Page through the bridge's approved app, needs no review, and never needs the 60-day
+re-authorization that the personal route does and that breaks unattended running. The direct
+Company Page route is the alternative once LinkedIn approves an app. The personal route has one
+more limit: with no read scope, the pipeline cannot check whether a post exists after a lost
+response, so that case stops and waits for a person.
+
 **Limits.** Development tier: 500 calls per app per day, 100 per member. Video: 3 seconds to
 30 minutes, 75 KB to 500 MB, MP4. No published daily post cap.
 
@@ -205,7 +217,9 @@ Video upload with `w_member_social` alone is expected to work and is confirmed i
 **Tokens.** Access token 60 days. A token that cannot refresh raises an alert 14, 7 and 1 days
 before expiry.
 
-**AI disclosure.** No API flag. LinkedIn shows a label when the file carries C2PA metadata.
+**AI disclosure.** No API flag. LinkedIn shows a label when the file carries C2PA metadata, which
+our renders do not. When a render contains AI-generated footage, the post text ends with the line
+"Video includes AI-generated footage."
 
 **No private posts.** LinkedIn has no unlisted mode. The test post is a draft
 (`lifecycleState: "DRAFT"`) or a connections-only post deleted after verification, whichever the
@@ -222,9 +236,9 @@ Computed per render from its manifest. No one sets these by hand.
 
 | What the render contains | TikTok `is_aigc` | YouTube `containsSyntheticMedia` | Facebook `is_ai_generated` | LinkedIn |
 |---|---|---|---|---|
-| AI-generated video clip (Tier 1 or 2) | true | true | true | no flag |
-| AI-generated music | true | true | true | no flag |
-| Real photos, motion graphics, synthetic voice only (Tier 0) | `disclosure.tier0`, default true | `disclosure.tier0`, default true | `disclosure.tier0`, default true | no flag |
+| AI-generated video clip (Tier 1 or 2) | true | true | true | A line in the post text |
+| AI-generated music | true | true | true | — |
+| Real photos, motion graphics, synthetic voice only (Tier 0) | `disclosure.tier0`, default true | `disclosure.tier0`, default true | `disclosure.tier0`, default true | — |
 
 Tier 0 is a grey area on every platform. The default over-discloses, because an unlabeled video
 can be removed and a labeled one is not penalized by the published policies.

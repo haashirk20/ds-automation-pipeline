@@ -8,18 +8,22 @@ Items marked **(unverified)** were not confirmed on an official page.
 
 | Line | Default config | Hard cap in config | Notes |
 |---|---|---|---|
-| VM | $10–17 | — | 4 vCPU / 8 GB class. $0 on Oracle Always Free |
-| Anthropic API | ~$4 | $10 | Sonnet 5.5 + Haiku 5.5 |
+| VM | $10–17 | — | 4 vCPU / 8 GB class |
+| Anthropic API | ~$3.30 | $10 | Sonnet 5.5 + Haiku 5.5 |
 | Tier 1 clips (open-weight, hosted) | ~$5 | $15 | 40% of slots |
 | Tier 2 clips (premium) | ~$4 | $25 | 10% of slots |
-| TikTok bridge | $0–16 | — | Zernio free tier, or Upload-Post |
+| Bridge for TikTok and LinkedIn | $0–16 | — | Zernio's two free accounts, or Upload-Post |
 | Backups, alerts, monitoring, music | $0 | — | Free tiers, owned assets |
-| **Total** | **~$25–45** | **≤ $91 worst case** | Worst case = every cap hit, $24 bridge, $17 VM |
+| Remotion licence | $0 | — | Free up to 3 employees. $100 a month minimum above that |
+| **Total** | **~$22–45** | **≤ $91 worst case** | Worst case = every cap hit, $24 bridge, $17 VM |
 
 Worst case stays under $100 because the caps are enforced in code: when a cap is reached the router
-falls back to Tier 0 and sends one alert. No line can grow without a config change.
+falls back to Tier 0 and sends one alert. No line can grow without a config change. Each provider
+account is also prepaid and topped up by hand to no more than its cap, with auto-reload off, so the
+ledger is not the only limit. The one thing that breaks the worst case is the company growing past
+three employees, which adds Remotion's $100.
 
-Cheapest working setup: Oracle Always Free VM, Tier 0 only, Zernio free tier. About $4 a month.
+Cheapest setup: Tier 0 only, Zernio's free accounts, a $10 VM. About $13 a month.
 
 ## VM
 
@@ -29,7 +33,7 @@ comfortable. Disk 40 GB.
 
 | Option | Spec | Price / month | Status 2026-11-11 |
 |---|---|---|---|
-| Oracle Cloud Always Free, Ampere A1 | 2 OCPU / 12 GB ARM ("1,500 OCPU hours and 9,000 GB hours per month") | $0 | Orderable, with known capacity errors. "Idle Always Free compute instances may be reclaimed": 7-day window with CPU, network and memory all under 20% |
+| Oracle Cloud Always Free, Ampere A1 | 2 OCPU / 12 GB ARM ("1,500 OCPU hours and 9,000 GB hours per month") | $0 | Not recommended. "Idle Always Free compute instances may be reclaimed": 7-day window with CPU, network and memory all under 20%, and this pipeline idles most of the day |
 | Hetzner CX33 | 4 vCPU / 8 GB x86 | €8.99 (~$10) | Listed "currently unavailable" |
 | Hetzner CAX21 | 4 vCPU / 8 GB ARM | €10.99 (~$12) | Listed "currently unavailable" |
 | Netcup VPS 500 G12.5 | 2 vCPU / 4 GB | €8.26 (~$9) | Orderable. Contract term applies |
@@ -43,8 +47,10 @@ comfortable. Disk 40 GB.
 Hetzner showed every cloud type as unavailable on the day of research. Availability and prices are
 moving, so the deploy script is provider-agnostic (any Ubuntu 24.04 host, x86 or ARM64) and the
 provider is chosen at deploy time in this order: Hetzner CX33 or CAX21 if orderable, then Netcup
-VPS 1000, then Hostinger KVM 2. Oracle Always Free is the $0 option for an owner who accepts the
-reclaim and capacity risk. Remotion and the TTS model both run on ARM64.
+VPS 1000, then Hostinger KVM 2. Oracle Always Free is left out: the workload is idle by design,
+which is what Oracle's reclaim rule removes. It would be usable only if upgrading the account to
+pay-as-you-go exempts the instance, and that was not confirmed. Remotion and the TTS model both run
+on ARM64.
 
 ## LLM tokens
 
@@ -59,6 +65,7 @@ Haiku 5.5 $0.10 in, $0.50 out. Output figures include adaptive-thinking tokens.
 | Per-platform titles, captions, hashtags | Haiku 5.5 | 60 | 3,000 / 1,500 | $0.06 |
 | Claim check | Haiku 5.5 | 80 | 3,000 / 500 | $0.04 |
 | QA vision, 6 frames × 4 renders | Haiku 5.5 | 60 | 17,000 / 1,200 | $0.14 |
+| Clip check against the source photo | Haiku 5.5 | ~36 | 3,500 / 300 | $0.02 |
 | Product image tagging, error classification | Haiku 5.5 | few | small | < $0.05 |
 | Opus 5.5 escalation (off by default) | Opus 5.5 | 0 | 20,000 / 4,000 | $0.16 each |
 | **Total** | | | | **~$3.30** |
@@ -90,6 +97,13 @@ Default mix: 50% Tier 0, 40% Tier 1, 10% Tier 2. With 20% of clips rejected by Q
 
 Exact per-clip prices are read from the provider at integration time (Phase 4) and stored in the
 router's price table. The router checks the price and the remaining budget before every job.
+
+### Tier 1 versus Tier 2
+
+On price, Tier 1 costs about a third of Tier 2: $0.16 a clip against $0.50, so $9.60 against $30 a
+month if all 60 slots used a clip. On quality the answer is not known yet. Phase 4 generates the
+same hook shot on both tiers from the same photo and prompt, and the default mix is replaced by
+what that shows. If Tier 1 holds up on product shots, Tier 2's share goes to zero.
 
 ### Self-run GPU versus hosted, honestly
 
