@@ -2,34 +2,160 @@
   "_about": "Owner overrides for product photos, keyed by the photo's file name. Each entry lists the usable shots in that photo: a crop free of printed text (fractions of the image, origin top-left), what it shows, and the colour variant. An empty list means the photo is never used. Photos not listed here are tagged automatically.",
   "1079793b-a669-4827-81a6-da657ad9a4fd.jpg": {
     "shots": [
-      { "id": "model-beige", "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.52, "y": 0.0, "w": 0.48, "h": 0.78 }, "note": "Woman wearing the beige shawl, eyes closed and relaxed, bright window behind her" },
-      { "id": "folded-beige", "kind": "product", "variant": "Beige", "crop": { "x": 0.22, "y": 0.7, "w": 0.44, "h": 0.28 }, "note": "Folded beige shawl, close-up of the knit and the power button" }
+      {
+        "id": "model-beige",
+        "kind": "lifestyle",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.57,
+          "y": 0.0,
+          "w": 0.43,
+          "h": 0.78
+        },
+        "note": "Woman wearing the beige shawl, eyes closed and relaxed, bright window behind her"
+      },
+      {
+        "id": "folded-beige",
+        "kind": "product",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.22,
+          "y": 0.7,
+          "w": 0.44,
+          "h": 0.28
+        },
+        "note": "Folded beige shawl, close-up of the knit and the power button"
+      }
     ]
   },
   "60a6d100-6a08-4079-9c32-1fa25323f21a.jpg": {
-    "shots": [{ "id": "product-red", "kind": "product", "variant": "Red", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Red shawl on a white background, front view" }]
+    "shots": [
+      {
+        "id": "product-red",
+        "kind": "product",
+        "variant": "Red",
+        "crop": {
+          "x": 0.27,
+          "y": 0.0,
+          "w": 0.73,
+          "h": 0.81
+        },
+        "note": "Red shawl on a white background, front view"
+      }
+    ]
   },
   "b227ae20-6a78-4b9d-999e-4829d4e75f8d.jpg": {
     "shots": [
-      { "id": "working-beige", "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.13, "y": 0.13, "w": 0.31, "h": 0.47 }, "note": "Woman wearing the beige shawl while using a laptop on a sofa" },
-      { "id": "loose-throw", "kind": "lifestyle", "variant": null, "crop": { "x": 0.62, "y": 0.13, "w": 0.34, "h": 0.47 }, "note": "Black-and-white photo of a woman huddled under an ordinary loose blanket, looking cold. Not our product: use only as the 'before' picture" }
+      {
+        "id": "working-beige",
+        "kind": "lifestyle",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.13,
+          "y": 0.13,
+          "w": 0.31,
+          "h": 0.47
+        },
+        "note": "Woman wearing the beige shawl while using a laptop on a sofa"
+      },
+      {
+        "id": "loose-throw",
+        "kind": "lifestyle",
+        "variant": null,
+        "crop": {
+          "x": 0.62,
+          "y": 0.13,
+          "w": 0.34,
+          "h": 0.47
+        },
+        "note": "Black-and-white photo of a woman huddled under an ordinary loose blanket, looking cold. Not our product: use only as the 'before' picture"
+      }
     ]
   },
   "7ec3c2c0-c2f1-4423-a8fd-4ec78194ef15.jpg": {
-    "shots": [{ "id": "product-green", "kind": "product", "variant": "Green", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Green shawl on a white background, front view" }]
+    "shots": [
+      {
+        "id": "product-green",
+        "kind": "product",
+        "variant": "Green",
+        "crop": {
+          "x": 0.27,
+          "y": 0.0,
+          "w": 0.73,
+          "h": 0.81
+        },
+        "note": "Green shawl on a white background, front view"
+      }
+    ]
   },
   "2f744baf-7123-499a-9354-04ae5876f963.jpg": {
-    "shots": [{ "id": "product-beige", "kind": "product", "variant": "Beige", "crop": { "x": 0.27, "y": 0.0, "w": 0.73, "h": 0.81 }, "note": "Beige shawl on a white background, front view" }]
+    "shots": [
+      {
+        "id": "product-beige",
+        "kind": "product",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.27,
+          "y": 0.0,
+          "w": 0.73,
+          "h": 0.81
+        },
+        "note": "Beige shawl on a white background, front view"
+      }
+    ]
   },
   "745d73e5-494f-43ba-9954-5f98c2deffe7_trans.jpg": {
-    "shots": [{ "id": "model-red", "kind": "lifestyle", "variant": "Red", "crop": { "x": 0.55, "y": 0.1, "w": 0.45, "h": 0.9 }, "note": "Smiling woman wearing the red shawl, holding a white mug" }]
+    "shots": [
+      {
+        "id": "model-red",
+        "kind": "lifestyle",
+        "variant": "Red",
+        "crop": {
+          "x": 0.55,
+          "y": 0.1,
+          "w": 0.45,
+          "h": 0.9
+        },
+        "note": "Smiling woman wearing the red shawl, holding a white mug"
+      }
+    ]
   },
-  "beb1bcb6-42ef-461f-8165-825365da886e.jpg": { "shots": [] },
+  "beb1bcb6-42ef-461f-8165-825365da886e.jpg": {
+    "shots": []
+  },
   "915515e8-bfad-4a1e-b8cf-6831af298408.jpg": {
-    "shots": [{ "id": "product-plain", "kind": "product", "variant": "Beige", "crop": { "x": 0.1, "y": 0.0, "w": 0.8, "h": 1.0 }, "note": "Beige shawl with grey lining on a white background" }]
+    "shots": [
+      {
+        "id": "product-plain",
+        "kind": "product",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.1,
+          "y": 0.0,
+          "w": 0.8,
+          "h": 1.0
+        },
+        "note": "Beige shawl with grey lining on a white background"
+      }
+    ]
   },
-  "b00e0a98-c090-49c8-8215-8a9d1b58d5b1.jpg": { "shots": [] },
+  "b00e0a98-c090-49c8-8215-8a9d1b58d5b1.jpg": {
+    "shots": []
+  },
   "651abd0e-c630-42f1-a3a1-dfe1969430ba.jpg": {
-    "shots": [{ "id": "mug-beige", "kind": "lifestyle", "variant": "Beige", "crop": { "x": 0.55, "y": 0.0, "w": 0.42, "h": 0.62 }, "note": "Woman in the beige shawl holding a coffee cup by a window, a suitcase beside her" }]
+    "shots": [
+      {
+        "id": "mug-beige",
+        "kind": "lifestyle",
+        "variant": "Beige",
+        "crop": {
+          "x": 0.55,
+          "y": 0.0,
+          "w": 0.42,
+          "h": 0.62
+        },
+        "note": "Woman in the beige shawl holding a coffee cup by a window, a suitcase beside her"
+      }
+    ]
   }
 }
