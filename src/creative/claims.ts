@@ -14,8 +14,9 @@ export interface HookDraft {
   factIds: string[];
 }
 
-export const WORD_BUDGET = { hook: [1, 7], benefit: [12, 20], offer: [4, 9], cta: [3, 7] } as const;
-export const TOTAL_WORDS = [28, 38] as const;
+// Measured: the voice speaks about 2.5 words a second with pauses, and speech must end by 13.8 s.
+export const WORD_BUDGET = { hook: [1, 7], benefit: [8, 18], offer: [4, 9], cta: [3, 7] } as const;
+export const TOTAL_WORDS = [24, 32] as const;
 export const HEADLINE_MAX_WORDS = 8;
 
 export const words = (s: string): number => s.trim().split(/\s+/).filter(Boolean).length;
