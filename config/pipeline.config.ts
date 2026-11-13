@@ -52,6 +52,22 @@ export default {
   // A 'producing' slot older than produceTimeoutMinutes is retried, up to maxAttempts, then failed.
   render: { produceTimeoutMinutes: 30, maxAttempts: 2 },
   disclosure: { tier0: true },
+  // AI video clips. Some slots open with one short image-to-video clip made from a product photo.
+  tiers: {
+    // Share of slots per tier: t0 = photos only, t1 = open-weight clip, t2 = premium clip. Must sum to 1.
+    // The default is all t0 until a real clip provider is wired in.
+    mix: { t0: 1, t1: 0, t2: 0 },
+    // Hard monthly dollar cap per paid tier (UTC month). Failed jobs count at their quoted price.
+    capsUsd: { t1: 15, t2: 25 },
+    // Length of the clip asked for, in seconds.
+    clipSeconds: 4,
+    // Most paid jobs (retries included) one slot may start.
+    maxJobsPerSlot: 2,
+    // Tier 1: provider, model id and the price of one clip in dollars.
+    t1: { provider: 'fal', model: 'fal-ai/ltx-2-19b/image-to-video', usdPerClip: 0.17 },
+    // Tier 2: same fields.
+    t2: { provider: 'higgsfield', model: 'kling3_0', usdPerClip: 0.5 },
+  },
   // A tick running longer than this makes the process exit so Docker restarts it.
   watchdogMinutes: 45,
 };

@@ -19,6 +19,8 @@ import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { listBriefs, runIngest } from '../shopify/index.ts';
 import { synthesize } from '../tts/index.ts';
+import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
+import { ff } from './ffmpeg.ts';
 import { renderEdl } from './render.ts';
 
 // Paths come only from slot id and platform; the result must stay inside OUT_DIR.
@@ -71,9 +73,28 @@ export type ProduceDeps = {
   makeBed: typeof makeBed;
   render: typeof renderEdl;
   qa: typeof runQa;
+  providers: Record<string, ClipProvider>;
+  prepareImage: (src: string, crop: Brief['shots'][number]['crop'], out: string) => Promise<void>;
+  probeClip: (file: string) => Promise<{ width: number; height: number; seconds: number } | null>;
   signal?: AbortSignal; // SIGTERM from the parent: stop rendering and leave the slot for stale recovery
   ingestDeadlineMs: number;
 };
+
+// Crops the photo to its text-free rectangle (so no printed supplier text is sent out) and writes a JPEG at most 1080 wide.
+async function cropToJpeg(src: string, crop: Brief['shots'][number]['crop'], out: string): Promise<void> {
+  const vf = [...(crop ? [`crop=iw*${crop.w}:ih*${crop.h}:iw*${crop.x}:ih*${crop.y}`] : []), "scale='min(1080,iw)':-2"].join(',');
+  await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-i', src, '-vf', vf, '-frames:v', '1', '-q:v', '2', out]);
+}
+
+// Size and length of the clip, or null when it has no video stream.
+async function probeVideo(file: string): Promise<{ width: number; height: number; seconds: number } | null> {
+  const r = JSON.parse((await ff('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file])).stdout.toString());
+  const v = (r.streams ?? []).find((x: { codec_type: string }) => x.codec_type === 'video');
+  if (!v) return null;
+  return { width: v.width, height: v.height, seconds: Number(r.format?.duration ?? v.duration ?? 0) };
+}
+
+const MOTION_PROMPT = 'Slow, gentle camera push-in. Keep the person, the garment and its colour exactly as in the image. Subtle natural movement only. No text, no logos, no new objects.';
 
 const SPEEDS = [1.0, 1.06, 1.12];
 const DAY_MS = 24 * 3600 * 1000;
@@ -185,6 +206,28 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   }
   hold();
 
+  // Tier: some slots open with one AI clip made from the hook photo. Any failure leaves the slot at tier 0.
+  const tier = await chooseTier(db, config, d.providers, slot.id, now);
+  let clip: AssembleInput['clip'] = null;
+  if (tier !== 't0') {
+    const hookShot = (id: string) => brief.shots.find((x) => x.id === id)!;
+    const first = hookShot(script.beats[0].shotIds[0]);
+    const shot = /not our product/i.test(first.note) ? hookShot(script.beats[1].shotIds[0]) : first;
+    const jpg = path.join(work, 'clip-src.jpg');
+    const out = path.join(path.resolve(env.dataDir()), 'clips', slot.id.replace('#', '-') + '.mp4');
+    try {
+      await d.prepareImage(path.resolve(env.dataDir(), shot.file), shot.crop, jpg);
+      const ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, imagePath: jpg, prompt: MOTION_PROMPT, outFile: out, signal: d.signal ?? new AbortController().signal }, now);
+      const info = ok ? await d.probeClip(out) : null;
+      if (ok && info && info.seconds >= 2 && Math.min(info.width, info.height) >= 480) clip = { src: out, width: info.width, height: info.height };
+      else if (ok) rejectClip(db, slot.id, now, 'clip failed the size or length check');
+    } catch (e) {
+      if (d.signal?.aborted) throw e;
+      log.warn('clip step failed, using tier 0', { slot: slot.id, error: String(e) });
+    }
+  }
+  hold();
+
   // Variant, music, voice.
   const prev = db.prepare(`SELECT master_json FROM slots WHERE master_json IS NOT NULL AND (${before}) ORDER BY local_date DESC, idx DESC LIMIT 1`).get(slot.local_date, slot.local_date, slot.idx) as { master_json: string } | undefined;
   const prevTemplate: string | null = prev ? JSON.parse(prev.master_json).variant?.template ?? null : null;
@@ -195,7 +238,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   if (music) await d.makeBed({ seed: variant.musicSeed, durationSec: 16, outWav: bedWav });
   const inputFor = (s: Script, v: Variant, tts: AssembleInput['tts']): AssembleInput => ({
     slotId: slot.id, brief, script: s, template: v.template, palette: v.palette, tts, voiceSrc: voiceWav, musicSrc: music ? bedWav : null,
-    musicGainDb: config.creative.music.gainDb, dataDir: path.resolve(env.dataDir()), ai: { visuals: false, voice: true, music: false },
+    musicGainDb: config.creative.music.gainDb, dataDir: path.resolve(env.dataDir()), ai: { visuals: !!clip, voice: true, music: false }, clip,
   });
   // Slows the voice a little at a time until the script fits; null when it never does.
   const fit = async (s: Script): Promise<AssembleInput | null> => {
@@ -253,10 +296,10 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   db.exec('BEGIN IMMEDIATE');
   try {
     const r = db.prepare(
-      `UPDATE slots SET product_handle = ?, hook_id = ?, tier = 't0', master_json = ?, status = 'ready', error = NULL, updated_at = ?,
-         cost_usd = (SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE slot_id = ?)
+      `UPDATE slots SET product_handle = ?, hook_id = ?, tier = ?, master_json = ?, status = 'ready', error = NULL, updated_at = ?,
+         cost_usd = (SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE slot_id = ?) + (SELECT COALESCE(SUM(quoted_usd), 0) FROM spend WHERE slot_id = ?)
        WHERE id = ? AND status = 'producing' AND claimed_at = ?`,
-    ).run(handle, hookId, master, token, slot.id, slot.id, token);
+    ).run(handle, hookId, clip ? tier : 't0', master, token, slot.id, slot.id, slot.id, token);
     if (r.changes !== 1) throw new ClaimLostError(`claim on ${slot.id} lost`);
     for (const platform of platforms) {
       const tmp = path.join(attemptDir, `${platform}.mp4`);
@@ -281,7 +324,7 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
   if (claim.changes !== 1) return;
   const fenced = (status: string, error: string | null, attempt = 0) =>
     db.prepare("UPDATE slots SET status = ?, error = ?, attempt = attempt + ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(status, error, attempt, ts, slotId, ts).changes === 1;
-  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ingestDeadlineMs: 5 * 60000, ...deps };
+  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ingestDeadlineMs: 5 * 60000, providers: clipProviders(), prepareImage: cropToJpeg, probeClip: probeVideo, ...deps };
   try {
     const slot = db.prepare('SELECT id, local_date, idx FROM slots WHERE id = ?').get(slotId) as Slot;
     await produce(db, config, slot, safeDir(env.outDir(), slot.local_date, slotId), ts, now, d);

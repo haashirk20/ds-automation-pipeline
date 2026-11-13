@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Audio, continueRender, delayRender, Img, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Audio, continueRender, delayRender, Img, OffthreadVideo, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
 import type { Edl, RenderProps } from '../src/contracts.ts';
 import antonUrl from '@fontsource/anton/files/anton-latin-400-normal.woff2';
 import interRegUrl from '@fontsource/inter/files/inter-latin-500-normal.woff2';
@@ -35,7 +35,7 @@ function loadFonts() {
 export type Beat = Edl['beats'][number];
 export type ShotT = Beat['shots'][number];
 export type Safe = RenderProps['safe'];
-export type ShotLike = { src: string; width: number; height: number; crop: ShotT['crop'] };
+export type ShotLike = { src: string; width: number; height: number; crop: ShotT['crop']; kind?: ShotT['kind'] };
 
 export const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 export const easeOut = (x: number) => 1 - (1 - clamp(x)) ** 3;
@@ -100,6 +100,9 @@ export function fitHeadline(text: string, width: number, charW: number, minPx: n
   return best;
 }
 
+// An AI clip: muted video, drawn like a photo.
+const ClipMedia: React.FC<{ src: string; style?: React.CSSProperties }> = ({ src, style }) => <OffthreadVideo src={src} muted style={style} />;
+
 // Shows the crop region of a shot so it fills the box: cover fit, nothing outside the crop, no stretch.
 export const ShotView: React.FC<{ shot: ShotLike; w: number; h: number; motion?: ShotT['motion']; p?: number; blur?: number; dim?: number; style?: React.CSSProperties }> = ({ shot, w, h, motion = 'still', p = 0, blur = 0, dim = 1, style }) => {
   const c = cropOf(shot);
@@ -110,9 +113,10 @@ export const ShotView: React.FC<{ shot: ShotLike; w: number; h: number; motion?:
   const pan = motion === 'pan-left' ? (0.5 - p) * 0.08 * w : motion === 'pan-right' ? (p - 0.5) * 0.08 * w : 0;
   const ox = (w - cw * scale) / 2 - c.x * shot.width * scale;
   const oy = (h - ch * scale) / 2 - c.y * shot.height * scale;
+  const Media = shot.kind === 'clip' ? ClipMedia : Img;
   return (
     <div style={{ width: w, height: h, overflow: 'hidden', position: 'relative', ...style }}>
-      <Img
+      <Media
         src={staticFile(shot.src)}
         style={{
           position: 'absolute',

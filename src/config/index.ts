@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import raw from '../../config/pipeline.config.ts';
 import { SafeZone } from '../contracts.ts';
@@ -38,11 +40,21 @@ const schema = z
     hooks: z.object({ noRepeatDays: z.number().int().min(0), poolFactor: z.number().min(1) }),
     render: z.object({ produceTimeoutMinutes: z.number().positive(), maxAttempts: z.number().int().min(1) }),
     disclosure: z.object({ tier0: z.boolean() }),
+    tiers: z.object({
+      mix: z.object({ t0: z.number().min(0), t1: z.number().min(0), t2: z.number().min(0) }),
+      capsUsd: z.object({ t1: z.number().min(0), t2: z.number().min(0) }),
+      clipSeconds: z.number().positive(),
+      maxJobsPerSlot: z.number().int().min(1),
+      t1: z.object({ provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive() }),
+      t2: z.object({ provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive() }),
+    }),
     watchdogMinutes: z.number().positive(),
   })
   .superRefine((c, ctx) => {
     if (c.publish.timeoutMinutes >= c.publish.uploadTimeoutMinutes) ctx.addIssue({ code: 'custom', path: ['publish', 'timeoutMinutes'], message: 'must be less than uploadTimeoutMinutes' });
     const counts = new Set(Object.values(c.platforms).filter((p) => p.enabled).map((p) => p.slots.length));
+    const m = c.tiers.mix;
+    if (Math.abs(m.t0 + m.t1 + m.t2 - 1) > 1e-6) ctx.addIssue({ code: 'custom', path: ['tiers', 'mix'], message: 'shares must sum to 1' });
     if (counts.size > 1) ctx.addIssue({ code: 'custom', path: ['platforms'], message: 'enabled platforms must have the same number of slots' });
   });
 
@@ -57,8 +69,10 @@ export function parseConfig(input: unknown): Config {
   throw new Error('invalid config:\n' + r.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n'));
 }
 
-export function loadConfig(): Config {
-  return parseConfig(raw);
+// PIPELINE_CONFIG names a file to load in place of config/pipeline.config.ts; it is validated the same way.
+export async function loadConfig(): Promise<Config> {
+  const file = process.env.PIPELINE_CONFIG;
+  return parseConfig(file ? (await import(pathToFileURL(path.resolve(file)).href)).default : raw);
 }
 
 // Read lazily so tests can change process.env. Never log these values.
@@ -73,5 +87,6 @@ export const env = {
   shop: () => process.env.SHOPIFY_SHOP || undefined, // e.g. my-store.myshopify.com
   shopifyClientId: () => process.env.SHOPIFY_CLIENT_ID || undefined,
   shopifyClientSecret: () => process.env.SHOPIFY_CLIENT_SECRET || undefined,
+  clipStubFile: () => process.env.CLIP_STUB_FILE || undefined, // enables the 'fake' clip provider
   llmStub: () => process.env.LLM_STUB === '1', // model calls return fixtures
 };

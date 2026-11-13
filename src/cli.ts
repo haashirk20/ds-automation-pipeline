@@ -12,7 +12,7 @@ import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
 const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples | doctor | health';
-const ENV_NAMES = ['DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL'];
+const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL'];
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -41,7 +41,7 @@ async function main(): Promise<number> {
   }
   if (cmd === 'doctor') return doctor(clock());
 
-  const config = loadConfig();
+  const config = await loadConfig();
   if (cmd === 'samples') {
     await runSamples(config, clock());
     return 0;
@@ -69,10 +69,10 @@ async function main(): Promise<number> {
   return 0;
 }
 
-function doctor(now: Date): number {
+async function doctor(now: Date): Promise<number> {
   let bad = false;
   try {
-    loadConfig();
+    await loadConfig();
     console.log('config: ok');
   } catch (e) {
     bad = true;

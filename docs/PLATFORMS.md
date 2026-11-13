@@ -71,6 +71,29 @@ Selection criteria at integration time: public posting confirmed by a real post,
 passes `is_aigc` and the brand toggle through, accepts a file upload, has a status endpoint, and
 accepts an idempotency key or a reference we can search for afterwards.
 
+**Bridge API (Zernio), read from its docs on 2026-11-13, untested.** Base
+`https://zernio.com/api/v1`, header `Authorization: Bearer <key>`.
+1. `GET /accounts` lists connected accounts. A post refers to one by `accountId`.
+2. `POST /media/presign` with `filename`, `contentType` and `size` returns `uploadUrl` and
+   `publicUrl`. The file is sent with `PUT` to `uploadUrl`, without the Authorization header. So
+   the bridge route needs no public host on our side either.
+3. `POST /posts` with `content`, `mediaItems: [{type: "video", url}]`,
+   `platforms: [{platform: "tiktok", accountId}]`, `publishNow: true` and `tiktokSettings`:
+   `privacy_level`, `allow_comment`, `allow_duet`, `allow_stitch`, `content_preview_confirmed`,
+   `express_consent_given`, `video_made_with_ai` (the AI label), `commercialContentType`
+   (`"brand_organic"` for our own brand) and `draft` (sends it to the TikTok inbox: the private test).
+4. `GET /posts/{id}` returns the status: `publishing`, `published`, `partial`, `failed`. The TikTok
+   URL (`platformPostUrl`) appears some minutes after publishing.
+5. An `Idempotency-Key` header makes a repeated create return the first post for 24 hours. `tags`
+   set on create can be filtered with `GET /posts?tags=`, which covers a retry after that.
+[Posts](https://docs.zernio.com/platforms/tiktok/posts),
+[idempotency](https://docs.zernio.com/guides/idempotency),
+[media](https://docs.zernio.com/guides/media-uploads)
+
+The same API publishes Instagram Reels, Facebook Page Reels and YouTube Shorts, so any platform
+can be routed through the bridge by config. Zernio's docs do not say its TikTok app is audited;
+Upload-Post's say "Upload-Post runs its own approved TikTok app". One real post settles it.
+
 **Limits.** 6 requests per minute per user token. About 15 posts per creator per day, shared across
 all API clients including bridges. Video: MP4/WebM/MOV, H.264/H.265, 23–60 fps, 360–4096 px per
 side, up to 4 GB and 10 minutes.

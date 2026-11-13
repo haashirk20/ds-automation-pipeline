@@ -21,6 +21,7 @@ export type AssembleInput = {
   musicGainDb: number;
   dataDir: string;
   ai: Edl['ai'];
+  clip?: { src: string; width: number; height: number } | null; // replaces the hook beat's first shot
 };
 
 const words = (s: string) => s.split(/\s+/).filter(Boolean);
@@ -109,6 +110,10 @@ export function assembleEdl(input: AssembleInput): Edl {
       startMs: starts[bi],
       endMs: ends[bi],
       shots: beat.shotIds.map((id, i) => {
+        if (bi === 0 && i === 0 && input.clip) {
+          const c = input.clip;
+          return { src: c.src, width: c.width, height: c.height, crop: null, kind: 'clip' as const, startMs: starts[bi], endMs: n === 1 ? ends[bi] : starts[bi] + Math.floor(span / n), motion: 'still' as const };
+        }
         const s = shotOf(id);
         return {
           src: path.resolve(input.dataDir, s.file),

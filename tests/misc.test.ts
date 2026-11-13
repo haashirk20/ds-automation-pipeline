@@ -60,7 +60,7 @@ test('config module does not load .env (tests never read a developer .env)', () 
   const dir = mkdtempSync(join(tmpdir(), 'envtest-'));
   writeFileSync(join(dir, '.env'), 'DRY_RUN=1\nZZ_PROBE=loaded\n');
   const mod = new URL('../src/config/index.ts', import.meta.url).href;
-  const out = execFileSync(process.execPath, ['--input-type=module', '-e', `import('${mod}').then(m => { m.loadConfig(); console.log(String(process.env.ZZ_PROBE), String(process.env.DRY_RUN)); })`], { cwd: dir, env: { PATH: process.env.PATH } }).toString().trim();
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', `import('${mod}').then(async m => { await m.loadConfig(); console.log(String(process.env.ZZ_PROBE), String(process.env.DRY_RUN)); })`], { cwd: dir, env: { PATH: process.env.PATH } }).toString().trim();
   assert.equal(out, 'undefined undefined');
 });
 
