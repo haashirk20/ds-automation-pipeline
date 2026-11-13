@@ -5,11 +5,22 @@ import { env, type Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
+import { NeedsSignInError } from './higgsfield-auth.ts';
+import { higgsfieldProvider } from './higgsfield.ts';
 
+export type ClipJob = {
+  images: string[]; // local reference images, the product first
+  prompt: string; // the whole video as one prompt
+  shots: { prompt: string; seconds: number }[]; // the same story shot by shot, for models that take shots; may be empty
+  seconds: number;
+  signal: AbortSignal;
+};
 export type ClipProvider = {
   name: string;
   configured(): boolean;
-  submit(job: { imagePath: string; prompt: string; seconds: number; signal: AbortSignal }): Promise<{ jobId: string }>;
+  // Throws when a job cannot or must not be started now. Runs before any ledger row is written.
+  check?(job: ClipJob): Promise<void>;
+  submit(job: ClipJob): Promise<{ jobId: string }>;
   // Waits for the job and writes the video to outFile.
   fetch(jobId: string, outFile: string, signal: AbortSignal): Promise<void>;
 };
@@ -27,9 +38,9 @@ const fake: ClipProvider = {
   fetch: async (_id, outFile) => copyFileSync(env.clipStubFile()!, outFile),
 };
 
-// 'fal' and 'higgsfield' are not implemented yet, so by default every slot is tier 0.
-export function clipProviders(): Record<string, ClipProvider> {
-  return env.clipStubFile() ? { fake } : {};
+// 'fal' is not implemented yet. 'higgsfield' counts as configured once the owner has signed in (`auth higgsfield`).
+export function clipProviders(db: Db, config: Config, now: () => Date): Record<string, ClipProvider> {
+  return { higgsfield: higgsfieldProvider(db, config, { now }), ...(env.clipStubFile() ? { fake } : {}) };
 }
 
 // All rows of the tier created this UTC month, whatever their state, at the quoted price.
@@ -69,7 +80,7 @@ export const rejectClip = (db: Db, slotId: string, now: Date, why: string) =>
 // Gets one clip for the slot into outFile. Never submits a second job for one already submitted.
 export async function generateClip(
   db: Db, config: Config, providers: Record<string, ClipProvider>,
-  job: { slotId: string; tier: PaidTier; imagePath: string; prompt: string; outFile: string; signal: AbortSignal }, now: Date,
+  job: { slotId: string; tier: PaidTier; images: string[]; prompt: string; shots: ClipJob['shots']; outFile: string; signal: AbortSignal }, now: Date,
 ): Promise<boolean> {
   const t = config.tiers[job.tier];
   const rows = db.prepare('SELECT id, state, job_id, file_path, provider FROM spend WHERE slot_id = ? ORDER BY id').all(job.slotId) as Row[];
@@ -81,6 +92,7 @@ export async function generateClip(
     return true;
   };
   const fail = (id: number, e: unknown) => {
+    if (job.signal.aborted) throw e; // cancelled: leave the row, so a submitted job is resumed next time
     try { unlinkSync(tmp); } catch { /* nothing was written */ }
     setState(db, id, 'failed', now, { error: scrub(String(e)).slice(0, 300) });
     log.warn('clip job failed', { slot: job.slotId });
@@ -114,10 +126,22 @@ export async function generateClip(
   const p = providers[t.provider];
   if (!p?.configured()) return false;
   if (monthSpendUsd(db, job.tier, now) + t.usdPerClip > config.tiers.capsUsd[job.tier]) return false;
+  const cj: ClipJob = { images: job.images, prompt: job.prompt, shots: job.shots, seconds: config.tiers.clipSeconds, signal: job.signal };
+  try {
+    await p.check?.(cj);
+  } catch (e) {
+    const kind = e instanceof NeedsSignInError ? 'clip_sign_in' : 'clip_refused';
+    const day = now.toISOString().slice(0, 10);
+    log.warn('clip job not started', { slot: job.slotId, kind, error: scrub(String(e)) });
+    if (!db.prepare('SELECT 1 FROM events WHERE kind = ? AND key = ?').get(kind, day)) {
+      await alert(db, kind, day, kind === 'clip_sign_in' ? `${p.name} needs a sign-in: run "node src/cli.ts auth ${p.name}". Slots use tier 0 until then` : `${p.name} clip not started (${scrub(String(e)).slice(0, 200)}): slots use tier 0`, now);
+    }
+    return false;
+  }
   const id = Number(db.prepare("INSERT INTO spend (slot_id, tier, provider, model, state, quoted_usd, created_at, updated_at) VALUES (?,?,?,?, 'reserved', ?,?,?)")
     .run(job.slotId, job.tier, p.name, t.model, t.usdPerClip, now.toISOString(), now.toISOString()).lastInsertRowid);
   try {
-    const { jobId } = await p.submit({ imagePath: job.imagePath, prompt: job.prompt, seconds: config.tiers.clipSeconds, signal: job.signal });
+    const { jobId } = await p.submit(cj);
     setState(db, id, 'submitted', now, { job_id: jobId }); // before waiting
     await p.fetch(jobId, tmp, job.signal);
     return finish(id);

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../src/db/index.ts';
-import { parseConfig } from '../src/config/index.ts';
+import { env, normalizeShop, parseConfig } from '../src/config/index.ts';
 import raw from '../config/pipeline.config.ts';
 import { Brief } from '../src/contracts.ts';
 import { buildBrief, descriptionLines, normalize, priceText } from '../src/shopify/brief.ts';
@@ -15,7 +15,7 @@ const config = parseConfig(raw);
 const fx = (n: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures/shopify', n), 'utf8'));
 const metaJson = fx('meta.json');
 const productsJson = fx('products.json');
-const SHOP = 'shop.example.com';
+const SHOP = 'shop-example.myshopify.com';
 const NOW = new Date('2026-11-12T12:00:00Z');
 const meta: ShopMeta = { name: metaJson.name, currency: 'CAD', domain: metaJson.domain, ships_to_countries: ['CA'] };
 
@@ -205,4 +205,92 @@ test('limits: 20 products, 20 photos each, 40 description lines of 300 character
   assert.equal(briefs[0].shots.length, 20);
   assert.equal(briefs[0].facts.filter((f) => f.id.startsWith('f-desc-')).length, 40);
   assert.equal(calls.filter((u) => u.startsWith('https://cdn.')).length, 20 * 20);
+});
+
+test('SHOPIFY_SHOP: full URL, bare host and bare label normalize; hostile values are rejected', () => {
+  for (const v of ['https://Name.myshopify.com/', 'name.myshopify.com', 'http://name.myshopify.com/admin?x=1#y', 'name']) assert.equal(normalizeShop(v), 'name.myshopify.com', v);
+  assert.equal(normalizeShop(''), undefined);
+  for (const v of ['evil.com', 'https://evil.com/.myshopify.com', 'name.myshopify.com@evil.com', 'evil.com#.myshopify.com', 'a.myshopify.com:8080', 'x.myshopify.com.evil.com', '-a.myshopify.com', 'a b.myshopify.com']) {
+    assert.throws(() => normalizeShop(v), /myshopify\.com host/, v);
+  }
+  process.env.SHOPIFY_SHOP = 'https://name.myshopify.com/';
+  assert.equal(env.shop(), 'name.myshopify.com');
+});
+
+const SECRET = 'shpss_client_secret_value';
+const TOKEN = 'shpat_access_token_value';
+const gqlProduct = {
+  title: 'Lamp', handle: 'lamp', descriptionHtml: '<p>A lamp</p>', updatedAt: '2026-11-01T00:00:00Z', vendor: 'V', productType: 'Lighting', tags: ['a'],
+  options: [{ name: 'Color', values: ['Red'] }],
+  variants: { nodes: [{ title: 'Red', price: '10.00', compareAtPrice: null, availableForSale: true }] },
+  images: { nodes: [{ url: 'https://cdn.shopify.com/s/files/a.jpg', width: 100, height: 200 }, { url: 'https://cdn.shopify.com/s/files/b.jpg', width: null, height: null }] },
+};
+
+function adminSetup(admin: (u: string, init: RequestInit) => Response) {
+  const s = setup();
+  process.env.SHOPIFY_CLIENT_ID = 'client-id-1';
+  process.env.SHOPIFY_CLIENT_SECRET = SECRET;
+  const reqs: { url: string; init: RequestInit }[] = [];
+  const pub = s.deps.fetch;
+  s.deps.fetch = (async (url: string, init: RequestInit = {}) => {
+    if (String(url).includes('/admin/')) { reqs.push({ url: String(url), init }); return admin(String(url), init); }
+    return pub(url, init);
+  }) as typeof fetch;
+  return { ...s, reqs };
+}
+const adminOk = (u: string) => u.endsWith('/oauth/access_token')
+  ? Response.json({ access_token: TOKEN, expires_in: 86399 })
+  : Response.json({ data: { shop: { name: 'Merry Marts', currencyCode: 'CAD', primaryDomain: { host: 'x.myshopify.com' }, shipsToCountries: ['CA'] }, products: { nodes: [gqlProduct] } } });
+
+async function captureStderr<T>(fn: () => Promise<T>): Promise<{ out: T; err: string }> {
+  const orig = process.stderr.write;
+  let err = '';
+  process.stderr.write = ((c: string | Uint8Array) => { err += String(c); return true; }) as typeof process.stderr.write;
+  try { return { out: await fn(), err }; } finally { process.stderr.write = orig; }
+}
+
+test('admin mode: token request, GraphQL mapping to RawProduct, no secret in logs', async () => {
+  const { db, deps, reqs } = adminSetup(adminOk);
+  const { fetchShopAdmin } = await import('../src/shopify/admin.ts');
+  const r = await fetchShopAdmin(SHOP, 'client-id-1', SECRET, deps.fetch);
+  assert.equal(reqs[0].url, `https://${SHOP}/admin/oauth/access_token`);
+  assert.equal(reqs[0].init.method, 'POST');
+  const form = new URLSearchParams(String(reqs[0].init.body));
+  assert.deepEqual([...form.keys()].sort(), ['client_id', 'client_secret', 'grant_type']);
+  assert.equal(form.get('grant_type'), 'client_credentials');
+  assert.equal(reqs[1].url, `https://${SHOP}/admin/api/2026-10/graphql.json`);
+  assert.equal((reqs[1].init.headers as Record<string, string>)['x-shopify-access-token'], TOKEN);
+  assert.match(String(reqs[1].init.body), /status:active/);
+  assert.deepEqual(r.meta, { name: 'Merry Marts', currency: 'CAD', domain: 'x.myshopify.com', ships_to_countries: ['CA'] });
+  assert.deepEqual(r.products[0], {
+    title: 'Lamp', handle: 'lamp', body_html: '<p>A lamp</p>', updated_at: '2026-11-01T00:00:00Z', vendor: 'V', product_type: 'Lighting', tags: ['a'],
+    options: [{ name: 'Color', values: ['Red'] }],
+    variants: [{ title: 'Red', price: '10.00', compare_at_price: null, available: true }],
+    images: [{ src: 'https://cdn.shopify.com/s/files/a.jpg', width: 100, height: 200 }],
+  });
+  const { out, err } = await captureStderr(() => ingest(db, config, NOW, deps));
+  assert.equal(out.length, 1);
+  assert.ok(!err.includes(SECRET) && !err.includes(TOKEN));
+});
+
+test('admin failure falls back to the public feed with a warning; secret and token never leak', async () => {
+  for (const bad of [
+    () => new Response(`denied ${SECRET} ${TOKEN}`, { status: 401 }),
+    (u: string) => (u.endsWith('/oauth/access_token') ? Response.json({ access_token: TOKEN }) : Response.json({ errors: [{ message: `no read_products ${TOKEN}` }] })),
+  ]) {
+    const { db, deps, calls } = adminSetup(bad);
+    const { out, err } = await captureStderr(() => ingest(db, config, NOW, deps));
+    assert.ok(out.length > 0);
+    assert.ok(calls.some((u) => u.endsWith('/products.json') || u.includes('/products.json')));
+    assert.match(err, /admin api failed, using the public feed/);
+    assert.ok(!err.includes(SECRET) && !err.includes(TOKEN));
+  }
+});
+
+test('without client credentials ingest never calls the admin api', async () => {
+  delete process.env.SHOPIFY_CLIENT_ID;
+  delete process.env.SHOPIFY_CLIENT_SECRET;
+  const { db, deps, calls } = setup();
+  await ingest(db, config, NOW, deps);
+  assert.ok(!calls.some((u) => u.includes('/admin/')));
 });

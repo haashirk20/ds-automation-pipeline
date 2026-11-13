@@ -4,15 +4,17 @@ import { env, loadConfig } from './config/index.ts';
 import { hasAlertChannel } from './ops/alert.ts';
 import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
-import { publishers } from './publish/registry.ts';
+import { findAccount, listAccounts } from './publish/bridge.ts';
+import { makePublishers } from './publish/registry.ts';
+import { authorize } from './router/higgsfield-auth.ts';
 import { runSamples } from './render/samples.ts';
 import { planDay } from './scheduler/planner.ts';
 import { runIngest } from './shopify/index.ts';
 import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples | doctor | health';
-const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL'];
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples | doctor | health | auth higgsfield';
+const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY'];
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -20,7 +22,7 @@ async function main(): Promise<number> {
     options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' } },
   });
   const cmd = positionals[0];
-  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health'].includes(cmd)) {
+  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'auth'].includes(cmd)) {
     console.error(USAGE);
     return 2;
   }
@@ -40,6 +42,14 @@ async function main(): Promise<number> {
     return hb && clock().getTime() - Date.parse(hb) < 300_000 ? 0 : 1;
   }
   if (cmd === 'doctor') return doctor(clock());
+  if (cmd === 'auth') {
+    if (positionals[1] !== 'higgsfield') {
+      console.error(USAGE);
+      return 2;
+    }
+    await authorize(openDb(env.dataDir()), clock());
+    return 0;
+  }
 
   const config = await loadConfig();
   if (cmd === 'samples') {
@@ -47,6 +57,7 @@ async function main(): Promise<number> {
     return 0;
   }
   const db = openDb(env.dataDir());
+  const publishers = makePublishers(config, { now: clock });
   const deps = { db, config, publishers, producer: makeProducer(childSpawn(config)), wait: !!values.once };
   if (cmd === 'run') await run(deps, clock, !!values.once);
   else if (cmd === 'produce') {
@@ -71,8 +82,9 @@ async function main(): Promise<number> {
 
 async function doctor(now: Date): Promise<number> {
   let bad = false;
+  let config: Awaited<ReturnType<typeof loadConfig>> | undefined;
   try {
-    await loadConfig();
+    config = await loadConfig();
     console.log('config: ok');
   } catch (e) {
     bad = true;
@@ -91,6 +103,20 @@ async function doctor(now: Date): Promise<number> {
   if (!env.dryRun() && !hasAlertChannel()) {
     bad = true;
     console.log('alerts: NO CHANNEL configured and DRY_RUN is not 1');
+  }
+  const key = env.bridgeKey();
+  if (key && config) {
+    try {
+      const accounts = await listAccounts(fetch, key, AbortSignal.timeout(10_000));
+      for (const [name, p] of Object.entries(config.platforms).filter(([, p]) => p.enabled)) {
+        const a = findAccount(accounts, name, p.handle);
+        if (!a) bad ||= !env.dryRun();
+        console.log(a ? `bridge ${name}: ok (${a.username ?? a.displayName})` : `bridge ${name}: NO ACCOUNT for handle ${p.handle}`);
+      }
+    } catch (e) {
+      bad ||= !env.dryRun();
+      console.log('bridge: accounts call failed: ' + (e as Error).message);
+    }
   }
   for (const n of ENV_NAMES) console.log(`env ${n}: ${process.env[n] ? 'set' : 'unset'}`);
   return bad ? 1 : 0;

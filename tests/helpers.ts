@@ -8,7 +8,8 @@ import { planDay } from '../src/scheduler/planner.ts';
 import { makeProducer } from '../src/scheduler/loop.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
-export const config = parseConfig(raw);
+// Facebook and Instagram are off in the shipped config; the suite exercises all four.
+export const config = parseConfig({ ...raw, platforms: { ...raw.platforms, facebook: { ...raw.platforms.facebook, enabled: true }, instagram: { ...raw.platforms.instagram, enabled: true } } });
 
 // Fresh temp dirs and DB per call; no network alerts.
 export function fresh() {

@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { log } from '../ops/log.ts';
 
-// D-12 adds Admin API mode when credentials arrive; only the public storefront endpoints exist now.
+// Public storefront endpoints. Admin API mode is in admin.ts (D-12).
 export type Fetch = typeof fetch;
 export type Sleep = (ms: number) => Promise<void>;
+
+export const MAX_PRODUCTS = 20;
+export const MAX_PHOTOS = 20;
 
 const MAX_TRIES = 4;
 const BACKOFF_MS = [5_000, 15_000, 45_000];
@@ -54,7 +57,7 @@ const RawProduct = z.object({
   images: z.array(z.object({ src: z.string(), width: z.number().int().positive(), height: z.number().int().positive() })).default([]),
 });
 export type RawProduct = z.infer<typeof RawProduct>;
-const Products = z.object({ products: z.array(RawProduct) });
+export const Products = z.object({ products: z.array(RawProduct) });
 
 export async function fetchShop(shop: string, f: Fetch, sleep: Sleep): Promise<{ meta: ShopMeta; products: RawProduct[] }> {
   const meta = await getJson(`https://${shop}/meta.json`, Meta, f, sleep);

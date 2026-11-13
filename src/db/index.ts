@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type Db = DatabaseSync;
@@ -9,6 +9,7 @@ const dir = join(import.meta.dirname, 'migrations');
 export function openDb(dataDir: string): Db {
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, 'pipeline.db'));
+  chmodSync(join(dataDir, 'pipeline.db'), 0o600); // it holds OAuth tokens; -wal and -shm inherit this mode
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   migrate(db);
   return db;

@@ -10,6 +10,7 @@ import { setLlmClient } from '../src/llm/client.ts';
 import { produceSlot, type ProduceDeps } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { chooseTier, clipProviders, generateClip, monthSpendUsd, type ClipProvider } from '../src/router/index.ts';
+import { NeedsSignInError } from '../src/router/higgsfield-auth.ts';
 import { config, fresh } from './helpers.ts';
 
 const NOW = new Date('2026-11-12T02:30:00Z');
@@ -37,7 +38,7 @@ function mkProvider(opts: { configured?: boolean; failSubmit?: boolean; failFetc
   };
   return { p, calls, reg: { fal: p } };
 }
-const job = (db: ReturnType<typeof fresh>, slotId = 's#1') => ({ slotId, tier: 't1' as const, imagePath: '/i.jpg', prompt: 'p', outFile: join(process.env.DATA_DIR!, 'clips', 'c.mp4'), signal: new AbortController().signal });
+const job = (db: ReturnType<typeof fresh>, slotId = 's#1') => ({ slotId, tier: 't1' as const, images: ['/i.jpg'], prompt: 'p', shots: [], outFile: join(process.env.DATA_DIR!, 'clips', 'c.mp4'), signal: new AbortController().signal });
 const rows = (db: ReturnType<typeof fresh>) => db.prepare('SELECT * FROM spend ORDER BY id').all() as any[];
 
 test('chooseTier: stable per slot, follows the mix', async () => {
@@ -59,7 +60,8 @@ test('chooseTier: missing or unconfigured provider gives t0', async () => {
   assert.equal(await chooseTier(db, T1, {}, 'a#1', NOW), 't0');
   assert.equal(await chooseTier(db, T1, mkProvider({ configured: false }).reg, 'a#1', NOW), 't0');
   assert.equal(await chooseTier(db, T1, mkProvider().reg, 'a#1', NOW), 't1');
-  assert.deepEqual(clipProviders(), {}); // 'fake' is not offered without CLIP_STUB_FILE
+  assert.deepEqual(Object.keys(clipProviders(db, T1, () => NOW)), ['higgsfield']); // 'fake' is not offered without CLIP_STUB_FILE
+  assert.equal(clipProviders(db, T1, () => NOW).higgsfield.configured(), false); // not signed in
 });
 
 test('cap blocks the tier, alerts once per month, failed jobs count', async () => {
@@ -200,4 +202,33 @@ test('produceSlot falls back to tier 0 when the provider fails or the clip is to
     assert.equal(rows(db)[0].state, state, name);
     assert.ok(s.cost_usd >= 0.17, 'the failed job is still billed to the slot');
   }
+});
+
+test('generateClip: a failing check writes no ledger row, returns false, alerts once per kind per day', async () => {
+  const db = fresh();
+  const { p, calls, reg } = mkProvider();
+  p.check = async () => { throw new Error('quote 99 is above maxCredits 40'); };
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), false);
+  assert.equal(await generateClip(db, T1, reg, job(db, 's#2'), NOW), false);
+  assert.equal(rows(db).length, 0);
+  assert.equal(calls.submit, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'clip_refused'").get() as any).n, 1);
+  p.check = async () => { throw new NeedsSignInError('x'); };
+  await generateClip(db, T1, reg, job(db), NOW);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'clip_sign_in'").get() as any).n, 1);
+});
+
+test('generateClip: abort during fetch leaves the row submitted; the next call resumes without a new submit', async () => {
+  const db = fresh();
+  const { p, calls, reg } = mkProvider();
+  const ac = new AbortController();
+  const realFetch = p.fetch;
+  p.fetch = async (id, out, signal) => { ac.abort(); throw new Error('aborted'); };
+  await assert.rejects(generateClip(db, T1, reg, { ...job(db), signal: ac.signal }, NOW), /aborted/);
+  assert.equal(rows(db)[0].state, 'submitted');
+  p.fetch = realFetch;
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), true);
+  assert.equal(calls.submit, 1);
+  assert.equal(rows(db).length, 1);
+  assert.equal(rows(db)[0].state, 'succeeded');
 });

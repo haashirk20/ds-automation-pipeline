@@ -8,11 +8,10 @@ import { env, type Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { log } from '../ops/log.ts';
 import { buildBrief, normalize, type Product } from './brief.ts';
-import { defaultSleep, fetchShop, getWithRetry, type Fetch, type Sleep } from './fetch.ts';
+import { fetchShopAdmin } from './admin.ts';
+import { MAX_PHOTOS, MAX_PRODUCTS, defaultSleep, fetchShop, getWithRetry, type Fetch, type Sleep } from './fetch.ts';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-export const MAX_PRODUCTS = 20;
-export const MAX_PHOTOS = 20;
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 const SAFE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const DEFAULT_TAGS = join(import.meta.dirname, '../../config/photo-tags.json');
@@ -62,7 +61,17 @@ async function downloadImages(p: Product, dataDir: string, deps: IngestDeps): Pr
 export async function ingest(db: Db, config: Config, now: Date, deps: IngestDeps): Promise<Brief[]> {
   const shop = env.shop();
   if (!shop) throw new Error('ingest: SHOPIFY_SHOP is not set (e.g. my-store.myshopify.com)');
-  const { meta, products } = await fetchShop(shop, deps.fetch, deps.sleep);
+  const id = env.shopifyClientId();
+  const secret = env.shopifyClientSecret();
+  let shopData: Awaited<ReturnType<typeof fetchShop>> | undefined;
+  if (id && secret) {
+    try {
+      shopData = await fetchShopAdmin(shop, id, secret, deps.fetch);
+    } catch (e) {
+      log.warn('ingest: admin api failed, using the public feed', { error: (e as Error).message });
+    }
+  }
+  const { meta, products } = shopData ?? (await fetchShop(shop, deps.fetch, deps.sleep));
   const tagsText = existsSync(deps.tagsPath) ? readFileSync(deps.tagsPath, 'utf8') : null;
   const briefs: Brief[] = [];
   if (products.length > MAX_PRODUCTS) log.warn('ingest: products dropped', { kept: MAX_PRODUCTS, dropped: products.length - MAX_PRODUCTS });

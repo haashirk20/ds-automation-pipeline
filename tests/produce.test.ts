@@ -13,7 +13,8 @@ import { checkScript, judgeClaims } from '../src/creative/claims.ts';
 import { copyProblems, fallbackCopy } from '../src/creative/copy.ts';
 import { publishDue } from '../src/publish/index.ts';
 import { AT_SLOT1, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';
-import { publishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/registry.ts';
+const publishers = makePublishers(config, { now: () => new Date() });
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
 const brief = Brief.parse(samples.brief);

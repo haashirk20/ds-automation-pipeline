@@ -217,7 +217,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
     const out = path.join(path.resolve(env.dataDir()), 'clips', slot.id.replace('#', '-') + '.mp4');
     try {
       await d.prepareImage(path.resolve(env.dataDir(), shot.file), shot.crop, jpg);
-      const ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, imagePath: jpg, prompt: MOTION_PROMPT, outFile: out, signal: d.signal ?? new AbortController().signal }, now);
+      const ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, images: [jpg], prompt: MOTION_PROMPT, shots: [], outFile: out, signal: d.signal ?? new AbortController().signal }, now);
       const info = ok ? await d.probeClip(out) : null;
       if (ok && info && info.seconds >= 2 && Math.min(info.width, info.height) >= 480) clip = { src: out, width: info.width, height: info.height };
       else if (ok) rejectClip(db, slot.id, now, 'clip failed the size or length check');
@@ -324,7 +324,7 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
   if (claim.changes !== 1) return;
   const fenced = (status: string, error: string | null, attempt = 0) =>
     db.prepare("UPDATE slots SET status = ?, error = ?, attempt = attempt + ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(status, error, attempt, ts, slotId, ts).changes === 1;
-  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ingestDeadlineMs: 5 * 60000, providers: clipProviders(), prepareImage: cropToJpeg, probeClip: probeVideo, ...deps };
+  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ingestDeadlineMs: 5 * 60000, providers: clipProviders(db, config, () => now), prepareImage: cropToJpeg, probeClip: probeVideo, ...deps };
   try {
     const slot = db.prepare('SELECT id, local_date, idx FROM slots WHERE id = ?').get(slotId) as Slot;
     await produce(db, config, slot, safeDir(env.outDir(), slot.local_date, slotId), ts, now, d);

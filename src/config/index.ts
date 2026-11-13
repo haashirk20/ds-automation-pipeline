@@ -5,7 +5,12 @@ import raw from '../../config/pipeline.config.ts';
 import { SafeZone } from '../contracts.ts';
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM');
-const base = { enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1), cta: z.string().min(1), safe: SafeZone };
+const base = { handle: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1), cta: z.string().min(1), safe: SafeZone };
+
+const tierSchema = z.object({
+  provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive(),
+  params: z.record(z.string(), z.unknown()).default({}), maxCredits: z.number().positive().optional(), keepCredits: z.number().min(0).optional(),
+});
 
 const schema = z
   .object({
@@ -22,7 +27,7 @@ const schema = z
       youtube: z.object(base),
       facebook: z.object(base),
       instagram: z.object(base),
-      tiktok: z.object({ ...base, mode: z.enum(['bridge', 'direct', 'inbox']) }),
+      tiktok: z.object(base),
     }),
     publish: z.object({
       maxLatenessMinutes: z.number().positive(),
@@ -45,8 +50,8 @@ const schema = z
       capsUsd: z.object({ t1: z.number().min(0), t2: z.number().min(0) }),
       clipSeconds: z.number().positive(),
       maxJobsPerSlot: z.number().int().min(1),
-      t1: z.object({ provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive() }),
-      t2: z.object({ provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive() }),
+      t1: tierSchema,
+      t2: tierSchema,
     }),
     watchdogMinutes: z.number().positive(),
   })
@@ -75,6 +80,17 @@ export async function loadConfig(): Promise<Config> {
   return parseConfig(file ? (await import(pathToFileURL(path.resolve(file)).href)).default : raw);
 }
 
+// Accepts 'my-store', 'my-store.myshopify.com' or 'https://my-store.myshopify.com/'. The result goes
+// into request URLs, so anything that is not a plain myshopify.com host is rejected.
+export function normalizeShop(input: string | undefined): string | undefined {
+  let h = input?.trim().toLowerCase();
+  if (!h) return undefined;
+  h = h.replace(/^https?:\/\//, '').split(/[/?#]/)[0];
+  if (!h.includes('.')) h += '.myshopify.com';
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(h)) throw new Error('SHOPIFY_SHOP must be a myshopify.com host such as my-store.myshopify.com');
+  return h;
+}
+
 // Read lazily so tests can change process.env. Never log these values.
 export const env = {
   dryRun: () => process.env.DRY_RUN === '1',
@@ -84,7 +100,8 @@ export const env = {
   telegramToken: () => process.env.ALERT_TELEGRAM_BOT_TOKEN || undefined,
   telegramChat: () => process.env.ALERT_TELEGRAM_CHAT_ID || undefined,
   healthcheckUrl: () => process.env.HEALTHCHECK_URL || undefined,
-  shop: () => process.env.SHOPIFY_SHOP || undefined, // e.g. my-store.myshopify.com
+  shop: () => normalizeShop(process.env.SHOPIFY_SHOP), // bare host, e.g. my-store.myshopify.com
+  bridgeKey: () => process.env.BRIDGE_API_KEY || undefined,
   shopifyClientId: () => process.env.SHOPIFY_CLIENT_ID || undefined,
   shopifyClientSecret: () => process.env.SHOPIFY_CLIENT_SECRET || undefined,
   clipStubFile: () => process.env.CLIP_STUB_FILE || undefined, // enables the 'fake' clip provider

@@ -5,8 +5,11 @@ export default {
   // Produce tomorrow's slots at this local time, the evening before.
   produceAt: '21:00',
   platforms: {
-    // visibility: 'public' | 'private'. Private means YouTube unlisted, TikTok SELF_ONLY,
-    // Facebook app in Development mode, Instagram uploaded and processed but not published.
+    // Every platform publishes through the hosted bridge (Zernio). handle: the account name at the
+    // bridge (Facebook: the Page name). Facebook and Instagram are off until their accounts are
+    // connected at the bridge.
+    // visibility: 'public' | 'private'. Private means YouTube private, TikTok SELF_ONLY, Facebook
+    // a draft in Publishing Tools. Instagram has no private mode: private there is refused.
     // The owner switches to 'public' when ready.
     // Slot index i on every enabled platform publishes the same master edit,
     // so every enabled platform needs the same NUMBER of slots.
@@ -14,12 +17,11 @@ export default {
     // safe: pixels kept clear of text on each edge of the 1080x1920 frame. Estimates for organic
     // posts (the published figures are for paid ads and reserve more). Check them against a real
     // post on each platform and adjust.
-    youtube: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 200, bottom: 480, left: 60, right: 160 } },
-    facebook: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
+    youtube: { handle: 'shopgiftwell', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 200, bottom: 480, left: 60, right: 160 } },
+    facebook: { handle: 'Merry Marts', enabled: false, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
     // Instagram and TikTok caption links are not clickable: put the store link in each bio.
-    instagram: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
-    // mode: 'bridge' (public, through a hosted bridge) | 'direct' (own app, private only) | 'inbox' (drafts)
-    tiktok: { enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 520, left: 60, right: 160 }, mode: 'bridge' },
+    instagram: { handle: 'shopgiftwellgifts', enabled: false, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
+    tiktok: { handle: 'merrymarts', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 520, left: 60, right: 160 } },
   },
   // The name ads say and show. null uses the store name Shopify reports (still "Merry Marts").
   brand: { name: 'Giftwell' },
@@ -65,8 +67,11 @@ export default {
     maxJobsPerSlot: 2,
     // Tier 1: provider, model id and the price of one clip in dollars.
     t1: { provider: 'fal', model: 'fal-ai/ltx-2-19b/image-to-video', usdPerClip: 0.17 },
-    // Tier 2: same fields.
-    t2: { provider: 'higgsfield', model: 'kling3_0', usdPerClip: 0.5 },
+    // Tier 2:
+    // Tier 2 runs on the owner's Higgsfield subscription through its MCP server. usdPerClip is the quoted
+    // credits times what a credit costs on the plan. A job quoted above maxCredits is not started, and a job
+    // is not started when it would leave fewer than keepCredits credits.
+    t2: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 1.2, params: { mode: 'fast', resolution: '720p', generate_audio: true }, maxCredits: 40, keepCredits: 300 },
   },
   // A tick running longer than this makes the process exit so Docker restarts it.
   watchdogMinutes: 45,

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { produceSlot } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { tick } from '../src/scheduler/loop.ts';
-import { publishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/registry.ts';
 import { config, fresh, stubProducer } from './helpers.ts';
+const publishers = makePublishers(config, { now: () => new Date() });
 
 const count = (db: ReturnType<typeof fresh>, t: string) => (db.prepare(`SELECT count(*) c FROM ${t}`).get() as { c: number }).c;
 

@@ -23,7 +23,7 @@ test('config validation failures', () => {
   assert.throws(() => parseConfig(mod((c) => (c.platforms.youtube.slots = ['25:00', '19:45']))), /HH:MM/);
   assert.throws(() => parseConfig(mod((c) => (c.publish.timeoutMinutes = 30))), /less than uploadTimeoutMinutes/);
   assert.throws(() => parseConfig(mod((c) => (c.platforms.tiktok.slots = ['12:15']))), /same number of slots/);
-  assert.throws(() => parseConfig(mod((c) => (c.platforms.tiktok.mode = 'x'))), /tiktok\.mode/);
+  assert.throws(() => parseConfig(mod((c) => (c.platforms.tiktok.handle = ''))), /tiktok\.handle/);
   assert.throws(() => parseConfig(mod((c) => (c.timezone = 'Nowhere/Land'))), /time zone/);
   // a disabled platform may differ in slot count
   assert.ok(parseConfig(mod((c) => { c.platforms.tiktok.enabled = false; c.platforms.tiktok.slots = ['12:15']; })));
