@@ -6,20 +6,20 @@ import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
 import { findAccount, listAccounts } from './publish/bridge.ts';
 import { makePublishers } from './publish/registry.ts';
-import { authorize } from './router/higgsfield-auth.ts';
-import { runSamples } from './render/samples.ts';
+import { authorize, higgsfieldStatus } from './router/higgsfield-auth.ts';
+import { runSamples, runUgcSample } from './render/samples.ts';
 import { planDay } from './scheduler/planner.ts';
 import { runIngest } from './shopify/index.ts';
 import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples | doctor | health | auth higgsfield';
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | auth higgsfield';
 const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY'];
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' } },
+    options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' }, clip: { type: 'string' }, caption: { type: 'string' }, name: { type: 'string' } },
   });
   const cmd = positionals[0];
   if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'auth'].includes(cmd)) {
@@ -53,6 +53,14 @@ async function main(): Promise<number> {
 
   const config = await loadConfig();
   if (cmd === 'samples') {
+    if (values.clip) {
+      if (!values.caption) {
+        console.error(USAGE);
+        return 2;
+      }
+      await runUgcSample(config, values.clip, values.caption, values.name);
+      return 0;
+    }
     await runSamples(config, clock());
     return 0;
   }
@@ -96,6 +104,7 @@ async function doctor(now: Date): Promise<number> {
     const hb = kvGet(db, 'heartbeat');
     const age = hb ? Math.round((now.getTime() - Date.parse(hb)) / 1000) : null;
     console.log('heartbeat: ' + (age === null ? 'never' : age < 0 ? 'in the future (clock override?)' : `${age}s ago`));
+    console.log('higgsfield: ' + higgsfieldStatus(db, now));
   } catch (e) {
     bad = true;
     console.log('db: BROKEN ' + e);

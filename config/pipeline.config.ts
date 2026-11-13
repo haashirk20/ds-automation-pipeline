@@ -8,7 +8,7 @@ export default {
     // Every platform publishes through the hosted bridge (Zernio). handle: the account name at the
     // bridge (Facebook: the Page name). Facebook and Instagram are off until their accounts are
     // connected at the bridge.
-    // visibility: 'public' | 'private'. Private means YouTube private, TikTok SELF_ONLY, Facebook
+    // visibility: 'public' | 'private'. Private means YouTube private, TikTok a draft in the account's inbox, Facebook
     // a draft in Publishing Tools. Instagram has no private mode: private there is refused.
     // The owner switches to 'public' when ready.
     // Slot index i on every enabled platform publishes the same master edit,
@@ -24,13 +24,23 @@ export default {
     tiktok: { handle: 'merrymarts', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 520, left: 60, right: 160 } },
   },
   // The name ads say and show. null uses the store name Shopify reports (still "Merry Marts").
-  brand: { name: 'Giftwell' },
+  brand: {
+    name: 'Giftwell',
+    // Sent to the video model as a reference so a gift box in the scene carries the right logo.
+    // A path from the repository root, or null to send none.
+    logo: 'config/brand/logo.png',
+  },
   creative: {
+    // 'ugc' = one AI-generated scene with a caption on top; 'ad' = photo templates with a voice-over.
+    mode: 'ad',
     // Kokoro voices to rotate through. See tools/tts/tts.py for the allowed list.
     voices: ['af_heart', 'af_bella', 'am_michael'],
     // A synthesized bed under the voice. gainDb is relative to the bed's own level.
     music: { enabled: true, gainDb: -8 },
   },
+  // The 'ugc' mode. reuseAfterDays: a stored clip may be posted again after this many days when no new
+  // clip can be made. captionPx: caption text size on the 1080-wide frame.
+  ugc: { reuseAfterDays: 14, captionPx: 84 },
   llm: {
     models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5', escalation: 'claude-opus-5-5' },
     // At this spend in a calendar month (UTC) model calls stop and approved scripts are reused.

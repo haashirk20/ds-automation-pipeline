@@ -22,6 +22,7 @@ export interface LlmRequest<T> {
   maxTokens: number;
   effort: Effort;
   slotId?: string;
+  images?: { mediaType: 'image/jpeg' | 'image/png'; data: string }[]; // base64, sent before the user text
 }
 
 // Dollars per million tokens.
@@ -87,7 +88,14 @@ export function buildParams<T>(req: LlmRequest<T>): Record<string, unknown> {
     model: req.model,
     max_tokens: req.maxTokens,
     system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content: req.user }],
+    messages: [
+      {
+        role: 'user',
+        content: req.images?.length
+          ? [...req.images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })), { type: 'text', text: req.user }]
+          : req.user,
+      },
+    ],
     output_config: { effort: req.effort, format: zodOutputFormat(req.schema as never) },
   };
 }

@@ -8,7 +8,7 @@ import { makeBed } from '../music/index.ts';
 import { synthesize } from '../tts/index.ts';
 import { ff } from './ffmpeg.ts';
 import { runQa } from '../qa/index.ts';
-import { renderEdl, renderSheet } from './render.ts';
+import { renderEdl, renderSheet, renderUgc } from './render.ts';
 
 const Fixture = z.object({
   brief: Brief,
@@ -16,6 +16,30 @@ const Fixture = z.object({
 });
 
 const SHEET_TIMES = [0.5, 1.5, 4, 7, 9.5, 11.5, 13, 14.5];
+
+// Eight frames of the video as a 4x2 contact sheet next to it (<file minus .mp4>.sheet.png).
+async function contactSheet(video: string, work: string): Promise<void> {
+  mkdirSync(work, { recursive: true });
+  const frames: string[] = [];
+  for (const [k, sec] of SHEET_TIMES.entries()) {
+    const png = path.join(work, `frame${k}.png`);
+    await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-ss', String(sec), '-i', video, '-frames:v', '1', '-vf', 'scale=270:480', png]);
+    frames.push(png);
+  }
+  await renderSheet(frames, video.replace(/\.mp4$/, '.sheet.png'));
+}
+
+// Render one clip file with a caption on top, run QA, write the contact sheet.
+export async function runUgcSample(config: Config, clip: string, caption: string, name = 'ugc'): Promise<void> {
+  if (!/^[\w.-]+$/.test(name)) throw new Error('--name may hold only letters, digits, . _ -');
+  const out = path.resolve(env.outDir(), 'samples');
+  const file = path.join(out, `${name}.mp4`);
+  const t0 = Date.now();
+  await renderUgc({ clip, caption, config, outFile: file });
+  const qa = await runQa(file);
+  console.log(JSON.stringify({ sample: name, pass: qa.pass, failed: qa.checks.filter((k) => !k.pass).map((k) => ({ name: k.name, value: k.value, limit: k.limit })), renderSec: Math.round((Date.now() - t0) / 100) / 10, file }));
+  await contactSheet(file, path.join(out, 'work', name));
+}
 
 // Render the sample ads described in tests/fixtures/samples/samples.json to OUT_DIR/samples.
 export async function runSamples(config: Config, _now: Date): Promise<void> {
@@ -64,14 +88,7 @@ export async function runSamples(config: Config, _now: Date): Promise<void> {
       console.log(JSON.stringify({ qa: qa.pass ? 'pass' : 'FAIL', failed: failed.map((k) => `${k.name} ${k.value}`) }));
       console.log(JSON.stringify({ sample: s.id, platform, speechEndMs: speechEnd, durationMs: edl.durationMs, renderSec: Math.round((Date.now() - r0) / 100) / 10, file }));
     }
-    // Contact sheet from the facebook render.
-    const frames: string[] = [];
-    for (const [k, sec] of SHEET_TIMES.entries()) {
-      const png = path.join(work, `frame${k}.png`);
-      await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-ss', String(sec), '-i', path.join(out, `${s.id}.mp4`), '-frames:v', '1', '-vf', 'scale=270:480', png]);
-      frames.push(png);
-    }
-    await renderSheet(frames, path.join(out, `${s.id}.sheet.png`));
+    await contactSheet(path.join(out, `${s.id}.mp4`), work);
     console.log(JSON.stringify({ sample: s.id, totalSec: Math.round((Date.now() - t0) / 1000) }));
   }
   if (failures.length) throw new Error(`QA failed:\n${failures.join('\n')}`);

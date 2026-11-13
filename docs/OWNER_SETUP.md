@@ -1,86 +1,91 @@
 # What the pipeline needs from you
 
-Everything in one place. Nothing here blocks the work in progress: each item switches on the part
-named beside it.
+Everything in one place. Each item switches on the part named beside it.
 
-**Put secrets in the `.env` file, not in chat.** Copy `.env.example` to `.env` and fill in the
-variable named in each step. A `.env` with the store domain and `DRY_RUN=1` already exists.
+**Put secrets in the `.env` file, not in chat.** `.env.example` lists every variable.
 
-## Settled
+## Done
 
 - Docker works in this WSL distro.
 - Giftwell has three employees, so Remotion is free.
-- TikTok posts go through a hosted bridge.
-- The fourth platform is Instagram Reels.
+- In `.env`: the Anthropic key, the Discord webhook, the Shopify app credentials (`read_products`)
+  and the bridge key.
+- YouTube (`shopgiftwell`) and TikTok (`merrymarts`) are connected at the bridge.
+- The logo is in `config/brand/logo.png`. Two reference videos set the style (D-28).
 
-## 1. One open question
+## 1. Sign the pipeline in to Higgsfield (2 minutes, needed before any video is made)
 
-**Claims printed on your product photos** ("three heat levels", "machine washable", "10,000 mAh").
-The description in Shopify does not make them, so ads do not state them. One photo shows a power
-bank that is not included.
+Videos are generated on your Higgsfield subscription credits. The pipeline signs in the way an
+assistant app does, once:
 
-The most useful thing you can do is edit the product description in Shopify and add what is true:
-number of heat settings, warm-up time, how it is powered, washing instructions, shipping time.
-Every fact you add becomes material for hooks and scripts. The store is also still called
-"Merry Marts" in a few of the supplier photos' captions, if that matters to you.
+```bash
+node src/cli.ts auth higgsfield
+```
 
-## 2. Keys
+It prints a link. Open it, sign in to Higgsfield and approve. On this machine the browser hands
+the result back by itself. On a server reached over SSH, the browser ends on a page that fails to
+load: copy the whole address from the address bar, paste it into the terminal and press Enter.
+The command finishes with `signed in: plan ultra, <n> credits`.
 
-| What | Variable in `.env` | Needed for | Notes |
-|---|---|---|---|
-| Anthropic API key | `ANTHROPIC_API_KEY` | Scripts, captions, QA | In the Anthropic Console, set the workspace spend limit to $10 a month |
-| Alert destination | `ALERT_DISCORD_WEBHOOK`, or `ALERT_TELEGRAM_BOT_TOKEN` and `ALERT_TELEGRAM_CHAT_ID` | Failure alerts and the daily summary | A Discord webhook takes one minute: channel settings → Integrations → Webhooks |
-| healthchecks.io | `HEALTHCHECK_URL`, `HEALTHCHECK_DAILY_URL` | Telling you when the VM itself is down | Free account, two checks: one with a 5-minute period, one daily |
-| Bridge API key | `BRIDGE_API_KEY` | Public TikTok posts | [Zernio](https://zernio.com/pricing) lists its first two connected accounts as free. Connect the TikTok account there |
-| fal.ai key (optional) | `FAL_KEY` | Tier 1 AI clips | Prepay at most $15 and leave auto-reload off |
-| Higgsfield API key (optional) | `HIGGSFIELD_KEY_ID`, `HIGGSFIELD_KEY_SECRET` | Tier 2 AI clips | Prepay at most $25 and leave auto-reload off. Your subscription's credits may be usable instead: that is checked in Phase 4 |
-| Shopify app (optional) | `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` | Reliable product sync | Shopify Dev Dashboard → create an app → Admin API scope `read_products` → install on the store. Without it the pipeline reads the public product feed, which rate-limits |
-| Cloudflare R2 (Phase 7) | `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Encrypted backups | Free tier. Keep a copy of the restic password somewhere other than the VM |
+On the server, inside Docker:
 
-Without the two optional clip keys the pipeline makes Tier 0 ads only, which cost nothing.
+```bash
+docker compose run --rm pipeline node src/cli.ts auth higgsfield
+```
 
-## 3. Platform accounts
+If the sign-in ever expires you get an alert that names this command.
 
-The store's own policy pages work for the privacy and terms URLs the developer portals ask for:
-`https://shopgiftwell.myshopify.com/policies/privacy-policy` and `/policies/terms-of-service`.
+**Credits.** Your plan grants 3,000 credits a month and unused ones are removed at renewal. A video
+costs 26.25 credits on the default model, so 60 videos use about 1,575. The pipeline stops making
+new videos when the balance would drop below 350 credits (`tiers.t2.keepCredits`) and reuses
+stored ones. That floor sits above Higgsfield's auto-refill threshold of 300, so the pipeline
+cannot trigger an automatic purchase. Auto-refill is off on your account today.
 
-**YouTube (15 minutes).** `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`
-1. In Google Cloud Console create a project. Enable **YouTube Data API v3** and **YouTube Analytics API**.
-2. OAuth consent screen: External, then set the publishing status to **In production**. In "Testing" the login expires every 7 days.
-3. Create an OAuth client of type **Desktop app**.
+## 2. Facebook and Instagram (5 minutes, optional)
 
-**Facebook and Instagram (20 minutes, one app for both).** `META_APP_ID`, `META_APP_SECRET`, `META_PAGE_ID`
-1. Make the Instagram account a professional account (Business or Creator) and link it to the Facebook Page.
-2. At developers.facebook.com create an app of type Business.
-3. Leave it in Development mode for the test. Switching it to Live later makes Facebook posts public.
-4. The login step will ask for a token from Graph API Explorer with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic` and `instagram_content_publish`.
-5. Put the store link in the Instagram bio. Links in Instagram captions are not clickable.
+Both are switched off in `config/pipeline.config.ts`. To switch them on:
 
-**TikTok (10 minutes).** `BRIDGE_API_KEY`
-1. Connect the TikTok account in the bridge.
-2. Put the store link in the TikTok bio.
-3. Optional, for a private test through your own app: at developers.tiktok.com create an app with **Login Kit** and **Content Posting API**, add the Desktop redirect `http://localhost:8765/callback/`, create a **Sandbox** and add your TikTok account as a target user. `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`.
+1. Make the Instagram account a professional account and link it to the Facebook Page.
+2. Connect the Facebook Page (`Merry Marts`) and the Instagram account (`shopgiftwellgifts`) at
+   the bridge, the same way as YouTube and TikTok. The first two accounts are free and each
+   further one is $6 a month, so this adds $12 a month.
+3. Set `enabled: true` for both platforms and run `node src/cli.ts doctor`. It prints one line per
+   platform: `bridge instagram: ok (...)`.
 
-The one-time login commands (`pipeline auth youtube`, `pipeline auth meta`) arrive with Phase 5.
-This page will be updated with them.
+Put the store link in the Instagram and TikTok bios. Links in their captions are not clickable.
 
-## 4. Brand
+## 3. Going public
 
-Any of these you have. Defaults are derived from the product photos where you have nothing.
+Every platform starts at `visibility: 'private'`:
 
-- Logo (SVG or PNG with transparency).
-- Brand colours as hex codes, and fonts if you use particular ones.
-- Voice: three words for the tone, and whether the narrator should sound female or male.
-- Your handles on each platform, hashtags you always use, and words to avoid.
-- Preferred call to action ("Shop now", "Link in bio", something else).
+| Platform | What private does |
+|---|---|
+| YouTube | Uploads as a private video |
+| TikTok | Sends a draft to the account's inbox in the TikTok app. You post it there, or discard it |
+| Facebook | Creates a draft in Publishing Tools |
+| Instagram | Has no private mode. Private is refused, so it posts nothing until set to public |
 
-## 5. A server (Phase 7)
+Your TikTok account is a business account, and TikTok offers those no private posts through an
+app, only drafts. TikTok holds at most five pending drafts a day, so discard test drafts.
 
-A VM with Ubuntu 24.04, 4 vCPU and 8 GB, and your SSH key on it. About $10–17 a month. The shortlist
-and current availability are in `COSTS.md`. You create the account. The setup script does the rest.
+Set `visibility: 'public'` per platform when you are happy with what you see.
 
-## 6. Optional
+## 4. Still open
 
-Sign in to the Shopify connector in Claude's connector settings. It is present in the session but
-not authenticated. It is a convenience for checking store data during the build, and the pipeline
-does not use it.
+- **Claims printed on the product photos** ("three heat levels", "machine washable"). Shopify's
+  description does not make them, so no video states them. Add what is true to the product
+  description in Shopify and it becomes usable.
+- **`config/product-notes.json`** says what the product looks like and visibly does. The current
+  note says the power button glows red when the heat is on, as in your reference videos. Correct
+  it if that is wrong.
+- **healthchecks.io** (`HEALTHCHECK_URL`, `HEALTHCHECK_DAILY_URL`): a free account with two checks
+  tells you when the server itself is down.
+- **A server** (Phase 7): Ubuntu 24.04, 4 vCPU, 8 GB, your SSH key on it, about $10–17 a month.
+- **Backups** (Phase 7): Cloudflare R2 keys, `RESTIC_*` and `AWS_*` in `.env`.
+
+## Not needed any more
+
+- `HIGGSFIELD_KEY_ID` and `HIGGSFIELD_KEY_SECRET`. The REST API bills a separate prepaid balance
+  (D-30). You can delete the key in the Higgsfield console.
+- YouTube, Meta and TikTok developer apps. Everything posts through the bridge (D-29).
+- `FAL_KEY`. No fal.ai model is used.

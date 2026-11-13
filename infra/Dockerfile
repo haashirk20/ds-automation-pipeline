@@ -4,10 +4,12 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Libraries Chrome Headless Shell needs, the list from https://www.remotion.dev/docs/docker, plus CA
-# certificates for the build-time model download (the slim image has none).
+# certificates for the build-time model download (the slim image has none), plus a colour emoji font:
+# captions carry emoji and Chrome draws empty boxes without one.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libdbus-1-3 libatk1.0-0 libgbm-dev libasound2 libxrandr2 libxkbcommon-dev libxfixes3 \
     libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 ca-certificates \
+    fonts-noto-color-emoji \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./

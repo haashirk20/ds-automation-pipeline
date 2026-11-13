@@ -61,7 +61,7 @@ test('fresh publish per platform: request order, key, body, handle saved before 
   for (const [name, check] of [
     ['youtube', (b: any) => assert.deepEqual(b.platforms[0].platformSpecificData, { title: 'T', visibility: 'private', madeForKids: false, containsSyntheticMedia: true })],
     ['tiktok', (b: any) => {
-      assert.deepEqual(b.tiktokSettings, { privacy_level: 'SELF_ONLY', allow_comment: true, allow_duet: false, allow_stitch: true, content_preview_confirmed: true, express_consent_given: true, video_made_with_ai: true });
+      assert.deepEqual(b.tiktokSettings, { privacy_level: 'SELF_ONLY', allow_comment: true, allow_duet: false, allow_stitch: true, content_preview_confirmed: true, express_consent_given: true, video_made_with_ai: true, draft: true });
     }],
     ['facebook', (b: any) => { assert.deepEqual(b.platforms[0].platformSpecificData, { contentType: 'reel', title: 'T' }); assert.deepEqual(b.facebookSettings, { draft: true }); }],
     ['instagram', (b: any) => { assert.equal(b.platforms[0].platformSpecificData, undefined); assert.equal(b.tiktokSettings, undefined); }],
@@ -181,4 +181,13 @@ test('no error message contains the key', async () => {
     run('instagram', rig()).done,
   ];
   for (const c of cases) await c.then(() => assert.fail('should reject'), (e: Error) => assert.ok(!e.message.includes(KEY) && !/bearer/i.test(e.message)));
+});
+
+test('tiktok private is an inbox draft, also for a business account that is offered only the public level', async () => {
+  const h = rig({ info: Response.json({ privacyLevels: [{ value: 'PUBLIC_TO_EVERYONE' }], postingLimits: {} }) });
+  await run('tiktok', h, { visibility: 'private' }).done;
+  const s = h.reqs.find((x) => x.path === '/posts')!.body.tiktokSettings;
+  assert.equal(s.draft, true);
+  assert.equal(s.privacy_level, 'PUBLIC_TO_EVERYONE');
+  assert.equal(s.commercialContentType, undefined);
 });

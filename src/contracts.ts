@@ -120,3 +120,14 @@ export const RenderProps = z.object({ edl: Edl, platform: Platform, safe: SafeZo
 export type RenderProps = z.infer<typeof RenderProps>;
 
 export const FRAME = { width: 1080, height: 1920, fps: 30 } as const;
+
+// What the concept writer returns for a UGC-style video. See prompts/ugc.md.
+export const UgcConcept = z.object({
+  caption: z.string().min(1),
+  line: z.string(),
+  color: z.string().min(1),
+  setting: z.string().min(1),
+  person: z.string().min(1),
+  shots: z.array(z.object({ seconds: z.number().int().min(2).max(8), action: z.string().min(1) })).min(3).max(5),
+});
+export type UgcConcept = z.infer<typeof UgcConcept>;

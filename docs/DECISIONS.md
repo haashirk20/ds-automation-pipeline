@@ -7,8 +7,8 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 
 | ID | Component | Chosen |
 |---|---|---|
-| D-01 | Publishing layer | Direct platform APIs |
-| D-02 | TikTok public posting | Hosted bridge with an audited app |
+| D-01 | Publishing layer | Superseded by D-29 |
+| D-02 | TikTok public posting | Hosted bridge (now all platforms, D-29) |
 | D-03 | Render engine | Remotion |
 | D-04 | Language and repo shape | TypeScript on Node 24, one package |
 | D-05 | Voice | Kokoro-82M through a Python CLI |
@@ -16,7 +16,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-07 | Scheduling and queue | One tick loop over SQLite |
 | D-08 | State store | SQLite through `node:sqlite` |
 | D-09 | Tier 1 clips | Hosted pay-per-clip open-weight model |
-| D-10 | Tier 2 clips | Higgsfield REST API under a hard cap |
+| D-10 | Tier 2 clips | Superseded by D-30 |
 | D-11 | Model calls | Anthropic API, single structured calls |
 | D-12 | Shopify ingest | Admin GraphQL, public JSON as fallback |
 | D-13 | Hosting and provisioning | Any Ubuntu VM, one setup script |
@@ -34,10 +34,15 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-25 | FFmpeg | The binary Remotion ships |
 | D-26 | Feedback ranking | Thompson sampling in code |
 | D-27 | Fourth platform | Instagram Reels, replacing LinkedIn |
+| D-28 | Creative format | AI-generated scene in a user-generated style, one caption |
+| D-29 | Publishing layer | One hosted bridge for all four platforms |
+| D-30 | Video generation | Higgsfield's MCP server, on the owner's subscription credits |
 
 ---
 
 ## D-01 Publishing layer: direct platform APIs (2026-11-11)
+
+**Superseded by D-29 on 2026-11-13.** No direct publisher was built.
 
 **Alternatives.** Self-hosted Postiz v2.25.3. A hosted bridge for all four platforms.
 
@@ -169,6 +174,8 @@ placeholder until Phase 4 compares Tier 1 and Tier 2 on the same shot.
 **Revisit when.** Volume passes a few hundred clips a month.
 
 ## D-10 Tier 2 clips: Higgsfield REST API under a hard cap (2026-11-11)
+
+**Superseded by D-30 on 2026-11-13.** The REST API bills a separate prepaid balance, which is empty.
 
 **Alternatives.** Muapi. Vendor APIs directly (Kling, Veo, Runway).
 
@@ -377,6 +384,134 @@ short of publishing. Its API has no AI-disclosure field. See `PLATFORMS.md`.
 
 ---
 
+## D-28 Creative format: an AI-generated scene in a user-generated style (2026-11-13)
+
+**Chosen.** `creative.mode: 'ugc'` is the default. Each slot is one 15-second AI-generated scene
+that looks like something a person filmed: one woman, one place, a small story in three to five
+shots, at most one spoken line in the first shot, room sound, and one caption that stays at the top
+of the frame. There is no end card, price, logo overlay or call to action in the picture. The
+photo templates remain as `creative.mode: 'ad'`.
+
+**Alternatives.** Keeping the three photo templates. Restyling them as a photo slideshow with a
+caption. Both cost nothing to run, and neither looks like the owner's references.
+
+**Why.** The owner asked for it on 2026-11-13 and supplied two reference videos: "UGC style videos
+with minimal text except for a caption on screen with a female voice starting off the video with a
+hook or speaking minimally", "not structured like ads but more like satisfying user generated
+content". Both references are 15.07 s, 1080x1920, fully generated, with one static two-line
+caption and one spoken line ("It's freezing in here").
+
+**What follows from it.**
+- The voice comes from the video model, in the scene. D-05 (Kokoro), D-06 (caption timing) and D-16
+  (music beds) apply to `ad` mode only. Reference 1 carries a commercial song; the pipeline adds no
+  music, because it has no licence to any.
+- One render serves every platform (D-17 applies to `ad` mode only): the caption sits below the
+  largest top safe zone, and nothing else is drawn.
+- Every video is AI-generated, so the AI disclosure flag is always on (D-20).
+- D-21 still holds for words: the caption and the spoken line pass the same deterministic checks
+  and the claim judge. They may state an opinion, never a fact the brief lacks. The woman is a
+  character in a scene. She is never presented as a customer giving a review.
+- What the product looks like and visibly does comes from `config/product-notes.json`, written by
+  the owner, because Shopify's data does not describe it. The current note says the power button
+  glows red when the heat is on, which is what the owner's own reference videos show.
+- A model looks at six frames of every new clip against a product photo before it can be posted
+  (`src/qa/vision.ts`): product present and matching, no stray or garbled text, brand spelled
+  correctly, no obvious generation faults. The verdict is computed in code from its answers.
+- When no new clip can be made (cap reached, credits low, sign-in expired, two rejected clips),
+  the slot reuses a stored clip that has not been posted for `ugc.reuseAfterDays` days. With none
+  available the slot fails and alerts. It does not fall back to a photo ad.
+
+**Not checked.** The spoken line is not transcribed at run time. In four test clips the line came
+out word for word, so this is left out until a clip gets it wrong.
+
+**Revisit when.** A posted clip turns out to have a wrong spoken line or a fault the frame check
+missed, or the owner wants a mix of formats.
+
+## D-29 Publishing layer: one hosted bridge for all four platforms (2026-11-13)
+
+**Chosen.** Every platform publishes through Zernio (`src/publish/bridge.ts`). This supersedes D-01
+and widens D-02.
+
+**Alternatives.** Direct platform APIs for YouTube, Facebook and Instagram, with the bridge for
+TikTok only (the earlier plan). Self-hosted Postiz.
+
+**Why.** The owner connected YouTube and TikTok at the bridge and supplied its key, and no Meta or
+Google app credentials. One publisher replaces four, with no OAuth apps, token storage or app
+review on our side. The bridge takes an `Idempotency-Key` that holds for 24 hours, returns a post
+id that can be read back, and rejects identical content sent to the same account within a day,
+which is what the never-double-post rule needs.
+
+**Cost.** The first two connected accounts are free and each further account is $6 a month, so
+four accounts cost $12 a month. Posts are unlimited.
+
+**Risk.** One outside service now carries every post. If it is down, publications retry for
+`publish.maxLatenessMinutes` and are then skipped with an alert. A post the bridge reports as
+failed is treated as final and not retried, on purpose: a missed post is acceptable and a double
+post is not.
+
+**Status.** Built and tested against fakes. `GET /accounts` checked live. No real post yet.
+Facebook and Instagram are disabled in the config until the owner connects them at the bridge.
+
+**Revisit when.** The bridge changes price or terms, loses a platform, or reports failures that
+turn out to have posted.
+
+## D-30 Video generation: Higgsfield's MCP server, on the owner's subscription (2026-11-13)
+
+**Chosen.** Tier 2 calls the Higgsfield MCP server (`https://mcp.higgsfield.ai/mcp`) as a plain
+HTTP client: JSON-RPC over `fetch`, no model in the loop, no SDK (`src/router/mcp.ts`,
+`src/router/higgsfield.ts`). The owner signs in once with `node src/cli.ts auth higgsfield`
+(authorization code with PKCE; the client registers itself). Tokens live in the database.
+
+**Alternatives.** The Higgsfield REST API (D-10). fal.ai or another pay-per-clip host.
+
+**Why.** The owner asked for it on 2026-11-13: "so it uses my monthly credits". The REST API draws
+on a separate prepaid balance; a real submit there returned `403 not_enough_credits` while the
+subscription held 1,418 credits. The MCP server is the only programmatic route to subscription
+credits. Higgsfield's terms allow it: section 11.12, "If you use Developer Access to connect the
+Service to any third-party artificial intelligence agent, automation platform, or orchestration
+tool (including via MCP), you are solely responsible for: (i) all actions taken by such agent or
+tool using your credentials" (https://higgsfield.ai/terms, last updated 2026-10-23).
+
+**Cost.** The Ultra plan grants 3,000 credits a month, and unused credits are removed at renewal.
+Quotes for one 15-second 9:16 clip with sound, read from the server on 2026-11-13:
+
+| Model | Setting | Credits |
+|---|---|---|
+| Seedance 2.5 | 1080p / 720p / 480p | 240 / 105 / 45 |
+| Seedance 2.5 Flash | 720p | 75 |
+| Seedance 2.0 | 720p std / fast | 67.5 / 37.5 |
+| Kling 3.0 | std | 30 |
+| Wan 3.0 | 720p | 26.25 |
+| Kling 3.0 Omni (image reference) | pro / std | 30 / 18.75 |
+| Seedance 2.0 Mini | 720p | 15 |
+
+The owner's references were Seedance 2.5 at 240 credits each, which is 12 videos a month. The same
+scene was generated once on four models (97.5 credits). Wan 3.0 followed the shot list most
+closely and kept the logo right. Seedance 2.0 fast looked most like phone footage. Kling Omni came
+out glossy and lit the button blue. Seedance 2.0 Mini misspelled the logo and duplicated the
+product. All four spoke the line correctly. **Default: Wan 3.0 at 720p**, 60 clips for about
+1,575 credits. Seedance 2.0 fast is the alternative at about 2,250.
+
+**Budget rules.** The ledger stays in dollars: `usdPerClip` is the quoted credits times what a
+credit costs on the plan ($65 for 3,000). Before each job the provider reads the live balance and
+the server's quote. A quote above `maxCredits` stops the job, and so does a job that would leave
+fewer than `keepCredits`. `keepCredits` is set above Higgsfield's auto-refill threshold (300), so
+the pipeline cannot cause an automatic purchase if the owner turns auto-refill on.
+
+**Risks.**
+- `generate_video` has no idempotency key. A call whose outcome is unknown is never repeated, so a
+  crash at that moment can cost one clip.
+- The server is built for assistants. Its tool names and result shapes can change without notice.
+  The provider fails closed and alerts.
+- If the refresh token is refused, the owner has to sign in again. Slots reuse stored clips until
+  then.
+
+**Status.** Built and tested against fakes. Result shapes were observed through another client of
+the same server. No signed-in call from this client yet: the owner has to run the sign-in.
+
+**Revisit when.** Higgsfield changes the plan's credits, the quotes, or the MCP tools, or the
+subscription's credits become reachable through the REST API.
+
 ## Paid services
 
 | Service | Why open source cannot do it | Monthly cost | Cap |
@@ -405,5 +540,11 @@ Record here any tool or API dropped after two failed attempts, with the reason.
   Archive's CC0 filter returned a track whose own page says CC BY-NC-ND. OpenGameArt and Musopen
   refused automated requests, so no track licence could be read from its own page. No track was
   verified. Replaced by synthesized beds (D-16).
+- **Higgsfield REST API (2026-11-13).** The key worked for price quotes, but a real submit returned
+  `403 not_enough_credits`: it bills a prepaid balance separate from the subscription. Replaced by the
+  MCP route (D-30). The `HIGGSFIELD_KEY_*` variables are no longer read.
+- **Device-code sign-in for the Higgsfield MCP client (2026-11-13).** The authorization server lists
+  the grant, but refuses it for self-registered clients ("does not have the ... device_code grant").
+  The sign-in uses the authorization-code flow, with a paste-the-URL fallback for a headless server.
 - **Shopify MCP connector at build time (2026-11-12).** Present in the session but not
   authenticated. The public product feed is used instead. Nothing at runtime depended on it.

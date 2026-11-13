@@ -4,7 +4,7 @@ import type { Brief } from '../contracts.ts';
 
 // The system text for a purpose: the rules file plus the brief. Built with a fixed key order and no
 // timestamps so it is byte-identical across calls and the prompt cache holds.
-export function systemPrompt(purpose: 'hooks' | 'script' | 'claims' | 'copy' | 'copycheck', brief: Brief): string {
+export function systemPrompt(purpose: 'hooks' | 'script' | 'claims' | 'copy' | 'copycheck' | 'ugc' | 'vision', brief: Brief): string {
   const rules = readFileSync(join(import.meta.dirname, '../../prompts', `${purpose}.md`), 'utf8').trimEnd();
   const b = {
     shop: { name: brief.shop.name, domain: brief.shop.domain, currency: brief.shop.currency, shipsTo: brief.shop.shipsTo },

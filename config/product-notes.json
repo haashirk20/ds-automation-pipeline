@@ -1,0 +1,6 @@
+{
+  "_comment": "What each product looks like and visibly does, written by the owner. Shopify's data does not describe this, and the video model needs it. Keyed by product handle. A product without an entry is described from its photo notes only.",
+  "snugwrap-heated-shawl-wrap": {
+    "look": "A waffle-knit shawl wrap with a soft grey lining, a zip down the front and one small round power button on the chest. It is worn over the shoulders like a cape. Pressing the button switches the heat on, and the button then glows red."
+  }
+}

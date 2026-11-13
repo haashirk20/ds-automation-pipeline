@@ -21,6 +21,7 @@ import { listBriefs, runIngest } from '../shopify/index.ts';
 import { synthesize } from '../tts/index.ts';
 import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
 import { ff } from './ffmpeg.ts';
+import { probeVideo } from './probe.ts';
 import { renderEdl } from './render.ts';
 
 // Paths come only from slot id and platform; the result must stay inside OUT_DIR.
@@ -84,14 +85,6 @@ export type ProduceDeps = {
 async function cropToJpeg(src: string, crop: Brief['shots'][number]['crop'], out: string): Promise<void> {
   const vf = [...(crop ? [`crop=iw*${crop.w}:ih*${crop.h}:iw*${crop.x}:ih*${crop.y}`] : []), "scale='min(1080,iw)':-2"].join(',');
   await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-i', src, '-vf', vf, '-frames:v', '1', '-q:v', '2', out]);
-}
-
-// Size and length of the clip, or null when it has no video stream.
-async function probeVideo(file: string): Promise<{ width: number; height: number; seconds: number } | null> {
-  const r = JSON.parse((await ff('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file])).stdout.toString());
-  const v = (r.streams ?? []).find((x: { codec_type: string }) => x.codec_type === 'video');
-  if (!v) return null;
-  return { width: v.width, height: v.height, seconds: Number(r.format?.duration ?? v.duration ?? 0) };
 }
 
 const MOTION_PROMPT = 'Slow, gentle camera push-in. Keep the person, the garment and its colour exactly as in the image. Subtle natural movement only. No text, no logos, no new objects.';

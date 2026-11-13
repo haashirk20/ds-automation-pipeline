@@ -35,8 +35,9 @@ const schema = z
       uploadTimeoutMinutes: z.number().positive(),
       timeoutMinutes: z.number().positive(),
     }),
-    brand: z.object({ name: z.string().min(1).nullable() }),
-    creative: z.object({ voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
+    brand: z.object({ name: z.string().min(1).nullable(), logo: z.string().min(1).nullable() }),
+    creative: z.object({ mode: z.enum(['ugc', 'ad']), voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
+    ugc: z.object({ reuseAfterDays: z.number().int().min(1), captionPx: z.number().min(56).max(110) }),
     llm: z.object({
       models: z.object({ script: z.string(), copy: z.string(), qa: z.string(), escalation: z.string() }),
       monthlyCapUsd: z.number().positive(),

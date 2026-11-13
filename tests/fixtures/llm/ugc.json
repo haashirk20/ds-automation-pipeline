@@ -1,0 +1,13 @@
+{
+  "caption": "POV: your office is freezing and you found the fix 🥶",
+  "line": "It's freezing in here.",
+  "color": "Beige",
+  "setting": "A small open-plan office on a grey November afternoon, a half-drunk mug of tea and a cold radiator beside her desk.",
+  "person": "A woman in her late twenties with a dark ponytail, wearing a navy cardigan.",
+  "shots": [
+    { "seconds": 3, "action": "Close on her face at arm's length, she rubs her hands together and shivers at her desk." },
+    { "seconds": 4, "action": "Looking straight down at the desk, she lifts the product out of a gift box and shakes it open." },
+    { "seconds": 4, "action": "From across the room, she puts it over her shoulders and presses the small button on the chest." },
+    { "seconds": 4, "action": "Close on her face, she relaxes into her chair with a smile while a coworker watches, jealous." }
+  ]
+}

@@ -230,10 +230,9 @@ const Verdicts = z.object({
   verdicts: z.array(z.object({ chunk: z.number().int(), supported: z.boolean(), factId: z.string().nullable(), reason: z.string() })),
 });
 
-// Model pass: does a fact support each chunk? Returns problems, empty when every chunk is supported.
-export async function judgeClaims(db: Db, config: Config, brief: Brief, script: Script, now: Date, slotId?: string): Promise<string[]> {
-  const chunks = script.beats.flatMap((b) => b.chunks.map((c) => ({ beat: b.kind, ...c })));
-  const user = `Judge these ${chunks.length} chunks.\n` + chunks.map((c, i) => `${i + 1}. [${c.beat}] say: ${c.say} | show: ${c.show}`).join('\n');
+// One model pass over numbered items; `beat` labels each, `shown` is what a problem message quotes.
+async function judge(db: Db, config: Config, brief: Brief, items: { beat: string; text: string; shown: string }[], intro: string, now: Date, slotId?: string): Promise<string[]> {
+  const user = `${intro}\n` + items.map((c, i) => `${i + 1}. [${c.beat}] ${c.text}`).join('\n');
   const r = await callJson(
     db,
     config,
@@ -244,14 +243,28 @@ export async function judgeClaims(db: Db, config: Config, brief: Brief, script: 
   const problems: string[] = [];
   const seen = new Set<number>();
   for (const v of r.verdicts) {
-    const c = chunks[v.chunk - 1];
+    const c = items[v.chunk - 1];
     if (!c) problems.push(`claim check named chunk ${v.chunk}, which does not exist`);
     else if (seen.has(v.chunk)) problems.push(`claim check gave chunk ${v.chunk} more than one verdict`);
-    else if (!v.supported) problems.push(`unsupported claim "${c.show}": ${v.reason}`);
-    else if (v.factId !== null && !ids.has(v.factId)) problems.push(`claim check cited unknown fact "${v.factId}" for "${c.show}"`);
-    else if (v.factId === null && (c.beat === 'benefit' || c.beat === 'offer')) problems.push(`claim check found no supporting fact for "${c.show}"`);
+    else if (!v.supported) problems.push(`unsupported claim "${c.shown}": ${v.reason}`);
+    else if (v.factId !== null && !ids.has(v.factId)) problems.push(`claim check cited unknown fact "${v.factId}" for "${c.shown}"`);
+    else if (v.factId === null && (c.beat === 'benefit' || c.beat === 'offer')) problems.push(`claim check found no supporting fact for "${c.shown}"`);
     seen.add(v.chunk);
   }
-  for (let i = 1; i <= chunks.length; i++) if (!seen.has(i)) problems.push(`claim check gave no verdict for chunk ${i}`);
+  for (let i = 1; i <= items.length; i++) if (!seen.has(i)) problems.push(`claim check gave no verdict for chunk ${i}`);
   return problems;
+}
+
+// Model pass: does a fact support each chunk? Returns problems, empty when every chunk is supported.
+export function judgeClaims(db: Db, config: Config, brief: Brief, script: Script, now: Date, slotId?: string): Promise<string[]> {
+  const chunks = script.beats.flatMap((b) => b.chunks.map((c) => ({ beat: b.kind, ...c })));
+  return judge(db, config, brief, chunks.map((c) => ({ beat: c.beat, text: `say: ${c.say} | show: ${c.show}`, shown: c.show })), `Judge these ${chunks.length} chunks.`, now, slotId);
+}
+
+// Same judge for free texts (a caption, a spoken line). Empty texts are skipped.
+export function judgeTexts(db: Db, config: Config, brief: Brief, texts: { label: string; text: string }[], now: Date, slotId?: string): Promise<string[]> {
+  const items = texts.filter((t) => t.text.trim()).map((t) => ({ beat: t.label, text: `text: ${t.text}`, shown: t.text }));
+  if (!items.length) return Promise.resolve([]);
+  const intro = `Judge these ${items.length} texts. Each is a caption or a spoken line from a short video, not a script. The label in brackets is not a beat. Only a statement about the product that no fact supports is unsupported.`;
+  return judge(db, config, brief, items, intro, now, slotId);
 }

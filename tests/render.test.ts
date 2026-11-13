@@ -34,3 +34,24 @@ test('assertInside: only paths below the directory pass', () => {
   assert.throws(() => assertInside('/o', '/o'));
   assert.throws(() => assertInside('/oo/a.mp4', '/o'));
 });
+
+test('ugcTop: tallest top safe zone of the enabled platforms plus 30', async () => {
+  const { ugcTop } = await import('../src/render/render.ts');
+  const { parseConfig } = await import('../src/config/index.ts');
+  const { default: raw } = await import('../config/pipeline.config.ts');
+  const c = parseConfig(structuredClone(raw));
+  const want = Math.max(...Object.values(c.platforms).filter((p) => p.enabled).map((p) => p.safe.top)) + 30;
+  assert.equal(ugcTop(c), want);
+  c.platforms.facebook.enabled = true;
+  c.platforms.facebook.safe.top = 400;
+  assert.equal(ugcTop(c), 430);
+});
+
+test('ugcDurationMs: refuses unusable clips, caps the length at 16 s', async () => {
+  const { ugcDurationMs } = await import('../src/render/render.ts');
+  assert.throws(() => ugcDurationMs(null), /no video stream/);
+  assert.throws(() => ugcDurationMs({ width: 720, height: 1280, seconds: 13.9 }), /shorter than 14 s/);
+  assert.throws(() => ugcDurationMs({ width: 360, height: 640, seconds: 15 }), /short side/);
+  assert.equal(ugcDurationMs({ width: 720, height: 1280, seconds: 15.04 }), 15040);
+  assert.equal(ugcDurationMs({ width: 720, height: 1280, seconds: 20 }), 16000);
+});

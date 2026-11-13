@@ -7,6 +7,7 @@ import { makeCancelSignal, renderMedia, renderStill, selectComposition } from '@
 import { env, type Config, type PlatformName } from '../config/index.ts';
 import { Edl, type RenderProps } from '../contracts.ts';
 import { ff } from './ffmpeg.ts';
+import { probeVideo } from './probe.ts';
 
 const ENTRY = path.resolve(import.meta.dirname, '../../templates/index.ts');
 
@@ -85,39 +86,83 @@ function stageFiles(bundleDir: string, files: { from: string; to: string }[]) {
 }
 
 // Two-pass loudnorm to -14 LUFS / -1 dBTP; video is copied. Returns the measured input loudness.
+// A clip with one loud line and quiet room sound cannot reach the target in one pass without clipping,
+// and this FFmpeg build has no limiter, so the pass is repeated (at most three times) until the result
+// is inside the band the QA gate checks.
 export async function normalizeLoudness(inFile: string, outFile: string): Promise<{ inputLufs: number }> {
   const target = 'I=-14:TP=-1:LRA=11';
-  const m = await ff('ffmpeg', ['-hide_banner', '-nostdin', '-i', inFile, '-vn', '-af', `loudnorm=${target}:print_format=json`, '-f', 'null', '-']);
-  const json = JSON.parse(m.stderr.slice(m.stderr.lastIndexOf('{'), m.stderr.lastIndexOf('}') + 1));
-  const af = `loudnorm=${target}:measured_I=${json.input_i}:measured_TP=${json.input_tp}:measured_LRA=${json.input_lra}:measured_thresh=${json.input_thresh}:offset=${json.target_offset}:linear=true`;
-  await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-i', inFile, '-map', '0:v', '-map', '0:a', '-c:v', 'copy', '-af', af, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', outFile]);
-  return { inputLufs: Number(json.input_i) };
+  let src = inFile;
+  let inputLufs = NaN;
+  for (let pass = 0; pass < 3; pass++) {
+    const m = await ff('ffmpeg', ['-hide_banner', '-nostdin', '-i', src, '-vn', '-af', `loudnorm=${target}:print_format=json`, '-f', 'null', '-']);
+    const json = JSON.parse(m.stderr.slice(m.stderr.lastIndexOf('{'), m.stderr.lastIndexOf('}') + 1));
+    if (pass === 0) inputLufs = Number(json.input_i);
+    else if (Math.abs(Number(json.input_i) + 14) <= 1 && Number(json.input_tp) <= -0.75) break; // the last pass landed
+    const af = `loudnorm=${target}:measured_I=${json.input_i}:measured_TP=${json.input_tp}:measured_LRA=${json.input_lra}:measured_thresh=${json.input_thresh}:offset=${json.target_offset}:linear=true`;
+    const out = `${outFile}.pass${pass}.mp4`;
+    await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-i', src, '-map', '0:v', '-map', '0:a', '-c:v', 'copy', '-af', af, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', out]);
+    if (src !== inFile) rmSync(src, { force: true });
+    src = out;
+  }
+  renameSync(src, outFile);
+  return { inputLufs };
 }
 
-export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config: Config; outFile: string; signal?: AbortSignal }): Promise<void> {
-  const outFile = assertInside(opts.outFile, env.outDir());
-  const edl = Edl.parse(opts.edl);
-  const p = opts.config.platforms[opts.platform];
+// Stages files under <bundle>/public/s/<id>/, renders one composition, loudness-normalises into outFile, and always cleans up.
+async function renderStaged(o: { composition: string; id: string; files: { from: string; to: string }[]; inputProps: Record<string, unknown>; outFile: string; signal?: AbortSignal }): Promise<void> {
+  const { composition: compositionId, id, inputProps, outFile } = o;
   const serveUrl = await getBundle();
-  const id = randomBytes(6).toString('hex');
-  const plan = planStaging(edl, id);
   const stagedDir = path.join(serveUrl, 'public', 's', id);
   mkdirSync(path.dirname(outFile), { recursive: true });
   const raw = outFile + '.raw.mp4';
   try {
-    stageFiles(serveUrl, plan.files);
-    const inputProps: RenderProps = { edl: plan.edl, platform: opts.platform, safe: p.safe, cta: p.cta };
-    const composition = await selectComposition({ serveUrl, id: 'Ad', inputProps });
+    stageFiles(serveUrl, o.files);
+    const composition = await selectComposition({ serveUrl, id: compositionId, inputProps });
     // Remotion starts Chrome in its own process group; cancelling is the only way to stop it.
     const { cancelSignal, cancel } = makeCancelSignal();
-    if (opts.signal?.aborted) cancel();
-    opts.signal?.addEventListener('abort', cancel, { once: true });
+    if (o.signal?.aborted) cancel();
+    o.signal?.addEventListener('abort', cancel, { once: true });
     await renderMedia({ composition, serveUrl, inputProps, codec: 'h264', pixelFormat: 'yuv420p', audioCodec: 'aac', outputLocation: raw, logLevel: 'error', cancelSignal });
     await normalizeLoudness(raw, outFile);
   } finally {
     rmSync(stagedDir, { recursive: true, force: true });
     rmSync(raw, { force: true });
   }
+}
+
+export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config: Config; outFile: string; signal?: AbortSignal }): Promise<void> {
+  const outFile = assertInside(opts.outFile, env.outDir());
+  const edl = Edl.parse(opts.edl);
+  const p = opts.config.platforms[opts.platform];
+  const id = randomBytes(6).toString('hex');
+  const plan = planStaging(edl, id);
+  const inputProps: RenderProps = { edl: plan.edl, platform: opts.platform, safe: p.safe, cta: p.cta };
+  await renderStaged({ composition: 'Ad', id, files: plan.files, inputProps, outFile, signal: opts.signal });
+}
+
+export const UGC_MIN_SECONDS = 14;
+export const UGC_MAX_MS = 16000;
+export const UGC_MIN_SHORT_SIDE = 480;
+
+// Caption top edge: below the tallest top safe zone of the enabled platforms, plus 30 px.
+export const ugcTop = (config: Config): number => Math.max(...Object.values(config.platforms).filter((p) => p.enabled).map((p) => p.safe.top)) + 30;
+
+// Refuses a clip that cannot be a finished ad; returns the length to render, in ms.
+export function ugcDurationMs(v: { width: number; height: number; seconds: number } | null): number {
+  if (!v) throw new Error('clip has no video stream');
+  if (!(v.seconds >= UGC_MIN_SECONDS)) throw new Error(`clip is ${v.seconds.toFixed(1)} s, shorter than ${UGC_MIN_SECONDS} s`);
+  if (Math.min(v.width, v.height) < UGC_MIN_SHORT_SIDE) throw new Error(`clip is ${v.width}x${v.height}, short side under ${UGC_MIN_SHORT_SIDE} px`);
+  return Math.min(Math.round(v.seconds * 1000), UGC_MAX_MS);
+}
+
+// One AI clip with its own sound and a single caption at the top.
+export async function renderUgc(opts: { clip: string; caption: string; config: Config; outFile: string; signal?: AbortSignal }): Promise<void> {
+  const outFile = assertInside(opts.outFile, env.outDir());
+  const durationMs = ugcDurationMs(await probeVideo(opts.clip));
+  const id = randomBytes(6).toString('hex');
+  const to = `s/${id}/clip${path.extname(opts.clip).toLowerCase() || '.mp4'}`;
+  const inputProps = { clipSrc: to, caption: opts.caption, top: ugcTop(opts.config), fontPx: opts.config.ugc.captionPx, durationMs };
+  await renderStaged({ composition: 'Ugc', id, files: [{ from: opts.clip, to }], inputProps, outFile, signal: opts.signal });
 }
 
 // Lays out already-extracted 270x480 PNGs 4x2 in one 1080x960 PNG using the "Sheet" composition.

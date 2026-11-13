@@ -22,7 +22,7 @@ const FONTS: [string, string, string, string?][] = [
   ['Fraunces', fraunces600iUrl, '600', 'italic'],
 ];
 let fontsReady: Promise<unknown> | null = null;
-function loadFonts() {
+export function loadFonts() {
   fontsReady ??= Promise.all(
     FONTS.map(async ([family, url, weight, style]) => {
       const f = await new FontFace(family, `url(${url})`, { weight, style: style ?? 'normal' }).load();

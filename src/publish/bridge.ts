@@ -109,9 +109,12 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
         entry.platformSpecificData = { contentType: 'reel', title };
         if (input.visibility === 'private') body.facebookSettings = { draft: true };
       } else if (platform === 'tiktok') {
-        const wanted = input.visibility === 'public' ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY';
+        const isPublic = input.visibility === 'public';
         const info = ok('GET', '/tiktok/creator-info', await call('GET', `/accounts/${encodeURIComponent(account._id)}/tiktok/creator-info?mediaType=video`)).body;
         const offered: string[] = (info.privacyLevels ?? []).map((l: { value: string }) => l.value);
+        // Private is a draft in the account's TikTok inbox: nothing is public until the owner posts it there.
+        // A business account is offered PUBLIC_TO_EVERYONE only, so SELF_ONLY cannot be relied on.
+        const wanted = isPublic ? 'PUBLIC_TO_EVERYONE' : offered.includes('SELF_ONLY') ? 'SELF_ONLY' : offered[0] ?? 'none';
         if (!offered.includes(wanted)) throw new PermanentError(`tiktok does not offer privacy level ${wanted} for this account; offered: ${offered.join(', ') || 'none'}`);
         const i = info.postingLimits?.interactionSettings ?? {};
         body.tiktokSettings = {
@@ -122,7 +125,7 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
           content_preview_confirmed: true,
           express_consent_given: true,
           video_made_with_ai: input.aiDisclosure,
-          ...(input.visibility === 'public' ? { commercialContentType: 'brand_organic' } : {}),
+          ...(isPublic ? { commercialContentType: 'brand_organic' } : { draft: true }),
         };
       }
 
