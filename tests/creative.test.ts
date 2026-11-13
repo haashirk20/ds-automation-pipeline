@@ -148,3 +148,11 @@ test('writeCopy fails loudly on bad copy', async () => {
   await rejects((c) => (c.youtube.caption = 'x'.repeat(2300)), /max 2200/);
   await rejects((c) => (c.youtube.caption = 'Only $19.99 today'), /price/);
 });
+
+test('a look-alike letter from another script is rejected', async () => {
+  const { languageProblems } = await import('../src/creative/claims.ts');
+  const { readFileSync } = await import('node:fs');
+  const brief = JSON.parse(readFileSync('tests/fixtures/samples/samples.json', 'utf8')).brief;
+  assert.equal(languageProblems(brief, 'Our bеstseller shawl', 'x').length, 1); // Cyrillic е
+  assert.deepEqual(languageProblems(brief, 'Café-ready, 150 × 80 cm', 'x'), []);
+});

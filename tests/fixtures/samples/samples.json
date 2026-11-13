@@ -236,8 +236,7 @@
     ],
     "rules": {
       "discountClaims": false,
-      "reviewClaims": false,
-      "claimsFromPhotos": false
+      "reviewClaims": false
     }
   },
   "samples": [

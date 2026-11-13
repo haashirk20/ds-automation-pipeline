@@ -4,7 +4,8 @@ import type { RenderProps } from '../src/contracts.ts';
 import { alpha, cardSize, capLines, clamp, easeOut, endShot, fitHeadline, FH, FW, legible, mix, onColor, ShotView, Tracks, useCtx, type Ctx, type ShotLike } from './common.tsx';
 
 // Light and calm: palette background, big floating rounded cards, serif type, crossfades, lower-third captions.
-export const CAPTION_STYLE = { fontPx: 64, textHex: '#3A2A20', plateHex: '#FFFFFF', plateAlpha: 0.92 };
+import { CAPTION_STYLES } from './caption-style.ts';
+export const CAPTION_STYLE = CAPTION_STYLES['cozy-soft'];
 
 const Background: React.FC<{ c: Ctx }> = ({ c }) => {
   const { pal, t } = c;

@@ -45,7 +45,7 @@ export const Brief = z.object({
   disclosures: z.array(z.string()), // must appear on the end card and in every caption
   angles: z.array(z.string()), // from tags; they steer the hook and are never stated as claims
   shots: z.array(Shot),
-  rules: z.object({ discountClaims: z.boolean(), reviewClaims: z.boolean(), claimsFromPhotos: z.boolean() }),
+  rules: z.object({ discountClaims: z.boolean(), reviewClaims: z.boolean() }),
 });
 export type Brief = z.infer<typeof Brief>;
 

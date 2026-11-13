@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
+import { childEnv } from './env.ts';
 
 // Runs a command with an argument array (never a shell string). Resolves with stdout; on a non-zero
 // exit, a timeout or a spawn error throws an Error carrying the last lines of stderr.
 export function run(cmd: string, args: string[], opts: { stdin?: string; timeoutMs: number; cwd?: string }): Promise<string> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'], timeout: opts.timeoutMs });
+    const p = spawn(cmd, args, { cwd: opts.cwd, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'], timeout: opts.timeoutMs });
     let out = '';
     let err = '';
     p.stdout.on('data', (d) => (out += d));

@@ -4,7 +4,8 @@ import type { RenderProps } from '../src/contracts.ts';
 import { alpha, backOut, cardSize, clamp, easeOut, endShot, fitHeadline, FH, FW, legible, onColor, ShotView, Tracks, useCtx, capLines, type Ctx } from './common.tsx';
 
 // Dark and punchy: full-bleed photo, slammed headline, hard-cut tilted cards, sticker price.
-export const CAPTION_STYLE = { fontPx: 76, textHex: '#FFFFFF', plateHex: '#000000', plateAlpha: 0.85 };
+import { CAPTION_STYLES } from './caption-style.ts';
+export const CAPTION_STYLE = CAPTION_STYLES['kinetic-bold'];
 
 const CAP_H = Math.round(2 * CAPTION_STYLE.fontPx * 1.05 + 36);
 

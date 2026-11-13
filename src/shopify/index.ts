@@ -1,4 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { Transform } from 'node:stream';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { Brief } from '../contracts.ts';
 import { env, type Config } from '../config/index.ts';
@@ -8,16 +11,13 @@ import { buildBrief, normalize, type Product } from './brief.ts';
 import { defaultSleep, fetchShop, getWithRetry, type Fetch, type Sleep } from './fetch.ts';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+export const MAX_PRODUCTS = 20;
+export const MAX_PHOTOS = 20;
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 const SAFE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const DEFAULT_TAGS = join(import.meta.dirname, '../../config/photo-tags.json');
 
-export type IngestDeps = { fetch: Fetch; sleep: Sleep; tagsPath: string };
-
-export function getBrief(db: Db, handle: string): Brief | null {
-  const row = db.prepare('SELECT json FROM briefs WHERE handle = ?').get(handle) as { json: string } | undefined;
-  return row ? Brief.parse(JSON.parse(row.json)) : null;
-}
+export type IngestDeps = { fetch: Fetch; sleep: Sleep; tagsPath: string; maxImageBytes?: number };
 
 export function listBriefs(db: Db): Brief[] {
   return (db.prepare('SELECT json FROM briefs ORDER BY handle').all() as { json: string }[]).map((r) => Brief.parse(JSON.parse(r.json)));
@@ -27,26 +27,33 @@ export function listBriefs(db: Db): Brief[] {
 async function downloadImages(p: Product, dataDir: string, deps: IngestDeps): Promise<Product> {
   const root = resolve(dataDir);
   const kept: Product['images'] = [];
-  for (const img of p.images) {
+  if (p.images.length > MAX_PHOTOS) log.warn('ingest: photos dropped', { handle: p.handle, kept: MAX_PHOTOS, dropped: p.images.length - MAX_PHOTOS });
+  for (const img of p.images.slice(0, MAX_PHOTOS)) {
     const skip = (why: string) => log.warn('ingest: image skipped', { handle: p.handle, url: img.url, why });
     if (!img.url.startsWith('https://cdn.shopify.com/')) { skip('not a Shopify CDN url'); continue; }
     if (!SAFE_NAME.test(img.basename) || img.basename === '.' || img.basename === '..') { skip('unsafe file name'); continue; }
     const dest = resolve(root, 'assets', p.handle, img.basename);
     if (!dest.startsWith(root + sep)) { skip('outside data dir'); continue; }
     if (existsSync(dest) && statSync(dest).size > 0) { kept.push(img); continue; }
+    const limit = deps.maxImageBytes ?? MAX_IMAGE_BYTES;
+    const part = `${dest}.part-${process.pid}`;
     try {
       const res = await getWithRetry(img.url, deps.fetch, deps.sleep);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       if (!(res.headers.get('content-type') ?? '').startsWith('image/')) throw new Error('not an image');
-      if (Number(res.headers.get('content-length') ?? 0) > MAX_IMAGE_BYTES) throw new Error('too large');
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > MAX_IMAGE_BYTES) throw new Error('too large');
-      if (buf.length === 0) throw new Error('empty');
+      if (Number(res.headers.get('content-length') ?? 0) > limit) throw new Error('too large');
       mkdirSync(dirname(dest), { recursive: true });
-      writeFileSync(dest, buf);
+      // Stream to a temporary file with a byte limit; only a complete file is renamed into place.
+      let n = 0;
+      const count = new Transform({ transform(chunk, _e, cb) { n += chunk.length; cb(n > limit ? new Error('too large') : null, chunk); } });
+      await pipeline(Readable.fromWeb(res.body as never), count, createWriteStream(part));
+      if (n === 0) throw new Error('empty');
+      renameSync(part, dest);
       kept.push(img);
     } catch (e) {
       skip(`download failed: ${(e as Error).message}`);
+    } finally {
+      rmSync(part, { force: true });
     }
   }
   return { ...p, images: kept };
@@ -58,7 +65,8 @@ export async function ingest(db: Db, config: Config, now: Date, deps: IngestDeps
   const { meta, products } = await fetchShop(shop, deps.fetch, deps.sleep);
   const tagsText = existsSync(deps.tagsPath) ? readFileSync(deps.tagsPath, 'utf8') : null;
   const briefs: Brief[] = [];
-  for (const raw of products) {
+  if (products.length > MAX_PRODUCTS) log.warn('ingest: products dropped', { kept: MAX_PRODUCTS, dropped: products.length - MAX_PRODUCTS });
+  for (const raw of products.slice(0, MAX_PRODUCTS)) {
     if (!SAFE_HANDLE.test(raw.handle)) { log.warn('ingest: product skipped, unsafe handle', { handle: raw.handle }); continue; }
     const p = await downloadImages(normalize(raw, shop), env.dataDir(), deps);
     const brief = buildBrief(p, meta, config, tagsText);

@@ -21,7 +21,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_PYTHON_PREFERENCE=only-managed UV_CACHE_DIR=/tmp/uv-cache
 COPY tools/tts/pyproject.toml tools/tts/uv.lock tools/tts/
 COPY tools/music/pyproject.toml tools/music/uv.lock tools/music/
-RUN uv python install 3.12 \
+RUN uv python install 3.12.16 \
   && uv sync --frozen --no-dev --project tools/tts \
   && uv sync --frozen --no-dev --project tools/music \
   && rm -rf /tmp/uv-cache
@@ -30,13 +30,18 @@ RUN uv python install 3.12 \
 ENV HF_HOME=/opt/hf
 COPY tools/ tools/
 RUN uv run --no-sync --project tools/tts python tools/tts/tts.py --warm && rm -rf /tmp/uv-cache
+# The model cache is root-owned and read-only to the node user; offline mode needs no writes there.
+RUN chmod -R a-w /opt/hf
 ENV HF_HUB_OFFLINE=1 UV_NO_SYNC=1
 
 COPY src/ src/
 COPY config/ config/
 COPY templates/ templates/
 COPY prompts/ prompts/
-# Named volumes copy this ownership on first use. The Hugging Face cache is written by the node user.
-RUN mkdir -p data out && chown -R node:node data out /opt/hf
+# The Remotion bundle is made once, here, and reused by every render; staging writes into it, so the node user owns it.
+ENV BUNDLE_CACHE_DIR=/opt/bundle
+RUN node -e "import('./src/render/render.ts').then((m) => m.getBundle())" && chown -R node:node /opt/bundle
+# Named volumes copy this ownership on first use.
+RUN mkdir -p data out && chown node:node data out
 USER node
 CMD ["node","src/cli.ts","run"]

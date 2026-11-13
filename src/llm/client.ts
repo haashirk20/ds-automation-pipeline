@@ -1,7 +1,7 @@
 // The only place that talks to the Anthropic API. One request per call, structured output, no tools.
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ZodType } from 'zod';
 import { env, type Config } from '../config/index.ts';
@@ -109,6 +109,7 @@ function record(db: Db, now: Date, req: { purpose: string; slotId?: string }, mo
 export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, now: Date): Promise<T> {
   if (env.llmStub()) {
     const file = join(import.meta.dirname, '../../tests/fixtures/llm', `${req.purpose}.json`);
+    if (!existsSync(file)) throw new Error(`LLM_STUB=1 needs tests/fixtures, which are not in the Docker image: mount them (-v ./tests/fixtures:/app/tests/fixtures:ro). Missing ${file}`);
     const fixture = JSON.parse(readFileSync(file, 'utf8'));
     // The fixtures were written for the sample brief. The stub makes them fit the brief and the hook it is given:
     // the script opens with the asked-for hook, and fact ids the brief does not have are dropped.
@@ -116,7 +117,7 @@ export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, no
     const ask = req.purpose === 'script' ? /headline \(show\): (.+)\nsay: (.+)\n/.exec(req.user) : null;
     if (ask) fixture.beats[0].chunks = [{ say: ask[2], show: ask[1] }];
     for (const b of fixture.beats ?? []) b.factIds = b.factIds.filter((f: string) => known.has(f));
-    for (const v of fixture.verdicts ?? []) if (v.factId && !known.has(v.factId)) v.factId = null;
+    for (const v of fixture.verdicts ?? []) if (!known.has(v.factId)) v.factId = [...known][0] ?? null;
     const out = req.schema.parse(fixture);
     record(db, now, req, 'stub', { input_tokens: 0, output_tokens: 0 }, 0);
     return out;

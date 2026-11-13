@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { env, type Config, type PlatformName } from '../config/index.ts';
-import { TEMPLATES, type Brief, type Edl, type Platform, type Script } from '../contracts.ts';
+import { CAPTION_STYLES } from '../../templates/caption-style.ts';
+import { Script, TEMPLATES, type Brief, type Edl, type Platform } from '../contracts.ts';
 import { assembleEdl, ScriptTooLongError, ttsLines, type AssembleInput } from '../creative/assemble.ts';
-import { writeCopy } from '../creative/copy.ts';
+import { CopyRejectedError, copyProblems, fallbackCopy, writeCopy, type PlatformCopy } from '../creative/copy.ts';
+import { checkScript } from '../creative/claims.ts';
 import { pickHook, refillHooks, type Hook } from '../creative/hooks.ts';
 import { writeScript } from '../creative/script.ts';
-import type { Db } from '../db/index.ts';
+import { kvGet, kvSet, type Db } from '../db/index.ts';
 import { LlmCapError, LlmRefusalError, RetryableLlmError } from '../llm/client.ts';
 import { makeBed } from '../music/index.ts';
 import { alert } from '../ops/alert.ts';
@@ -62,28 +64,6 @@ export function chooseVariant(slotId: string, ordinal: number, prevTemplate: str
   return { template, palette: palettes[(h >>> 8) % palettes.length], voice: voices[ordinal % voices.length], musicSeed: h % 1_000_000 };
 }
 
-// The template files are .tsx, which Node cannot import, so the caption style is read from the source
-// of the file that defines CAPTION_STYLE (following local imports and re-exports).
-export function captionStyleOf(template: string, root = path.resolve(import.meta.dirname, '../../templates'), seen = new Set<string>()): { fontPx: number; textHex: string; plateHex: string; plateAlpha: number } {
-  const file = path.join(root, `${template.replace(/\.tsx$/, '')}.tsx`);
-  if (seen.has(file)) throw new Error(`CAPTION_STYLE not found for ${template}`);
-  seen.add(file);
-  const src = readFileSync(file, 'utf8');
-  const block = /export const CAPTION_STYLE\s*=\s*\{([^}]*)\}/.exec(src)?.[1];
-  if (block) {
-    const get = (k: string, re: string) => new RegExp(`${k}\\s*:\\s*${re}`).exec(block)?.[1];
-    const s = { fontPx: Number(get('fontPx', '(\\d+)')), textHex: get('textHex', "'(#[0-9A-Fa-f]{6})'")!, plateHex: get('plateHex', "'(#[0-9A-Fa-f]{6})'")!, plateAlpha: Number(get('plateAlpha', '([\\d.]+)')) };
-    if (!s.fontPx || !s.textHex || !s.plateHex || !s.plateAlpha) throw new Error(`CAPTION_STYLE in ${file} is not a plain literal`);
-    return s;
-  }
-  for (const m of src.matchAll(/from\s+'\.\/([\w-]+)(?:\.tsx)?'/g)) {
-    try {
-      return captionStyleOf(m[1], root, seen);
-    } catch { /* try the next import */ }
-  }
-  throw new Error(`CAPTION_STYLE not found for ${template}`);
-}
-
 // Seams for tests; production uses the real modules.
 export type ProduceDeps = {
   ingest: (now: Date) => Promise<void>;
@@ -91,57 +71,103 @@ export type ProduceDeps = {
   makeBed: typeof makeBed;
   render: typeof renderEdl;
   qa: typeof runQa;
+  signal?: AbortSignal; // SIGTERM from the parent: stop rendering and leave the slot for stale recovery
+  ingestDeadlineMs: number;
 };
 
 const SPEEDS = [1.0, 1.06, 1.12];
-type Copy = Record<Platform, { title: string; text: string }>;
+const DAY_MS = 24 * 3600 * 1000;
 type Slot = { id: string; local_date: string; idx: number };
 const before = 'local_date < ? OR (local_date = ? AND idx < ?)'; // slots ahead of this one, in order
 
-async function pickBrief(db: Db, slot: Slot, ordinal: number, now: Date, d: ProduceDeps): Promise<Brief> {
-  let briefs = listBriefs(db);
-  if (!briefs.length) {
-    await d.ingest(now); // throws when the store cannot be read
-    briefs = listBriefs(db);
+// The store could not be read and there is no stored brief: the slot goes back to 'planned'.
+export class NoBriefError extends Error {}
+// Another producer owns the slot now; this one must stop writing.
+export class ClaimLostError extends Error {}
+
+// Daily, under an overall deadline. A failure alerts and keeps the stored brief; retry in an hour.
+async function ensureIngest(db: Db, now: Date, d: ProduceDeps): Promise<void> {
+  const last = kvGet(db, 'ingest_at');
+  if (last && now.getTime() - Date.parse(last) < DAY_MS) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([d.ingest(now), new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('ingest deadline exceeded')), d.ingestDeadlineMs)))]);
+    kvSet(db, 'ingest_at', now.toISOString());
+  } catch (e) {
+    kvSet(db, 'ingest_at', new Date(now.getTime() - DAY_MS + 3600_000).toISOString());
+    await alert(db, 'ingest_failed', 'ingest', `ingest failed, using the stored brief: ${e}`, now);
+  } finally {
+    clearTimeout(timer);
   }
-  if (!briefs.length) throw new Error(`no product brief for ${slot.id}: ingest produced none`);
+}
+
+function pickBrief(db: Db, ordinal: number): Brief {
+  const briefs = listBriefs(db);
+  if (!briefs.length) throw new NoBriefError('no product brief and the store could not be read');
   return briefs[ordinal % briefs.length];
 }
 
 // Oldest finished slot of this product, old enough that its script may run again, with its stored copy.
-function oldSlot(db: Db, config: Config, handle: string, now: Date): { hookId: number | null; script: Script; copy: Copy } | null {
+// A stored script must still pass every check against the current brief.
+function oldSlot(db: Db, config: Config, brief: Brief, now: Date): { hookId: number | null; script: Script } | null {
   const cutoff = addDays(localDateOf(now, config.timezone), -config.hooks.noRepeatDays);
-  const rows = db.prepare("SELECT id, hook_id, master_json FROM slots WHERE product_handle = ? AND status IN ('ready','done') AND master_json IS NOT NULL AND local_date < ? ORDER BY local_date, idx").all(handle, cutoff) as { id: string; hook_id: number | null; master_json: string }[];
+  const rows = db.prepare("SELECT hook_id, master_json FROM slots WHERE product_handle = ? AND status IN ('ready','done') AND master_json IS NOT NULL AND local_date < ? ORDER BY local_date, idx").all(brief.product.handle, cutoff) as { hook_id: number | null; master_json: string }[];
   for (const r of rows) {
-    const copy = {} as Copy;
-    for (const x of db.prepare('SELECT platform, title, caption FROM renders WHERE slot_id = ? AND title IS NOT NULL').all(r.id) as { platform: Platform; title: string; caption: string }[]) copy[x.platform] = { title: x.title, text: x.caption };
-    if (enabledPlatforms(config).every((p) => copy[p as Platform])) return { hookId: r.hook_id, script: JSON.parse(r.master_json).script, copy };
+    const parsed = Script.safeParse(JSON.parse(r.master_json).script);
+    if (!parsed.success) continue;
+    const problems = checkScript(brief, parsed.data);
+    if (problems.length) {
+      log.warn('stored script rejected against the current brief', { problems: problems.slice(0, 3) });
+      continue;
+    }
+    return { hookId: r.hook_id, script: parsed.data };
   }
   return null;
 }
 
+// Model copy, or a deterministic fallback from the brief when the copy call fails for any reason.
+async function getCopy(db: Db, config: Config, brief: Brief, script: Script, now: Date, slotId: string): Promise<Record<Platform, PlatformCopy>> {
+  try {
+    return await writeCopy(db, config, brief, script, now, slotId);
+  } catch (e) {
+    log.warn('copy writer failed, using the fallback copy', { slot: slotId, error: String(e) });
+    const copy = fallbackCopy(brief, script);
+    const problems = copyProblems(brief, copy);
+    if (problems.length) throw new CopyRejectedError(problems);
+    return copy;
+  }
+}
+
 const isOutage = (e: unknown, refusal = false) => e instanceof LlmCapError || e instanceof RetryableLlmError || (refusal && e instanceof LlmRefusalError);
 
-// Steps 1 to 10 for one slot; throws on failure.
-async function produce(db: Db, config: Config, slot: Slot, dir: string, now: Date, d: ProduceDeps): Promise<void> {
+// Steps 1 to 10 for one slot; throws on failure. Every write is fenced by the claim time.
+async function produce(db: Db, config: Config, slot: Slot, dir: string, token: string, now: Date, d: ProduceDeps): Promise<void> {
   const t0 = Date.now();
+  // Throws when this producer no longer owns the slot or was told to stop.
+  const hold = () => {
+    if (d.signal?.aborted) throw new Error('cancelled');
+    const r = db.prepare("UPDATE slots SET updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(token, slot.id, token);
+    if (r.changes !== 1) throw new ClaimLostError(`claim on ${slot.id} lost`);
+  };
+  await ensureIngest(db, now, d);
   const ordinal = (db.prepare(`SELECT COUNT(*) AS n FROM slots WHERE ${before}`).get(slot.local_date, slot.local_date, slot.idx) as { n: number }).n;
-  const brief = await pickBrief(db, slot, ordinal, now, d);
+  const brief = pickBrief(db, ordinal);
   const handle = brief.product.handle;
-  const work = path.join(dir, 'work');
+  const work = path.join(dir, `attempt-${Date.parse(token)}`, 'work');
   mkdirSync(work, { recursive: true });
+  const attemptDir = path.dirname(work);
 
   // Hook and script, or the degraded path when the model is unavailable.
   try {
     await refillHooks(db, config, brief, now);
   } catch (e) {
-    if (!isOutage(e)) throw e;
-    log.warn('hook refill skipped', { slot: slot.id, error: String(e) });
+    log.warn('hook refill skipped', { slot: slot.id, error: String(e) }); // a failed refill never fails a slot
   }
+  hold();
   const hook: Hook | null = pickHook(db, config, handle, now);
   let script: Script | null = null;
   let hookId: number | null = hook?.id ?? null;
-  let stored: ReturnType<typeof oldSlot> = null;
+  let degraded = false;
   if (hook) {
     try {
       script = await writeScript(db, config, brief, hook, now, slot.id);
@@ -151,11 +177,13 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, now: Dat
     }
   }
   if (!script) {
-    stored = oldSlot(db, config, handle, now);
-    if (!stored) throw new Error('no hook or script available and no old slot to reuse');
+    const stored = oldSlot(db, config, brief, now);
+    if (!stored) throw new Error('no hook or script available and no usable old slot to reuse');
     ({ script, hookId } = stored);
+    degraded = true;
     await alert(db, 'degraded', slot.id, `${slot.id} reuses a stored script: the model is unavailable or no hook is free`, now);
   }
+  hold();
 
   // Variant, music, voice.
   const prev = db.prepare(`SELECT master_json FROM slots WHERE master_json IS NOT NULL AND (${before}) ORDER BY local_date DESC, idx DESC LIMIT 1`).get(slot.local_date, slot.local_date, slot.idx) as { master_json: string } | undefined;
@@ -184,56 +212,86 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, now: Dat
     return null;
   };
   let input = await fit(script);
-  if (!input && hook && !stored) {
+  if (!input && hook && !degraded) {
     script = await writeScript(db, config, brief, hook, now, slot.id); // once more; a failure here fails the slot
     input = await fit(script);
   }
   if (!input) throw new Error('script does not fit 15 seconds even at the fastest voice speed');
 
-  // Renders. If a platform fails QA, the whole slot is rendered once more with the next template.
-  const files = enabledPlatforms(config) as PlatformName[];
+  // Renders go to a per-attempt folder. If a platform fails QA, the whole slot is rendered once more with the next template.
+  const platforms = enabledPlatforms(config) as PlatformName[];
   let failed: string[] = [];
+  let edl!: Edl;
+  let variantUsed = variant;
+  const qaOf = {} as Record<string, unknown>;
   for (let retry = 0; retry < 2; retry++) {
-    const v = chooseVariant(slot.id, ordinal, prevTemplate, config.creative.voices, retry); // only the template and palette change
-    const edl = assembleEdl({ ...input, template: v.template, palette: v.palette });
-    db.prepare("UPDATE slots SET product_handle = ?, hook_id = ?, tier = 't0', master_json = ? WHERE id = ?").run(handle, hookId, JSON.stringify({ script, edl, variant: v }), slot.id);
-    const style = captionStyleOf(v.template);
+    variantUsed = chooseVariant(slot.id, ordinal, prevTemplate, config.creative.voices, retry); // only the template and palette change
+    edl = assembleEdl({ ...input, template: variantUsed.template, palette: variantUsed.palette });
+    const styleOk = captionStyleOk(CAPTION_STYLES[variantUsed.template]);
     failed = [];
-    for (const platform of files) {
-      const file = path.join(dir, `${platform}.mp4`);
-      await d.render({ edl, platform, config, outFile: file });
+    for (const platform of platforms) {
+      hold();
+      const file = path.join(attemptDir, `${platform}.mp4`);
+      await d.render({ edl, platform, config, outFile: file, signal: d.signal });
       const qa = await d.qa(file);
-      const bad = [...qa.checks.filter((c) => !c.pass).map((c) => c.name), ...(captionStyleOk(style) ? [] : ['caption style'])];
+      qaOf[platform] = qa;
+      const bad = [...qa.checks.filter((c) => !c.pass).map((c) => c.name), ...(styleOk ? [] : ['caption style'])];
       if (bad.length) failed.push(`${platform}: ${bad.join(', ')}`);
-      db.prepare('INSERT OR REPLACE INTO renders (slot_id, platform, file_path, sha256, qa_pass, qa_json, ai_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
-        .run(slot.id, platform, file, createHash('sha256').update(readFileSync(file)).digest('hex'), bad.length ? 0 : 1, JSON.stringify(qa), JSON.stringify(edl.ai), now.toISOString());
     }
     if (!failed.length) break;
-    log.warn('qa failed, trying the next template', { slot: slot.id, template: v.template, failed });
+    log.warn('qa failed, trying the next template', { slot: slot.id, template: variantUsed.template, failed });
   }
   if (failed.length) throw new Error(`QA failed after two templates: ${failed.join('; ')}`);
 
-  // Copy.
-  const copy: Copy = stored ? stored.copy : await writeCopy(db, config, brief, script, now, slot.id);
-  for (const p of files) db.prepare('UPDATE renders SET title = ?, caption = ? WHERE slot_id = ? AND platform = ?').run(copy[p].title, copy[p].text, slot.id, p);
-  db.prepare('UPDATE slots SET cost_usd = (SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE slot_id = ?) WHERE id = ?').run(slot.id, slot.id);
-  log.info('slot produced', { slot: slot.id, seconds: Math.round((Date.now() - t0) / 100) / 10, degraded: !!stored });
+  // Copy: a stored script keeps the copy fallback below; a fresh one gets model copy, or the fallback when the model is down.
+  hold();
+  const copy = await getCopy(db, config, brief, script, now, slot.id);
+  hold();
+
+  // Claim confirmed and everything passed: move the files into place and flip the slot, in one transaction.
+  const master = JSON.stringify({ script, edl, variant: variantUsed });
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const r = db.prepare(
+      `UPDATE slots SET product_handle = ?, hook_id = ?, tier = 't0', master_json = ?, status = 'ready', error = NULL, updated_at = ?,
+         cost_usd = (SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE slot_id = ?)
+       WHERE id = ? AND status = 'producing' AND claimed_at = ?`,
+    ).run(handle, hookId, master, token, slot.id, slot.id, token);
+    if (r.changes !== 1) throw new ClaimLostError(`claim on ${slot.id} lost`);
+    for (const platform of platforms) {
+      const tmp = path.join(attemptDir, `${platform}.mp4`);
+      const final = path.join(dir, `${platform}.mp4`);
+      const sha = createHash('sha256').update(readFileSync(tmp)).digest('hex');
+      renameSync(tmp, final);
+      db.prepare('INSERT OR REPLACE INTO renders (slot_id, platform, file_path, sha256, qa_pass, qa_json, ai_json, title, caption, created_at) VALUES (?,?,?,?,1,?,?,?,?,?)')
+        .run(slot.id, platform, final, sha, JSON.stringify(qaOf[platform]), JSON.stringify(edl.ai), copy[platform].title, copy[platform].text, token);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  log.info('slot produced', { slot: slot.id, seconds: Math.round((Date.now() - t0) / 100) / 10, degraded });
 }
 
 export async function produceSlot(db: Db, config: Config, slotId: string, now: Date, deps: Partial<ProduceDeps> = {}): Promise<void> {
   const ts = now.toISOString();
-  // Atomic claim: only one caller moves the slot out of 'planned'.
-  const claim = db.prepare("UPDATE slots SET status = 'producing', attempt = attempt + 1, updated_at = ? WHERE id = ? AND status = 'planned'").run(ts, slotId);
+  // Atomic claim: only one caller moves the slot out of 'planned'. The claim time fences every later write.
+  const claim = db.prepare("UPDATE slots SET status = 'producing', attempt = attempt + 1, updated_at = ?, claimed_at = ? WHERE id = ? AND status = 'planned'").run(ts, ts, slotId);
   if (claim.changes !== 1) return;
-  const setSlot = (status: string, error: string | null) =>
-    db.prepare('UPDATE slots SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(status, error, ts, slotId);
-  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ...deps };
+  const fenced = (status: string, error: string | null, attempt = 0) =>
+    db.prepare("UPDATE slots SET status = ?, error = ?, attempt = attempt + ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(status, error, attempt, ts, slotId, ts).changes === 1;
+  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, ingestDeadlineMs: 5 * 60000, ...deps };
   try {
     const slot = db.prepare('SELECT id, local_date, idx FROM slots WHERE id = ?').get(slotId) as Slot;
-    await produce(db, config, slot, safeDir(env.outDir(), slot.local_date, slotId), now, d);
-    setSlot('ready', null);
+    await produce(db, config, slot, safeDir(env.outDir(), slot.local_date, slotId), ts, now, d);
   } catch (e) {
-    setSlot('failed', String(e));
-    await alert(db, 'produce_failed', slotId, `produce failed for ${slotId}: ${e}`, now);
+    if (d.signal?.aborted) throw e; // cancelled: the slot stays 'producing' and stale recovery takes it
+    if (e instanceof ClaimLostError) return log.warn('claim lost, producer stopped', { slot: slotId });
+    if (e instanceof NoBriefError) {
+      if (fenced('planned', null, -1)) await alert(db, 'ingest_failed', 'no-brief', `${slotId} waits: ${e.message}`, now);
+      return;
+    }
+    if (fenced('failed', String(e))) await alert(db, 'produce_failed', slotId, `produce failed for ${slotId}: ${e}`, now);
   }
 }

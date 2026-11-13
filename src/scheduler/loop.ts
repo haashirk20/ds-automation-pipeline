@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { env, type Config } from '../config/index.ts';
-import { kvGet, kvSet, type Db } from '../db/index.ts';
+import { kvSet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { publishDue } from '../publish/index.ts';
@@ -11,7 +11,7 @@ import { addDays, localDateOf, localHHMM } from './time.ts';
 // Resolves when the producer for one slot has exited, however it exited.
 export type Spawn = (slotId: string, now: Date) => Promise<void>;
 export type Producer = { busy(): boolean; start(slotId: string, now: Date): Promise<void> };
-export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; ingest?: (now: Date) => Promise<void>; wait?: boolean };
+export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean };
 
 // One slot at a time. start() returns a promise the caller may ignore.
 export function makeProducer(spawnFn: Spawn): Producer {
@@ -26,26 +26,38 @@ export function makeProducer(spawnFn: Spawn): Producer {
   };
 }
 
-// Runs `produce --slot` in a child process with the same environment. The whole process group is
-// killed after the timeout, so a hung Chrome goes with it; the stale-'producing' recovery does the rest.
-export function childSpawn(config: Config): Spawn {
+// Runs `produce --slot` in a child process with the same environment. After the timeout the child gets
+// SIGTERM (it cancels its Chrome and exits); after the grace period the whole process group gets SIGKILL.
+// A hung producer then leaves the slot 'producing', and the stale recovery in tick() takes it.
+export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?: number; argv?: (slotId: string, now: Date) => string[] } = {}): Spawn {
+  const timeoutMs = opts.timeoutMs ?? config.render.produceTimeoutMinutes * 60000;
+  const graceMs = opts.graceMs ?? 20_000;
+  const argv = opts.argv ?? ((slotId, now) => [process.argv[1], '--now', now.toISOString(), 'produce', '--slot', slotId]);
   return (slotId, now) =>
     new Promise((resolve) => {
-      const child = spawn(process.execPath, [process.argv[1], '--now', now.toISOString(), 'produce', '--slot', slotId], { stdio: 'inherit', env: process.env, detached: true });
+      const child = spawn(process.execPath, argv(slotId, now), { stdio: 'inherit', env: process.env, detached: true });
+      const signal = (sig: NodeJS.Signals) => {
+        try { process.kill(-child.pid!, sig); } catch { /* already gone */ }
+      };
+      let killer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
-        log.error('produce timed out, killing', { slot: slotId });
-        try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
-      }, config.render.produceTimeoutMinutes * 60000);
-      child.on('error', (e) => { clearTimeout(timer); log.error('produce child failed to start', { error: String(e) }); resolve(); });
-      child.on('close', (code, signal) => {
+        log.error('produce timed out, terminating', { slot: slotId });
+        signal('SIGTERM');
+        killer = setTimeout(() => signal('SIGKILL'), graceMs);
+      }, timeoutMs);
+      const done = () => {
         clearTimeout(timer);
-        if (code !== 0) log.warn('produce child exited abnormally', { slot: slotId, code, signal });
+        clearTimeout(killer);
+        signal('SIGKILL'); // anything the child left in its group
         resolve();
+      };
+      child.on('error', (e) => { log.error('produce child failed to start', { error: String(e) }); done(); });
+      child.on('close', (code, sig) => {
+        if (code !== 0) log.warn('produce child exited abnormally', { slot: slotId, code, signal: sig });
+        done();
       });
     });
 }
-
-const DAY_MS = 24 * 3600 * 1000;
 
 const hasSlots = (db: Db, date: string) => !!db.prepare('SELECT 1 FROM slots WHERE local_date = ?').get(date);
 
@@ -60,24 +72,21 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   const stuck = db.prepare("SELECT id, attempt FROM slots WHERE status = 'producing' AND updated_at < ?").all(cutoff) as { id: string; attempt: number }[];
   for (const s of stuck) {
     const retry = s.attempt < config.render.maxAttempts;
-    db.prepare('UPDATE slots SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(retry ? 'planned' : 'failed', 'produce timed out', now.toISOString(), s.id);
-    if (!retry) await alert(db, 'produce_failed', s.id, `produce timed out for ${s.id}`, now);
+    const moved = db.prepare("UPDATE slots SET status = ?, error = ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND updated_at < ?").run(retry ? 'planned' : 'failed', 'produce timed out', now.toISOString(), s.id, cutoff).changes === 1;
+    if (moved && !retry) await alert(db, 'produce_failed', s.id, `produce timed out for ${s.id}`, now);
   }
 
-  // At most once a day. A failure keeps the stored brief and tries again in an hour.
-  const last = kvGet(db, 'ingest_at');
-  if (deps.ingest && (!last || now.getTime() - Date.parse(last) >= DAY_MS)) {
-    try {
-      await deps.ingest(now);
-      kvSet(db, 'ingest_at', now.toISOString());
-    } catch (e) {
-      kvSet(db, 'ingest_at', new Date(now.getTime() - DAY_MS + 3600_000).toISOString());
-      await alert(db, 'ingest_failed', 'ingest', `ingest failed, using the stored brief: ${e}`, now);
+  // Only slots that still have something to publish in time are worth producing.
+  const lateBefore = new Date(now.getTime() - config.publish.maxLatenessMinutes * 60000).toISOString();
+  const planned: { id: string }[] = [];
+  for (const { id } of db.prepare("SELECT id FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string }[]) {
+    if (db.prepare("SELECT 1 FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").get(id, lateBefore)) planned.push({ id });
+    else {
+      db.prepare("UPDATE slots SET status = 'failed', error = 'too late', updated_at = ? WHERE id = ? AND status = 'planned'").run(now.toISOString(), id);
+      await alert(db, 'produce_failed', id, `${id} was not produced: too late`, now);
     }
   }
-
   // Production runs in a child process so publishing continues meanwhile. `wait` (run --once) drains every planned slot first.
-  const planned = db.prepare("SELECT id FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string }[];
   if (deps.wait) for (const { id } of planned) await deps.producer.start(id, now);
   else if (planned.length && !deps.producer.busy()) void deps.producer.start(planned[0].id, now);
 

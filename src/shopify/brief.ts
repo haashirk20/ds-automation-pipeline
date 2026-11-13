@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { log } from '../ops/log.ts';
 import { Brief, Shot } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
 import type { RawProduct, ShopMeta } from './fetch.ts';
@@ -34,6 +35,16 @@ export function descriptionLines(html: string): string[] {
     .filter((l) => l && !/^[^:]*:$/.test(l));
 }
 
+export const MAX_LINES = 40;
+export const MAX_LINE_CHARS = 300;
+// At most 40 description lines of at most 300 characters; what is dropped is logged.
+export function limitLines(lines: string[], handle: string): string[] {
+  const short = lines.filter((l) => l.length <= MAX_LINE_CHARS);
+  const out = short.slice(0, MAX_LINES);
+  if (out.length < lines.length) log.warn('ingest: description lines dropped', { handle, tooLong: lines.length - short.length, overLimit: short.length - out.length });
+  return out;
+}
+
 export function imageBasename(url: string): string {
   return url.split('?')[0].split('#')[0].split('/').pop() ?? '';
 }
@@ -46,7 +57,7 @@ export function normalize(raw: RawProduct, shop: string): Product {
     vendor: raw.vendor,
     tags: Array.isArray(raw.tags) ? raw.tags : raw.tags.split(',').map((t) => t.trim()).filter(Boolean),
     updatedAt: raw.updated_at,
-    descriptionLines: descriptionLines(raw.body_html ?? ''),
+    descriptionLines: limitLines(descriptionLines(raw.body_html ?? ''), raw.handle),
     url: `https://${shop}/products/${raw.handle}`,
     options: raw.options.map((o) => ({ name: o.name, values: o.values })),
     variants: raw.variants.map((v) => ({ title: v.title, price: Number(v.price), compareAtPrice: v.compare_at_price == null ? null : Number(v.compare_at_price), available: v.available })),
@@ -73,7 +84,7 @@ export function parsePhotoTags(text: string | null) {
 }
 
 const CLAIM_TAG = /best.?sell|top.?rated|award|#\s?1|number one|guarantee/i;
-const DISCLOSURE = /not included|sold separately|batter(y|ies) (not included|required)|requires? /i;
+const DISCLOSURE = /not included|sold separately|batter(y|ies) (not included|required)|requires? |choking hazard|warning|caution|keep away|not suitable|ages? \d+ ?(and up|\+)/i;
 
 export function buildBrief(p: Product, shop: ShopMeta, config: Config, tagsText: string | null): Brief {
   const tags = parsePhotoTags(tagsText);
@@ -103,7 +114,7 @@ export function buildBrief(p: Product, shop: ShopMeta, config: Config, tagsText:
     ids.add(s.id);
   }
 
-  const sourceHash = createHash('sha256').update(JSON.stringify([p, shop, tagsText, config.claims, config.brand])).digest('hex');
+  const sourceHash = createHash('sha256').update(JSON.stringify([p, shop, tagsText, config.brand])).digest('hex');
   return Brief.parse({
     version: 1,
     sourceHash,
@@ -116,7 +127,6 @@ export function buildBrief(p: Product, shop: ShopMeta, config: Config, tagsText:
     rules: {
       discountClaims: p.variants.some((v) => v.compareAtPrice !== null && v.compareAtPrice > v.price),
       reviewClaims: false,
-      claimsFromPhotos: config.claims.fromPhotos,
     },
   });
 }

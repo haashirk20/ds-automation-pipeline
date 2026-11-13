@@ -9,7 +9,8 @@ services:
     security_opt: ["no-new-privileges:true"]
     pids_limit: 512
     shm_size: "1gb"
-    tmpfs: [/tmp]
+    mem_limit: ${PIPELINE_MEM_LIMIT:-6g}
+    tmpfs: ["/tmp:size=2g"]
     env_file:
       - path: .env
         required: false

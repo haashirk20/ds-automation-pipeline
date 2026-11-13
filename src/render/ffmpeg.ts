@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { childEnv } from './env.ts';
 
 // Remotion ships FFmpeg 7.1 and ffprobe in its platform package, with their shared libraries beside
 // them. It is a minimal build: no blackdetect, freezedetect, ebur128, overlay or drawtext.
@@ -12,7 +13,7 @@ export function ff(bin: 'ffmpeg' | 'ffprobe', args: string[], opts: { timeoutMs?
     execFile(
       path.join(dir, bin),
       args,
-      { encoding: 'buffer', timeout: opts.timeoutMs ?? 120_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LD_LIBRARY_PATH: dir } },
+      { encoding: 'buffer', timeout: opts.timeoutMs ?? 120_000, maxBuffer: 64 * 1024 * 1024, env: childEnv({ LD_LIBRARY_PATH: dir }) },
       (err, stdout, stderr) => {
         if (err) reject(new Error(`${bin} failed: ${stderr.toString().trim().split('\n').slice(-3).join(' | ') || err.message}`));
         else resolve({ stdout, stderr: stderr.toString() });

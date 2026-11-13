@@ -1,8 +1,6 @@
 import { openSync, readSync, closeSync } from 'node:fs';
-import { stat, mkdir } from 'node:fs/promises';
-import path from 'node:path';
+import { stat } from 'node:fs/promises';
 import { ff } from '../render/ffmpeg.ts';
-import type { SafeZone } from '../contracts.ts';
 
 export type QaCheck = { name: string; pass: boolean; value: string; limit: string };
 export type QaResult = { pass: boolean; checks: QaCheck[] };
@@ -162,21 +160,6 @@ export function contrastRatio(hexA: string, hexB: string): number {
 
 export function captionStyleOk(s: { fontPx: number; textHex: string; plateHex: string; plateAlpha: number }): boolean {
   return s.fontPx >= MIN_FONT_PX && s.plateAlpha >= MIN_PLATE_ALPHA && contrastRatio(s.textHex, s.plateHex) >= MIN_CONTRAST;
-}
-
-export function insideSafe(box: { x: number; y: number; w: number; h: number }, safe: SafeZone): boolean {
-  return box.x >= safe.left && box.y >= safe.top && box.x + box.w <= FRAME_W - safe.right && box.y + box.h <= FRAME_H - safe.bottom;
-}
-
-export async function extractFrames(file: string, timesSec: number[], outDir: string, width: number): Promise<string[]> {
-  await mkdir(outDir, { recursive: true });
-  const out: string[] = [];
-  for (const [i, t] of timesSec.entries()) {
-    const p = path.join(outDir, `frame_${String(i).padStart(2, '0')}_${t.toFixed(2)}s.png`);
-    await ff('ffmpeg', ['-y', '-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `scale=${width}:-2`, p]);
-    out.push(p);
-  }
-  return out;
 }
 
 // ---- runner ----

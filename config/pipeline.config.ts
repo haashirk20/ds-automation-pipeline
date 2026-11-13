@@ -29,9 +29,6 @@ export default {
     // A synthesized bed under the voice. gainDb is relative to the bed's own level.
     music: { enabled: true, gainDb: -8 },
   },
-  // Claims printed only on product photos are not used unless this is true. Care, safety and battery
-  // claims are never taken from a photo.
-  claims: { fromPhotos: false },
   llm: {
     models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5', escalation: 'claude-opus-5-5' },
     // At this spend in a calendar month (UTC) model calls stop and approved scripts are reused.

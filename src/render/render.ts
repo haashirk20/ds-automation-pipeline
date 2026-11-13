@@ -1,18 +1,49 @@
-import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
-import { renderMedia, renderStill, selectComposition } from '@remotion/renderer';
+import { makeCancelSignal, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import { env, type Config, type PlatformName } from '../config/index.ts';
 import { Edl, type RenderProps } from '../contracts.ts';
 import { ff } from './ffmpeg.ts';
 
 const ENTRY = path.resolve(import.meta.dirname, '../../templates/index.ts');
 
+// Hash of everything the bundle is made from.
+function sourceHash(): string {
+  const h = createHash('sha256');
+  const walk = (dir: string) => {
+    for (const f of readdirSync(dir).sort()) {
+      const full = path.join(dir, f);
+      if (statSync(full).isDirectory()) walk(full);
+      else h.update(f).update(readFileSync(full));
+    }
+  };
+  walk(path.dirname(ENTRY));
+  h.update(readFileSync(path.resolve(import.meta.dirname, '../contracts.ts')));
+  return h.digest('hex').slice(0, 16);
+}
+
 let bundled: Promise<string> | null = null;
-// One bundle per process; renders add their files under <bundle>/public/ afterwards.
+// One bundle per template version, kept in a stable cache directory (BUNDLE_CACHE_DIR; the Docker image
+// builds it ahead of time) and shared by every process. Renders add their files under <bundle>/public/.
 export function getBundle(): Promise<string> {
-  bundled ??= bundle({ entryPoint: ENTRY }).catch((e) => {
+  bundled ??= (async () => {
+    const root = process.env.BUNDLE_CACHE_DIR || path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'ad-pipeline');
+    const dir = path.join(root, `bundle-${sourceHash()}`);
+    if (existsSync(path.join(dir, 'index.html'))) return dir;
+    mkdirSync(root, { recursive: true });
+    const tmp = `${dir}.tmp-${process.pid}-${randomBytes(3).toString('hex')}`;
+    await bundle({ entryPoint: ENTRY, outDir: tmp });
+    try {
+      renameSync(tmp, dir);
+    } catch {
+      rmSync(tmp, { recursive: true, force: true }); // another process won the race
+      if (!existsSync(path.join(dir, 'index.html'))) throw new Error('bundle cache is not usable');
+    }
+    return dir;
+  })().catch((e) => {
     bundled = null;
     throw e;
   });
@@ -63,7 +94,7 @@ export async function normalizeLoudness(inFile: string, outFile: string): Promis
   return { inputLufs: Number(json.input_i) };
 }
 
-export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config: Config; outFile: string }): Promise<void> {
+export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config: Config; outFile: string; signal?: AbortSignal }): Promise<void> {
   const outFile = assertInside(opts.outFile, env.outDir());
   const edl = Edl.parse(opts.edl);
   const p = opts.config.platforms[opts.platform];
@@ -77,7 +108,11 @@ export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config
     stageFiles(serveUrl, plan.files);
     const inputProps: RenderProps = { edl: plan.edl, platform: opts.platform, safe: p.safe, cta: p.cta };
     const composition = await selectComposition({ serveUrl, id: 'Ad', inputProps });
-    await renderMedia({ composition, serveUrl, inputProps, codec: 'h264', pixelFormat: 'yuv420p', audioCodec: 'aac', outputLocation: raw, logLevel: 'error' });
+    // Remotion starts Chrome in its own process group; cancelling is the only way to stop it.
+    const { cancelSignal, cancel } = makeCancelSignal();
+    if (opts.signal?.aborted) cancel();
+    opts.signal?.addEventListener('abort', cancel, { once: true });
+    await renderMedia({ composition, serveUrl, inputProps, codec: 'h264', pixelFormat: 'yuv420p', audioCodec: 'aac', outputLocation: raw, logLevel: 'error', cancelSignal });
     await normalizeLoudness(raw, outFile);
   } finally {
     rmSync(stagedDir, { recursive: true, force: true });

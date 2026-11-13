@@ -30,7 +30,6 @@ const schema = z
     }),
     brand: z.object({ name: z.string().min(1).nullable() }),
     creative: z.object({ voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
-    claims: z.object({ fromPhotos: z.boolean() }),
     llm: z.object({
       models: z.object({ script: z.string(), copy: z.string(), qa: z.string(), escalation: z.string() }),
       monthlyCapUsd: z.number().positive(),

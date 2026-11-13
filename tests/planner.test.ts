@@ -58,10 +58,9 @@ test('produce claim is atomic: only a planned slot is produced, once', async () 
   planDay(db, config, '2026-11-12', t);
   const ingest = async () => { throw new Error('no store'); };
   await Promise.all([produceSlot(db, config, '2026-11-12#1', t, { ingest }), produceSlot(db, config, '2026-11-12#1', t, { ingest })]);
-  const s = db.prepare("SELECT status, attempt, error FROM slots WHERE id = '2026-11-12#1'").get() as any;
-  assert.deepEqual([s.status, s.attempt], ['failed', 1]); // no brief and the ingest fails: a clear failure
-  assert.match(s.error, /no store/);
-  assert.equal(count(db, 'events'), 1);
+  const s = db.prepare("SELECT status, attempt FROM slots WHERE id = '2026-11-12#1'").get() as any;
+  assert.deepEqual([s.status, s.attempt], ['planned', 0]); // no brief and the store is down: released, attempt not burned
+  assert.equal(count(db, 'events'), 2); // the failed ingest and the waiting slot, once each
   await produceSlot(db, config, '2026-11-12#1', t, { ingest });
-  assert.equal((db.prepare("SELECT attempt FROM slots WHERE id = '2026-11-12#1'").get() as any).attempt, 1);
+  assert.equal((db.prepare("SELECT attempt FROM slots WHERE id = '2026-11-12#1'").get() as any).attempt, 0);
 });

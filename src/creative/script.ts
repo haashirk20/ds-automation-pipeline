@@ -3,7 +3,7 @@ import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { callJson } from '../llm/client.ts';
 import { systemPrompt } from '../llm/prompts.ts';
-import { checkScript, judgeClaims } from './claims.ts';
+import { checkScript, judgeClaims, TOTAL_WORDS, WORD_BUDGET } from './claims.ts';
 import type { Hook } from './hooks.ts';
 
 export class ScriptRejectedError extends Error {
@@ -25,7 +25,7 @@ function problemsOf(brief: Brief, script: Script, hook: Hook): string[] {
 export async function writeScript(db: Db, config: Config, brief: Brief, hook: Hook, now: Date, slotId: string): Promise<Script> {
   const base =
     `Write the script for this hook.\nframework: ${hook.framework}\nheadline (show): ${hook.headline}\nsay: ${hook.say}\nfactIds: ${hook.factIds.join(', ') || '(none)'}\n` +
-    `Word budgets on say: hook at most 7, benefit 12 to 20, offer 4 to 9, cta 3 to 7, total 28 to 38.`;
+    `Word budgets on say: hook at most ${WORD_BUDGET.hook[1]}, benefit ${WORD_BUDGET.benefit.join(' to ')}, offer ${WORD_BUDGET.offer.join(' to ')}, cta ${WORD_BUDGET.cta.join(' to ')}, total ${TOTAL_WORDS.join(' to ')}.`;
   let problems: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     const user = attempt === 0 ? base : `${base}\n\nYour previous attempt had these problems. Fix all of them:\n${problems.map((p) => `- ${p}`).join('\n')}`;

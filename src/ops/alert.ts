@@ -19,7 +19,7 @@ export async function alert(db: Db, kind: string, key: string, message: string, 
     const post = (url: string, body: unknown) =>
       fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
     const hook = env.discordWebhook();
-    if (hook) sends.push(post(hook, { content: text }));
+    if (hook) sends.push(post(hook, { content: text, allowed_mentions: { parse: [] } }));
     const tg = env.telegramToken();
     const chat = env.telegramChat();
     if (tg && chat) sends.push(post(`https://api.telegram.org/bot${tg}/sendMessage`, { chat_id: chat, text }));

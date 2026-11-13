@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { env, type Config, type PlatformName } from '../config/index.ts';
@@ -19,7 +19,9 @@ const SHEET_TIMES = [0.5, 1.5, 4, 7, 9.5, 11.5, 13, 14.5];
 
 // Render the sample ads described in tests/fixtures/samples/samples.json to OUT_DIR/samples.
 export async function runSamples(config: Config, _now: Date): Promise<void> {
-  const fx = Fixture.parse(JSON.parse(readFileSync('tests/fixtures/samples/samples.json', 'utf8')));
+  const fixtureFile = 'tests/fixtures/samples/samples.json';
+  if (!existsSync(fixtureFile)) throw new Error('samples needs tests/fixtures, which are not in the Docker image: mount them (-v ./tests/fixtures:/app/tests/fixtures:ro)');
+  const fx = Fixture.parse(JSON.parse(readFileSync(fixtureFile, 'utf8')));
   const out = path.resolve(env.outDir(), 'samples');
   const failures: string[] = [];
   for (const [i, s] of fx.samples.entries()) {

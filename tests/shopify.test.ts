@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../src/db/index.ts';
@@ -9,7 +9,7 @@ import raw from '../config/pipeline.config.ts';
 import { Brief } from '../src/contracts.ts';
 import { buildBrief, descriptionLines, normalize, priceText } from '../src/shopify/brief.ts';
 import { getWithRetry, type ShopMeta, type RawProduct } from '../src/shopify/fetch.ts';
-import { getBrief, ingest, listBriefs, type IngestDeps } from '../src/shopify/index.ts';
+import { ingest, listBriefs, type IngestDeps } from '../src/shopify/index.ts';
 
 const config = parseConfig(raw);
 const fx = (n: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures/shopify', n), 'utf8'));
@@ -64,7 +64,7 @@ test('disclosure, angles, colors, facts, rules', () => {
   assert.ok(b.facts.some((f) => f.id === 'f-price' && f.text === 'Price: $49.99 CAD'));
   assert.ok(b.facts.some((f) => f.id === 'f-option-color' && f.text === 'Color: Beige, Green, Red'));
   assert.ok(b.facts.some((f) => f.id === 'f-ships' && f.text === 'Ships to: CA'));
-  assert.deepEqual(b.rules, { discountClaims: false, reviewClaims: false, claimsFromPhotos: config.claims.fromPhotos });
+  assert.deepEqual(b.rules, { discountClaims: false, reviewClaims: false });
   Brief.parse(b);
 });
 
@@ -101,7 +101,7 @@ test('ingest stores a valid brief and downloads photos', async () => {
   const { db, deps, calls } = setup();
   const [b] = await ingest(db, config, NOW, deps);
   Brief.parse(b);
-  assert.deepEqual(getBrief(db, b.product.handle), b);
+  assert.deepEqual(listBriefs(db), [b]);
   assert.equal(listBriefs(db).length, 1);
   for (const s of b.shots) assert.ok(existsSync(join(process.env.DATA_DIR!, s.file)));
   assert.equal(calls.filter((u) => u.startsWith('https://cdn.')).length, 10);
@@ -182,4 +182,27 @@ test('malformed photo-tags file fails loudly', async () => {
 
 test('priceText helper uses lowest price', () => {
   assert.equal(priceText(normalize(rawProduct(), SHOP), 'USD'), '$49.99');
+});
+
+test('a body over the byte limit leaves no partial file, even without content-length', async () => {
+  const { db, deps } = setup();
+  const inner = deps.fetch;
+  deps.maxImageBytes = 50;
+  deps.fetch = (async (url: string) => (String(url).startsWith('https://cdn.') ? new Response(new Uint8Array(500), { headers: { 'content-type': 'image/jpeg' } }) : inner(url))) as typeof fetch;
+  const [b] = await ingest(db, config, NOW, deps);
+  assert.equal(b.shots.length, 0);
+  const dir = join(process.env.DATA_DIR!, 'assets', productsJson.products[0].handle);
+  assert.deepEqual(existsSync(dir) ? readdirSync(dir) : [], []);
+});
+
+test('limits: 20 products, 20 photos each, 40 description lines of 300 characters', async () => {
+  const cdn = 'https://cdn.shopify.com/s/files/';
+  const lines = Array.from({ length: 50 }, (_, i) => `<p>Line ${i}</p>`).join('') + `<p>${'x'.repeat(301)}</p>`;
+  const prod = (i: number) => ({ ...productsJson.products[0], handle: `p${i}`, body_html: lines, images: Array.from({ length: 25 }, (_, k) => ({ src: `${cdn}p${i}-${k}.jpg`, width: 10, height: 10 })) });
+  const { db, deps, calls } = setup({ products: Array.from({ length: 25 }, (_, i) => prod(i)) });
+  const briefs = await ingest(db, config, NOW, deps);
+  assert.equal(briefs.length, 20);
+  assert.equal(briefs[0].shots.length, 20);
+  assert.equal(briefs[0].facts.filter((f) => f.id.startsWith('f-desc-')).length, 40);
+  assert.equal(calls.filter((u) => u.startsWith('https://cdn.')).length, 20 * 20);
 });

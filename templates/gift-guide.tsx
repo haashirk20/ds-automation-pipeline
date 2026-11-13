@@ -4,7 +4,8 @@ import type { RenderProps } from '../src/contracts.ts';
 import { alpha, backOut, capLines, cardSize, clamp, easeOut, endShot, fitHeadline, FH, FW, mix, onColor, ShotView, Tracks, useCtx, type Ctx, type ShotLike } from './common.tsx';
 
 // Festive editorial: deep background with dots and ribbons, tilted white-bordered prints, price tag.
-export const CAPTION_STYLE = { fontPx: 66, textHex: '#FFF8EC', plateHex: '#12241B', plateAlpha: 0.9 };
+import { CAPTION_STYLES } from './caption-style.ts';
+export const CAPTION_STYLE = CAPTION_STYLES['gift-guide'];
 
 const BORDER = 18;
 const TILT = [-5, 4, -2.5, 5.5];

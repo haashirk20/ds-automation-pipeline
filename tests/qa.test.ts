@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   evaluateProbe, topAtoms, faststartOk, parseLoudnorm, loudnessChecks, parseSilence, blackRunSeconds, frozenRunSeconds,
-  contrastRatio, captionStyleOk, insideSafe, sizeCheck, runQa, FRAME_BYTES,
+  contrastRatio, captionStyleOk, sizeCheck, runQa, FRAME_BYTES,
 } from '../src/qa/index.ts';
 
 const good = {
@@ -80,12 +80,6 @@ test('contrast and caption style', () => {
   assert.ok(!captionStyleOk({ fontPx: 40, textHex: '#ffffff', plateHex: '#000000', plateAlpha: 0.7 }));
   assert.ok(!captionStyleOk({ fontPx: 64, textHex: '#ffffff', plateHex: '#000000', plateAlpha: 0.5 }));
   assert.ok(!captionStyleOk({ fontPx: 64, textHex: '#888888', plateHex: '#999999', plateAlpha: 0.9 }));
-});
-test('insideSafe', () => {
-  const safe = { top: 200, bottom: 400, left: 60, right: 120 };
-  assert.ok(insideSafe({ x: 60, y: 200, w: 900, h: 1320 }, safe));
-  assert.ok(!insideSafe({ x: 60, y: 200, w: 901, h: 100 }, safe));
-  assert.ok(!insideSafe({ x: 60, y: 1500, w: 100, h: 21 }, safe));
 });
 
 const dir = './out/samples';

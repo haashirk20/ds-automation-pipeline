@@ -1,0 +1,8 @@
+{
+  "verdicts": [
+    { "platform": "youtube", "supported": true, "reason": "Backed by the facts." },
+    { "platform": "facebook", "supported": true, "reason": "Backed by the facts." },
+    { "platform": "instagram", "supported": true, "reason": "Backed by the facts." },
+    { "platform": "tiktok", "supported": true, "reason": "Backed by the facts." }
+  ]
+}

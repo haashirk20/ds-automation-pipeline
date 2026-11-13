@@ -23,7 +23,7 @@ export function fresh() {
 // Stands in for the real producer: same claim, placeholder renders with copy, no media.
 export async function stubProduce(db: ReturnType<typeof openDb>, id: string, now: Date) {
   const ts = now.toISOString();
-  if (db.prepare("UPDATE slots SET status = 'producing', attempt = attempt + 1, updated_at = ? WHERE id = ? AND status = 'planned'").run(ts, id).changes !== 1) return;
+  if (db.prepare("UPDATE slots SET status = 'producing', attempt = attempt + 1, updated_at = ?, claimed_at = ? WHERE id = ? AND status = 'planned'").run(ts, ts, id).changes !== 1) return;
   for (const p of ['youtube', 'facebook', 'instagram', 'tiktok']) {
     db.prepare("INSERT OR REPLACE INTO renders (slot_id, platform, file_path, qa_pass, qa_json, title, caption, created_at) VALUES (?,?,?,1,'{}',?,?,?)").run(id, p, `/x/${id}/${p}.mp4`, `title ${p}`, `caption ${p}`, ts);
   }

@@ -47,11 +47,7 @@ async function main(): Promise<number> {
     return 0;
   }
   const db = openDb(env.dataDir());
-  const ingest = async (now: Date) => {
-    await runIngest(db, config, now, { print: false });
-    kvSet(db, 'ingest_at', now.toISOString());
-  };
-  const deps = { db, config, publishers, producer: makeProducer(childSpawn(config)), ingest, wait: !!values.once };
+  const deps = { db, config, publishers, producer: makeProducer(childSpawn(config)), wait: !!values.once };
   if (cmd === 'run') await run(deps, clock, !!values.once);
   else if (cmd === 'produce') {
     if (!values.slot) {
@@ -59,7 +55,10 @@ async function main(): Promise<number> {
       return 2;
     }
     const { produceSlot } = await import('./render/produce.ts'); // loads Remotion; only the child needs it
-    await produceSlot(db, config, values.slot, clock());
+    // SIGTERM from the parent: cancel the render (and its Chrome) and exit non-zero; the slot stays 'producing'.
+    const stop = new AbortController();
+    process.once('SIGTERM', () => stop.abort());
+    await produceSlot(db, config, values.slot, clock(), { signal: stop.signal });
   } else if (cmd === 'ingest') {
     await runIngest(db, config, clock(), { print: !!values.print });
     kvSet(db, 'ingest_at', clock().toISOString());
