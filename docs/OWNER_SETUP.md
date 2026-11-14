@@ -96,9 +96,51 @@ Set `visibility: 'public'` per platform when you are happy with what you see.
   it if that is wrong.
 - **healthchecks.io** (`HEALTHCHECK_URL`): the free plan allows 20 checks. One check tells you when
   the server itself is down. Keep the Discord webhook (`ALERT_DISCORD_WEBHOOK`) in `.env` too, since
-  alerts go there.
+  alerts go there. Add a second check for `HEALTHCHECK_DAILY_URL`: period 1 day, grace about
+  3 hours. The pipeline pings it only after the daily summary has been delivered, so a day without a
+  ping means the summary never arrived.
 - **A server** (Phase 7): Ubuntu 24.04, 4 vCPU, 8 GB, your SSH key on it, about $10–17 a month.
-- **Backups** (Phase 7): Cloudflare R2 keys, `RESTIC_*` and `AWS_*` in `.env`.
+- **Backups** (Phase 7): section 5.
+
+## 5. Backups (Cloudflare R2)
+
+The `backup` service copies the nightly database snapshot and `data/clips` to R2, encrypted with
+restic. It idles until `.env.backup` names a repository. Its secrets stay out of `.env`.
+
+1. In Cloudflare, create an R2 bucket (for example `giftwell-backup`). R2 gives 10 GB free.
+2. Create an R2 API token with Object Read & Write, scoped to that bucket only. Copy the access key
+   ID and secret.
+3. `cp .env.backup.example .env.backup` and fill it:
+   `RESTIC_REPOSITORY=s3:https://<ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>`, a long random
+   `RESTIC_PASSWORD`, and the two keys. Leave `AWS_DEFAULT_REGION=auto`.
+4. `chmod 600 .env .env.backup`. Then delete any `RESTIC_*` and `AWS_*` lines from `.env`: the
+   pipeline container reads `.env`, and those keys belong only to the `backup` service.
+5. Store the restic password and the R2 keys in your password manager, off the VM. Without the
+   password a backup cannot be read, and the snapshot contains the sign-in tokens.
+6. `docker compose up -d`. The first backup runs when the pipeline next writes its snapshot, and
+   `docker compose logs backup` then shows `backup ok`. The daily summary reports a stale backup.
+
+**Restore** (on a new or damaged VM, with `.env` and `.env.backup` in place):
+
+```bash
+docker compose stop pipeline backup
+install -d -m 700 -o 1000 -g 1000 restore
+docker compose run --rm --no-deps --entrypoint sh -v "$PWD/restore:/restore" backup -c 'restic restore latest --target /restore'
+docker compose run --rm --no-deps --entrypoint sh -v "$PWD/restore:/restore:ro" pipeline -c 'rm -f /app/data/pipeline.db-wal /app/data/pipeline.db-shm && cp /restore/data/backup/pipeline.db /app/data/pipeline.db && cp -r /restore/data/clips /app/data/ 2>/dev/null; true'
+docker compose run --rm --no-deps pipeline node src/cli.ts after-restore
+docker compose up -d
+```
+
+`after-restore` is needed because the snapshot can be a day old. A post made after it is not in
+the restored database, so the pipeline would post it again. The command marks every publication
+that was `pending` or `uploading` and due as `needs_attention` ("restored from backup: check the
+platform before posting again"), and prints how many. Look at each platform, then resolve those
+publications by hand. The old `pipeline.db-wal` and `-shm` files are removed so that stale
+journal pages never replay onto the restored file.
+
+The restored database holds the tokens as they were at backup time. Higgsfield's may be stale: if
+`node src/cli.ts doctor` reports the sign-in expired, run
+`docker compose run --rm pipeline node src/cli.ts auth higgsfield`. Delete `./restore` afterwards.
 
 ## Not needed any more
 

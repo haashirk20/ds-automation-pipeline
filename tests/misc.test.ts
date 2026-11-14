@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseConfig } from '../src/config/index.ts';
 import { migrate, schemaVersion } from '../src/db/index.ts';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -139,4 +139,28 @@ test('run and publish refuse a clock override unless DRY_RUN is 1', () => {
 test('with DRY_RUN=1 a clock override is accepted', () => {
   const r = cli(['--now', '2026-11-12T17:20:00Z', 'publish'], '1');
   assert.deepEqual([r.status, r.stderr], [0, '']);
+});
+
+test('stubs are refused outside dry runs, except for doctor and health', () => {
+  const run = (args: string[], env: Record<string, string>) => {
+    try {
+      execFileSync(process.execPath, [CLI, ...args], { cwd: mkdtempSync(join(tmpdir(), 'cwd-')), env: { PATH: process.env.PATH, DATA_DIR: mkdtempSync(join(tmpdir(), 'cli-')), ...env }, stdio: 'pipe' });
+      return { status: 0, stderr: '' };
+    } catch (e: any) { return { status: e.status as number, stderr: String(e.stderr) }; }
+  };
+  for (const stub of [{ LLM_STUB: '1' }, { CLIP_STUB_FILE: '/x/clip.mp4' }] as Record<string, string>[]) {
+    const r = run(['publish'], { DRY_RUN: '0', ...stub });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /refused/);
+    assert.equal(run(['publish'], { DRY_RUN: '1', ...stub }).status, 0);
+    assert.notEqual(run(['health'], { DRY_RUN: '0', ...stub }).status, 2);
+  }
+});
+
+test('doctor fails and names backup keys found in the pipeline environment, never their values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'doc-'));
+  const r = spawnSync(process.execPath, [CLI, 'doctor'], { cwd: mkdtempSync(join(tmpdir(), 'cwd-')), env: { PATH: process.env.PATH, DRY_RUN: '1', DATA_DIR: dir, RESTIC_PASSWORD: 'hunter2-secret', AWS_ACCESS_KEY_ID: 'AKIAVALUE' }, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /backup keys: FAIL RESTIC_PASSWORD, AWS_ACCESS_KEY_ID .*\.env\.backup/);
+  assert.doesNotMatch(r.stdout + r.stderr, /hunter2|AKIAVALUE/);
 });

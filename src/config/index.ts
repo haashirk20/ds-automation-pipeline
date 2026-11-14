@@ -54,6 +54,7 @@ const schema = z
       t1: tierSchema,
       t2: tierSchema,
     }),
+    ops: z.object({ summaryAt: hhmm, snapshotAt: hhmm, keepDays: z.number().int().min(1), diskAlertPercent: z.number().min(1).max(100) }),
     watchdogMinutes: z.number().positive(),
   })
   .superRefine((c, ctx) => {
@@ -104,6 +105,8 @@ export const env = {
   telegramToken: () => process.env.ALERT_TELEGRAM_BOT_TOKEN || undefined,
   telegramChat: () => process.env.ALERT_TELEGRAM_CHAT_ID || undefined,
   healthcheckUrl: () => process.env.HEALTHCHECK_URL || undefined,
+  healthcheckDailyUrl: () => process.env.HEALTHCHECK_DAILY_URL || undefined, // pinged after the daily summary is delivered
+  backupStatusDir: () => process.env.BACKUP_STATUS_DIR || undefined, // the backup container writes last-ok here
   shop: () => normalizeShop(process.env.SHOPIFY_SHOP), // bare host, e.g. my-store.myshopify.com
   bridgeKey: () => process.env.BRIDGE_API_KEY || undefined,
   shopifyClientId: () => process.env.SHOPIFY_CLIENT_ID || undefined,

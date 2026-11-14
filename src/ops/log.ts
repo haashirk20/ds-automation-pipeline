@@ -6,6 +6,8 @@ export function scrub(s: string): string {
   for (const [name, value] of Object.entries(process.env)) {
     if (value && value.length >= 8 && SECRET_ENV.test(name)) s = s.replaceAll(value, '[redacted]');
   }
+  // A signed URL's query string is a credential: drop all of it.
+  s = s.replace(/(https?:\/\/[^\s"'?#]*)\?([^\s"'#]*)/g, (m, base, q) => (/signature=|credential=|token=|sig=/i.test(q) ? `${base}?<redacted>` : m));
   return s
     .replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/g, 'Bearer [redacted]')
     .replace(/(access_token|refresh_token)=[^&\s"']+/g, '$1=[redacted]')

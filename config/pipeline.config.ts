@@ -91,6 +91,11 @@ export default {
     // The alternative model, at 37.5 credits:
     // t2: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 0.82, params: { mode: 'fast', resolution: '720p', generate_audio: true }, maxCredits: 40, keepCredits: 350 },
   },
+  // Operations. summaryAt: local time after which the daily summary for yesterday is sent. snapshotAt: local time
+  // after which the nightly database snapshot is written for the backup container; housekeeping runs after it.
+  // keepDays: renders, failed attempts and unused clips are deleted after this many days.
+  // diskAlertPercent: alert when DATA_DIR or OUT_DIR is fuller than this.
+  ops: { summaryAt: '08:00', snapshotAt: '03:30', keepDays: 7, diskAlertPercent: 80 },
   // A tick running longer than this makes the process exit so Docker restarts it.
   watchdogMinutes: 45,
 };

@@ -2,6 +2,8 @@ import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { env, loadConfig } from './config/index.ts';
 import { hasAlertChannel } from './ops/alert.ts';
+import { backupStatus } from './ops/summary.ts';
+import { afterRestore } from './ops/snapshot.ts';
 import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
 import { findAccount, listAccounts } from './publish/bridge.ts';
@@ -13,8 +15,8 @@ import { runIngest } from './shopify/index.ts';
 import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | auth higgsfield';
-const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY', 'ANTHROPIC_API_KEY'];
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | after-restore | auth higgsfield';
+const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'HEALTHCHECK_DAILY_URL', 'BACKUP_STATUS_DIR', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY', 'ANTHROPIC_API_KEY'];
 
 async function main(): Promise<number> {
   process.umask(0o077); // the database and its journal files hold OAuth tokens
@@ -23,7 +25,7 @@ async function main(): Promise<number> {
     options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' }, clip: { type: 'string' }, caption: { type: 'string' }, name: { type: 'string' } },
   });
   const cmd = positionals[0];
-  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'auth'].includes(cmd)) {
+  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'after-restore', 'auth'].includes(cmd)) {
     console.error(USAGE);
     return 2;
   }
@@ -40,6 +42,11 @@ async function main(): Promise<number> {
     console.error(`--now and PIPELINE_NOW are refused for '${cmd}' unless DRY_RUN=1`);
     return 2;
   }
+  // Stand-ins for the model and the clip provider produce fake output: dry runs only.
+  if ((process.env.LLM_STUB === '1' || process.env.CLIP_STUB_FILE) && !env.dryRun() && cmd !== 'doctor' && cmd !== 'health') {
+    console.error(`LLM_STUB and CLIP_STUB_FILE are refused for '${cmd}' unless DRY_RUN=1`);
+    return 2;
+  }
   const clock = () => new Date(Date.now() + offsetMs);
 
   if (cmd === 'health') {
@@ -48,6 +55,10 @@ async function main(): Promise<number> {
     return hb && clock().getTime() - Date.parse(hb) < 300_000 ? 0 : 1;
   }
   if (cmd === 'doctor') return doctor(clock());
+  if (cmd === 'after-restore') {
+    console.log(`${await afterRestore(openDb(env.dataDir()), clock())} publication(s) set to needs_attention`);
+    return 0;
+  }
   if (cmd === 'auth') {
     if (positionals[1] !== 'higgsfield') {
       console.error(USAGE);
@@ -132,6 +143,12 @@ async function doctor(now: Date): Promise<number> {
       bad ||= !env.dryRun();
       console.log('bridge: accounts call failed: ' + (e as Error).message);
     }
+  }
+  if (env.backupStatusDir()) console.log('backup: ' + backupStatus(now));
+  const backupKeys = ['RESTIC_PASSWORD', 'RESTIC_REPOSITORY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'].filter((n) => process.env[n]);
+  if (backupKeys.length) {
+    bad = true;
+    console.log(`backup keys: FAIL ${backupKeys.join(', ')} set in the pipeline's environment; they belong in .env.backup`);
   }
   for (const n of ENV_NAMES) console.log(`env ${n}: ${process.env[n] ? 'set' : 'unset'}`);
   return bad ? 1 : 0;

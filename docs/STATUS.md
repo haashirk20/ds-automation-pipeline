@@ -10,15 +10,18 @@ Updated 2026-11-14.
 | 3 Creative | Done |
 | 4 Tiers | Done in `ugc` mode, with Higgsfield as tier 2. There is no tier 1 provider |
 | 5 Publishing | YouTube and TikTok live-tested privately through the bridge. Facebook and Instagram are not connected |
-| 6 Scheduler and ops | The loop and recovery are done. The daily summary, housekeeping, backups and the second dead-man's switch are not built |
+| 6 Scheduler and ops | Built, not done. The loop, recovery, daily summary, second dead-man's switch, disk alert, housekeeping, snapshot and backup service exist. The exit criterion's one real day has not run, and a backup to R2 and a restore from it have not run |
 | 7 Deploy | Not started |
 | 8 Feedback | Not started |
 
-The tests pass (245 of 245) and the type check is clean. An Opus architect review and an Opus
+The tests pass (270 of 270) and the type check is clean. An Opus architect review and an Opus
 security review of the bridge, MCP and `ugc` code were done on 2026-11-14 and their fixes applied.
 
 ## Verified live
 
+- **Phase 6 compressed-time run.** 26 of 26 assertions over 614 simulated ticks: two dry-run posts a
+  day per platform, a webhook outage day, cleanup and the snapshot. The compose stack came up
+  healthy, with a local restic backup and restore.
 - **Bridge posts, 2026-11-13.** A private YouTube video and a TikTok inbox draft were posted, and a
   second run resumed both from the stored handle without a second post (D-29).
 - **Model calls, 2026-11-14.** The concept writer, the claim judge, the frame check, and the copy
@@ -30,6 +33,7 @@ security review of the bridge, MCP and `ugc` code were done on 2026-11-14 and th
 
 ## Not verified
 
+- Phase 6: one real day, a backup to R2 and a restore from it.
 - A signed-in Higgsfield video job from the pipeline's own client.
 - A full slot end to end with a real clip.
 - Discord alert delivery.
@@ -50,8 +54,6 @@ security review of the bridge, MCP and `ugc` code were done on 2026-11-14 and th
 
 ## Next
 
-1. Phase 6: the daily summary, housekeeping that keeps `data/clips`, backups to Cloudflare R2
-   through a second compose service, the second dead-man's switch, and a compressed-time run in
-   `DRY_RUN`.
+1. Phase 6: one real day, then a backup to Cloudflare R2 and a restore from it.
 2. Phase 7: deploy, then a 48-hour unattended run.
 3. Phase 8: the feedback loop, using the bridge's analytics (D-29).

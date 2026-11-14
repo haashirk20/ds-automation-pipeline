@@ -20,7 +20,7 @@ export function fresh() {
   process.env.DATA_DIR = join(dir, 'data');
   process.env.OUT_DIR = join(dir, 'out');
   process.env.DRY_RUN = '0';
-  for (const k of ['ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL']) delete process.env[k];
+  for (const k of ['ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'HEALTHCHECK_DAILY_URL', 'BACKUP_STATUS_DIR', 'LLM_STUB', 'CLIP_STUB_FILE']) delete process.env[k];
   return openDb(process.env.DATA_DIR);
 }
 

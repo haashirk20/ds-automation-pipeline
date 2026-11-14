@@ -40,6 +40,15 @@ test('stub mode returns the fixture and logs a zero-cost row', async () => {
   assert.equal(r[0].cost_usd, 0);
 });
 
+test('stub mode gives each slot its own caption, so the second slot is not refused as a repeat', async () => {
+  const db = fresh();
+  process.env.LLM_STUB = '1';
+  const ugc = { ...base, purpose: 'ugc', schema: z.object({ caption: z.string() }).passthrough() };
+  const a = await callJson(db, config, { ...ugc, slotId: '2026-11-21#1' }, NOW);
+  const b = await callJson(db, config, { ...ugc, slotId: '2026-11-21#2' }, NOW);
+  assert.notEqual(a.caption, b.caption);
+});
+
 test('cost arithmetic includes cache reads and writes', () => {
   const u = { input_tokens: 1e6, output_tokens: 1e6, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 };
   assert.ok(Math.abs(costUsd('claude-sonnet-5-5', u) - 14.6) < 1e-9);

@@ -233,15 +233,43 @@ creates the account.
 
 ## D-14 Backups: restic to Cloudflare R2 (2026-11-11)
 
-**Alternatives.** Litestream. Provider snapshots.
+**Alternatives.** Litestream. Provider snapshots. Running restic inside the pipeline container.
+A host cron job.
 
 **Why.** The state worth keeping is one database file under 1 GB that includes the tokens. A
 nightly encrypted copy with retention is enough: losing a day loses nothing that cannot be
 regenerated. Litestream is a second always-on process. Snapshots are provider-specific and unencrypted.
 
-**Details.** restic backs up a `VACUUM INTO` snapshot, never the live file, which could be copied
-mid-write. The restic password and R2 keys are also kept off the VM by the owner. A restore brings
+**Details.** The pipeline writes a `VACUUM INTO` snapshot to `data/backup/pipeline.db` each night
+and then `data/backup/ready` with its time. restic backs up that snapshot and `data/clips` (paid
+assets and the `ugc` reuse library), never the live file, which could be copied mid-write. The restic password and R2 keys are also kept off the VM by the owner. A restore brings
 back tokens as they were, so platforms whose refresh tokens rotate are authorized again afterwards.
+
+**Second service (2026-11-14).** restic runs as a second compose service, `backup`, on the official
+image `restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510`
+(BSD-2-Clause). It runs as uid 1000 with no capabilities, a read-only root, the data volume mounted
+read-only and its own secrets file `.env.backup`. `infra/backup.sh` checks every 10 minutes whether
+`ready` changed, backs up, applies retention (7 daily, 4 weekly) and writes `last-ok` to the
+`backup-status` volume, which the pipeline reads (read-only) to report a stale backup in the daily
+summary. Once a week it runs `restic check --read-data-subset=5%`. Why not inside the pipeline
+container: the R2 keys and the restic binary would sit in the process that handles model output
+and web data. Why not host cron: it would put a second deployment step and unpinned host tools
+outside `docker compose up -d`.
+
+**Limits and accepted risks (2026-11-14).** The container has 768 MB of memory, 64 processes, a 128 MB
+`/tmp` and a 256 MB restic cache, and uploads with `s3.connections=2`. The first upload to R2 with a
+`data/clips` folder over 100 MB is still unverified: it is a Phase 7 check. Accepted risk: the R2
+token needs delete rights so `forget --prune` can work, so anyone with root on the VM or the key can
+delete the backups. The mitigation, not done now, is an R2 bucket lock with a separate prune key.
+`infra/backup.sh` trusts nothing in `ready`: it must be a regular file, not a symlink, at most 40
+bytes of `[0-9TZ:.-]`, or it is ignored and never logged. A failed `restic check` writes
+`check-failed` to the status volume, which the summary and `doctor` report. After a failed cycle the
+loop doubles its sleep up to 6 hours.
+
+**After a restore.** The snapshot can be a day old, so a post made after it would be posted again.
+`node src/cli.ts after-restore` marks every publication that is `pending` or `uploading` and due as
+`needs_attention` ("restored from backup: check the platform before posting again"). The owner
+checks the platform and resolves each one. This keeps the never-double-post rule across a restore.
 
 ## D-15 Alerts and monitoring: one webhook plus a dead-man's switch (2026-11-11)
 
@@ -250,7 +278,9 @@ back tokens as they were, so platforms whose refresh tokens rotate are authorize
 **Why.** A Discord or Telegram webhook is one HTTP call with no account to run. It cannot report
 that the VM itself is dead, so the loop pings healthchecks.io (free) and that service emails when
 the pings stop. A second check there is pinged only when the daily summary has been delivered, so
-a dead webhook is noticed too. A self-hosted monitor on the same VM dies with it.
+a dead webhook is noticed too. A day's summary that was never delivered is not sent later. The
+daily dead-man ping, which is not sent that day, is what tells the owner. A self-hosted monitor on
+the same VM dies with it.
 
 ## D-16 Music: beds synthesized by our own code (2026-11-12)
 

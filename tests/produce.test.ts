@@ -47,8 +47,8 @@ const stubOn = () => { process.env.LLM_STUB = '1'; };
 afterEach(() => { delete process.env.LLM_STUB; setLlmClient(null); });
 
 test('produceSlot with the stub model: planned, producing, ready; files in place, copy stored', async () => {
-  stubOn();
   const db = fresh();
+  stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
   const seen: string[] = [];
@@ -70,8 +70,8 @@ test('produceSlot with the stub model: planned, producing, ready; files in place
 });
 
 test("'ad' mode: a pending clip waits the slot instead of posting without it", async () => {
-  stubOn();
   const db = fresh();
+  stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
   const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t1: 0, t2: 1 } } });
@@ -84,8 +84,8 @@ test("'ad' mode: a pending clip waits the slot instead of posting without it", a
 });
 
 test('a second claimant fences the first producer out', async () => {
-  stubOn();
   const db = fresh();
+  stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
   let release!: () => void;
@@ -107,8 +107,8 @@ test('a second claimant fences the first producer out', async () => {
 });
 
 test('cancel: the slot stays producing for stale recovery', async () => {
-  stubOn();
   const db = fresh();
+  stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
   const stop = new AbortController();

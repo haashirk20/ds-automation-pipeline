@@ -18,9 +18,11 @@ services:
       DRY_RUN: ${DRY_RUN:-1}
       DATA_DIR: /app/data
       OUT_DIR: /app/out
+      BACKUP_STATUS_DIR: /app/backup-status
     volumes:
       - pipeline-data:/app/data
       - pipeline-out:/app/out
+      - backup-status:/app/backup-status:ro
       - ./config:/app/config:ro
     healthcheck:
       test: ["CMD", "node", "src/cli.ts", "health"]
@@ -34,7 +36,40 @@ services:
         max-size: 10m
         max-file: "5"
 
+  # Encrypted off-site backups (D-14). A separate container so the keys and the restic binary stay
+  # out of the process that handles model output and web data. Idles without RESTIC_REPOSITORY.
+  backup:
+    image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    user: "1000:1000"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    mem_limit: 768m
+    pids_limit: 64
+    # The pipeline service creates the status volume first, so it takes the node user's ownership.
+    depends_on: [pipeline]
+    tmpfs:
+      - /tmp:size=128m,uid=1000,gid=1000
+      - /cache:size=256m,uid=1000,gid=1000
+    env_file:
+      - path: .env.backup
+        required: false
+    environment:
+      RESTIC_CACHE_DIR: /cache
+    volumes:
+      - pipeline-data:/data:ro
+      - backup-status:/status
+      - ./infra/backup.sh:/backup.sh:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
 # Named volumes take their initial ownership (node user) from the image's /app/data and /app/out.
 volumes:
   pipeline-data:
   pipeline-out:
+  backup-status:

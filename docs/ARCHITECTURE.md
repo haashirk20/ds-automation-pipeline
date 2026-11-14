@@ -138,9 +138,12 @@ The same steps 1, 2, 3 and 10 to 12 apply. In between:
 
 ## Runtime shape
 
-One Docker image, one service, started with `docker compose up -d` and restarted by Docker
-(`restart: unless-stopped`). The image's command is `node src/cli.ts run`. Compose sets `DRY_RUN=1`
-unless the environment says otherwise.
+Two services, started with `docker compose up -d` and restarted by Docker
+(`restart: unless-stopped`). `pipeline` is built from the repository; its command is
+`node src/cli.ts run`, and compose sets `DRY_RUN=1` unless the environment says otherwise.
+`backup` is the official restic image running `infra/backup.sh` (see Operations). It shares no
+code and no secrets with `pipeline`; the only link is the `backup-status` volume, read-only in
+`pipeline`.
 
 The process runs a tick once a minute. Every job reads the database to decide whether it has work,
 so a crash, a restart or a missed minute changes nothing. A tick that runs longer than
@@ -153,6 +156,9 @@ so a crash, a restart or a missed minute changes nothing. A tick that runs longe
 | Stale recovery | A `producing` slot not touched for `render.produceTimeoutMinutes` (90) goes back to `planned`, or fails with an alert once `attempt` reaches `render.maxAttempts` (2) |
 | Produce | Starts one child process for the oldest planned slot if none is running. A planned slot that has an error waits 10 minutes after the attempt ended (not after it was claimed). A planned slot with no pending publication inside the lateness window fails as "too late" |
 | Publish | `publishDue`: recovers stale rows, skips overdue ones, posts the ones due |
+| Snapshot | Once a day after `ops.snapshotAt`: a consistent copy of the database for the backup service. Failure alerts `snapshot_failed` |
+| Housekeeping | Once a day after `ops.snapshotAt`, then the disk check, which alerts `disk_full` above `ops.diskAlertPercent` |
+| Summary | After `ops.summaryAt`: the daily summary, then the second dead-man's ping |
 | Heartbeat | Written at the start of the tick, so a long publish still shows the loop alive, and again at the end. The end also pings `HEALTHCHECK_URL` if set |
 
 Rendering runs in a child process so that an out-of-memory kill takes the child and not the loop,
@@ -163,7 +169,7 @@ which cancels its Chrome, and 20 seconds later its whole process group gets SIGK
 produces every planned slot before it publishes, which is how the dry run is exercised.
 
 CLI commands: `run [--once]`, `plan`, `publish`, `produce --slot ID`, `ingest [--print]`,
-`samples`, `doctor`, `health` and `auth higgsfield`. `--now ISO` moves the clock. Only `cli.ts`
+`samples`, `doctor`, `health`, `after-restore` and `auth higgsfield`. `--now ISO` moves the clock. Only `cli.ts`
 reads the clock.
 
 There is no cron, no Redis, no queue broker and no web server. The database is the queue.
@@ -428,104 +434,27 @@ Every call is `callJson` in `src/llm/client.ts`. Models come from `llm.models` i
 | `script` | `creative/script.ts` | `claude-sonnet-5-5` (`script`) | Writes the four-beat script for a hook (`ad`) |
 
 `llm.models.escalation` (`claude-opus-5-5`) and `llm.escalationEnabled` exist in the config, and no
-code calls the model. Planned and not built: the weekly review, photo tagging, and error
-classification by a model.
-
-Rules for every call:
-
-- A single request with structured output against a zod schema. No agent loop and no tools. No
-  sampling parameter is sent; `effort` is set per call.
-- The brand and product context is a stable system prefix with a cache breakpoint. Sonnet requests
-  use the server-side fallback beta.
-- Tokens, cache reads and dollar cost are written to `llm_calls` for every call. Prices are in
-  `PRICES` in `src/llm/client.ts`, and an unknown model is refused.
-- At `llm.monthlyCapUsd` ($10, UTC month) calls throw `LlmCapError`. Callers then degrade. In `ugc`
-  mode a concept failure means no new clip, so the slot reuses a stored one, and a copy failure
-  uses the deterministic copy. In `ad` mode the slot reuses an old script and alerts. A slot fails
-  only when nothing can be reused.
-- `stop_reason` is checked before the content is read. A refusal or a cut-off answer is an error.
-- Output is validated in code before use: numbers and prices must come from the brief's facts, and
-  the only URL allowed is the product's.
-- `LLM_STUB=1` replaces calls with fixtures from `tests/fixtures/llm`, for tests and for running
-  without a key. The fixtures are not in the Docker image.
-
-No model session stays open. The process calls the API and moves on.
-
-## Data model
-
-SQLite, one file, WAL mode, plain SQL migrations (`src/db/migrations`, 001 to 007, applied in
-order). The file is mode 0600 because it holds tokens.
-
-| Table | Holds |
-|---|---|
-| `products`, `briefs` | Raw Shopify product and the derived brief, versioned by content hash |
-| `hooks` | Hook library for `ad` mode: framework, texts, facts used, status, wins and losses |
-| `slots` | One row per slot: status, tier, `master_json` (the concept and clip path in `ugc` mode, the edit in `ad` mode), cost, attempt, error, claim time |
-| `renders` | One row per slot and platform: file path, hash, QA result, AI-label record, title and caption |
-| `publications` | One row per slot and platform: schedule, state, attempt, next attempt, claim time, stored handle, post id and URL, dry-run flag |
-| `spend` | The clip ledger: tier, provider, model, state (`reserved`, `submitted`, `succeeded`, `failed`, `rejected`), quoted dollars, job id, file path |
-| `llm_calls` | Token and dollar ledger for model calls |
-| `oauth_tokens` | The Higgsfield sign-in: access and refresh tokens |
-| `events`, `kv` | Alert audit trail and de-duplication; heartbeat and last ingest time |
-
-Clips are files under `data/clips`, and downloaded product photos under `data/assets`. Hook usage is
-a query over `slots`. There is no table for metrics.
-
-## Configuration and secrets
-
-`config/pipeline.config.ts` is a typed, commented file, validated with zod when the process starts.
-An invalid config makes `run` fail with a readable message, and `doctor` report it. It holds:
-timezone (`America/Toronto`), `produceAt`, per-platform handle, enabled flag, visibility, slot times,
-call-to-action text and safe zones, brand name and logo, `creative.mode`, `ugc`, model names and the
-monthly model cap, the hook window, tier mix, caps and provider settings, publish limits, render
-limits and the watchdog. Rules enforced at load: every enabled platform has the same number of
-slots, the tier mix sums to 1, `clipSeconds` is 14 to 16 in `ugc` mode, and `publish.timeoutMinutes`
-is below `uploadTimeoutMinutes`.
-
-`.env` holds every secret and is gitignored. `.env.example` is committed. The names read by the code
-are `ANTHROPIC_API_KEY` (read by the SDK), `BRIDGE_API_KEY`, `SHOPIFY_SHOP`, `SHOPIFY_CLIENT_ID`,
-`SHOPIFY_CLIENT_SECRET`, `ALERT_DISCORD_WEBHOOK`, `ALERT_TELEGRAM_BOT_TOKEN`,
-`ALERT_TELEGRAM_CHAT_ID` and `HEALTHCHECK_URL`. `DRY_RUN`, `DATA_DIR`, `OUT_DIR`, `PIPELINE_CONFIG`,
-`PIPELINE_NOW`, `LLM_STUB` and `CLIP_STUB_FILE` are settings, not secrets. OAuth tokens that rotate
-live in the database, inside the data volume. `DRY_RUN=1` skips the publish call and nothing else:
-the publisher is not called, and the log records what it would have sent.
-
-Each platform has `visibility: 'private' | 'public'`, default `private`: a private YouTube video, a
-TikTok draft in the account's inbox, a Facebook draft. Instagram has no private mode, and a private
-Instagram post is refused. A fresh install cannot post publicly until the owner changes it.
-Facebook and Instagram are disabled in the config until the owner connects them at the bridge.
-
-The only authorization the pipeline performs is `node src/cli.ts auth higgsfield`. It listens on
-`127.0.0.1:53682` for the redirect, or the owner pastes the redirect URL when the server is
-headless. Platform accounts are connected at the bridge, not here.
-
-## Operations
-
-Built:
-
-- **Logs.** One JSON object per line, to stderr, through a logger that redacts secrets. Docker
-  rotates them (10 MB × 5).
-- **Alerts.** One or two webhooks, Discord and Telegram. Kinds in the code: produce failed, ingest
-  failed, degraded, budget cap reached, clip sign-in needed, clip refused, publication skipped,
-  publication needs attention, tick failed. The same kind and key is sent at most once every 6 hours.
-  Every alert is also written to `events`.
-- **Heartbeat.** Written every tick. `node src/cli.ts health` fails when it is older than 5 minutes,
-  and Docker's healthcheck runs it. If `HEALTHCHECK_URL` is set it is pinged every tick.
-- **`doctor`.** Checks config, database and schema version, heartbeat age, Higgsfield sign-in,
-  that an alert channel exists unless `DRY_RUN=1`, that each enabled platform has an account at the
-  bridge, and which environment variables are set. It checks nothing about FFmpeg, fonts or disk.
-
-Planned and not built:
-
-- **Daily summary.** Posts published with links, cost month to date, tomorrow's slots, warnings.
-- **Second dead-man's switch.** A check pinged only after the daily summary is delivered, to catch a
-  dead webhook.
-- **More alerts.** Token expiry and disk use.
-- **Housekeeping.** Deleting old renders. It must keep `data/clips`, because `ugc` reuse needs them.
-  Database rows are kept.
-- **Backups.** A nightly database snapshot, encrypted with restic and sent to object storage. The
-  snapshot includes tokens, so the restic password and keys must also be kept off the VM.
-- **Deployment.** Hosting, the VM setup and a 48-hour unattended run.
+code calls the model. - **Daily summary.** After `ops.summaryAt`, once a day, retried every 15 minutes until delivered:
+  yesterday's publications with links, today's slots, model and clip spend this month (and last
+  month's on the 1st), publications needing attention, undelivered alerts and the backup line.
+- **Second dead-man's switch.** `HEALTHCHECK_DAILY_URL` is pinged only after a summary was delivered
+  to a real alert channel (with no channel nothing is pinged). The ping is recorded in `kv`
+  `summary_ping` only when the response is ok, and is retried every 15 minutes until it is.
+- **Disk alert.** `disk_full` when `DATA_DIR` or `OUT_DIR` is above `ops.diskAlertPercent` used.
+- **Housekeeping.** Once a day. It deletes `attempt-<claim ms>` folders whose claim is older than
+  `render.produceTimeoutMinutes` (a failed slot's for `ops.keepDays` more), the per-platform renders
+  of a slot older than `ops.keepDays` whose publications are all `published` or `skipped`, and clips
+  in `data/clips` older than `ops.keepDays` that no `ready` or `done` slot's master and no
+  `succeeded` spend row of a `planned` or `producing` slot references. Referenced clips are never
+  deleted, because `ugc` reuse needs them. A failing entry is skipped, and any failure alerts
+  `housekeeping_failed` once a day. Database rows are kept.
+- **Backups.** Two halves. The pipeline writes a consistent snapshot to `data/backup/pipeline.db`
+  and then `data/backup/ready` each night. The `backup` service (restic image, uid 1000, data
+  volume read-only, secrets in `.env.backup`) backs up that file and `data/clips` to R2 whenever
+  `ready` changes, prunes (7 daily, 4 weekly), writes `last-ok` to the `backup-status` volume and
+  checks 5% of the data weekly. Without `RESTIC_REPOSITORY` it idles. The snapshot includes tokens,
+  so the restic password and keys must also be kept off the VM (D-14).
+- **Deployment (not built).** Hosting, the VM setup and a 48-hour unattended run.
 
 ## Security
 
@@ -544,8 +473,8 @@ Planned and not built:
   only from slot ids and platform names and must stay inside `OUT_DIR`.
 - The sign-in listener accepts only the request that carries the expected `state`.
 - Error text stored in the `error` columns, alerts and logs passes through `scrub`, which removes
-  bearer tokens, access and refresh tokens, JWTs, Shopify tokens, Telegram bot tokens and webhook
-  URLs.
+  bearer tokens, access and refresh tokens, JWTs, Shopify tokens, Telegram bot tokens, webhook
+  URLs and the query string of any URL that carries a signature or token (`X-Amz-Signature`, `token=`).
 - The CLI sets `umask 077`, and the database file and its `-wal` and `-shm` files are set to mode
   0600, because the database holds OAuth tokens.
 - `--now` and `PIPELINE_NOW` are refused for `run` and `publish` unless `DRY_RUN=1`, because a

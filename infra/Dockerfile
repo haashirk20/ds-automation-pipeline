@@ -45,6 +45,6 @@ COPY prompts/ prompts/
 ENV BUNDLE_CACHE_DIR=/opt/bundle
 RUN node -e "import('./src/render/render.ts').then((m) => m.getBundle())" && chown -R node:node /opt/bundle
 # Named volumes copy this ownership on first use.
-RUN mkdir -p data out && chown node:node data out
+RUN mkdir -p data out backup-status && chown node:node data out backup-status
 USER node
 CMD ["node","src/cli.ts","run"]

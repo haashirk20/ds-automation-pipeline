@@ -2,7 +2,10 @@ import { spawn } from 'node:child_process';
 import { env, type Config } from '../config/index.ts';
 import { kvSet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
+import { housekeepingDaily } from '../ops/housekeeping.ts';
 import { log } from '../ops/log.ts';
+import { snapshotDaily } from '../ops/snapshot.ts';
+import { summaryDaily } from '../ops/summary.ts';
 import { publishDue } from '../publish/index.ts';
 import type { Publisher } from '../publish/types.ts';
 import { planDay } from './planner.ts';
@@ -97,6 +100,9 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   else if (planned.length && !deps.producer.busy()) void deps.producer.start(planned[0].id, now);
 
   await publishDue(db, config, deps.publishers, now);
+  await snapshotDaily(db, config, now);
+  await housekeepingDaily(db, config, now);
+  await summaryDaily(db, config, now);
 
   kvSet(db, 'heartbeat', now.toISOString());
   const url = env.healthcheckUrl();

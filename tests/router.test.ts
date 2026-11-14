@@ -252,8 +252,8 @@ function seed(db: ReturnType<typeof fresh>) {
 afterEach(() => { delete process.env.LLM_STUB; setLlmClient(null); });
 
 test('produceSlot with a provider: clip shot in the EDL, ai.visuals, tier and cost', async () => {
-  process.env.LLM_STUB = '1';
   const db = fresh();
+  process.env.LLM_STUB = '1'; // after fresh(), which clears it
   seed(db);
   const { reg, calls } = mkProvider();
   const T = new Date('2026-11-12T02:31:00Z');
@@ -273,12 +273,12 @@ test('produceSlot with a provider: clip shot in the EDL, ai.visuals, tier and co
 });
 
 test('produceSlot falls back to tier 0 when the provider fails or the clip is too small', async () => {
-  process.env.LLM_STUB = '1';
   for (const [name, over, state] of [
     ['provider error', { providers: mkProvider({ failSubmit: true }).reg }, 'failed'],
     ['small clip', { providers: mkProvider().reg, probeClip: async () => ({ width: 300, height: 400, seconds: 4 }) }, 'rejected'],
   ] as const) {
     const db = fresh();
+    process.env.LLM_STUB = '1';
     seed(db);
     await produceSlot(db, T1, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), deps(over as Partial<ProduceDeps>));
     const s = db.prepare('SELECT * FROM slots WHERE id = ?').get('2026-11-12#1') as any;
