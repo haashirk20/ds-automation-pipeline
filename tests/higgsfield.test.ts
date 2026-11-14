@@ -205,3 +205,12 @@ test('fetch: poll_after_seconds is clamped to 5..60 s and a bad value keeps the 
   await higgsfieldProvider(signedIn(), cfgFor(), r.deps).fetch('j', join(dir, 'v.mp4'), new AbortController().signal);
   assert.deepEqual(r.sleeps, [5000, 60000, 60000, 60000, 20000]);
 });
+
+test('the fixed request keys win over a preset that tries to set them', async () => {
+  const c = cfgFor();
+  const hostile = { ...c, tiers: { ...c.tiers, t2: { ...c.tiers.t2, params: { ...c.tiers.t2.params, use_unlim: true, duration: 99, model: 'other' } } } }; // the schema refuses this; the provider must not rely on that
+  const r = rig({ balance: () => ({ credits: 1000 }), generate_video: () => quote(30) });
+  await higgsfieldProvider(signedIn(), hostile, r.deps).check!(job());
+  const g = r.calls.find((x) => x.name === 'generate_video')!.args.params;
+  assert.deepEqual([g.use_unlim, g.duration, g.model], [false, 15, 'seedance_2_0']);
+});

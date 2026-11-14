@@ -1,6 +1,8 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { env, loadConfig } from './config/index.ts';
+import { loadEffectiveConfig, resolveConfig } from './config/overrides.ts';
+import { loadPrompts, usePrompts } from './llm/prompts.ts';
 import { hasAlertChannel } from './ops/alert.ts';
 import { backupStatus } from './ops/summary.ts';
 import { afterRestore } from './ops/snapshot.ts';
@@ -15,7 +17,7 @@ import { runIngest } from './shopify/index.ts';
 import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
-const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | after-restore | auth higgsfield';
+const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | after-restore | auth higgsfield | admin serve | admin password';
 const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'HEALTHCHECK_DAILY_URL', 'BACKUP_STATUS_DIR', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY', 'ANTHROPIC_API_KEY'];
 
 async function main(): Promise<number> {
@@ -25,7 +27,7 @@ async function main(): Promise<number> {
     options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' }, clip: { type: 'string' }, caption: { type: 'string' }, name: { type: 'string' } },
   });
   const cmd = positionals[0];
-  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'after-restore', 'auth'].includes(cmd)) {
+  if (!['run', 'plan', 'publish', 'produce', 'ingest', 'samples', 'doctor', 'health', 'after-restore', 'auth', 'admin'].includes(cmd)) {
     console.error(USAGE);
     return 2;
   }
@@ -68,8 +70,18 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const config = await loadConfig();
+  if (cmd === 'admin') {
+    if (positionals[1] !== 'serve' && positionals[1] !== 'password') {
+      console.error(USAGE);
+      return 2;
+    }
+    const admin = await import('./admin/index.ts'); // only this command loads the admin code
+    await (positionals[1] === 'serve' ? admin.serve({ now: clock }) : admin.setPassword({ now: clock }));
+    return 0;
+  }
+
   if (cmd === 'samples') {
+    const config = await loadConfig();
     if (values.clip) {
       if (!values.caption) {
         console.error(USAGE);
@@ -82,8 +94,10 @@ async function main(): Promise<number> {
     return 0;
   }
   const db = openDb(env.dataDir());
-  const publishers = makePublishers(config, { now: clock });
-  const deps = { db, config, publishers, producer: makeProducer(childSpawn(config)), wait: !!values.once };
+  const config = await loadEffectiveConfig(db, clock()); // a producer keeps the snapshot it starts with
+  usePrompts(loadPrompts(db));
+  const rebuild = (c: typeof config) => makePublishers(c, { now: clock });
+  const deps = { db, config, publishers: rebuild(config), producer: makeProducer(childSpawn(config)), wait: !!values.once, rebuild };
   if (cmd === 'run') await run(deps, clock, !!values.once);
   else if (cmd === 'produce') {
     if (!values.slot) {
@@ -101,7 +115,7 @@ async function main(): Promise<number> {
   } else if (cmd === 'plan') {
     const now = clock();
     planDay(db, config, values.date ?? localDateOf(now, config.timezone), now);
-  } else await publishDue(db, config, publishers, clock());
+  } else await publishDue(db, config, deps.publishers, clock());
   return 0;
 }
 
@@ -122,6 +136,12 @@ async function doctor(now: Date): Promise<number> {
     const age = hb ? Math.round((now.getTime() - Date.parse(hb)) / 1000) : null;
     console.log('heartbeat: ' + (age === null ? 'never' : age < 0 ? 'in the future (clock override?)' : `${age}s ago`));
     console.log('higgsfield: ' + higgsfieldStatus(db, now));
+    try {
+      const v = (await resolveConfig(db, now)).version;
+      console.log('settings: ' + (typeof v === 'number' ? `version ${v} active` : v === 'file' ? 'the file (no stored version active)' : `stored version ${v.replace(/^refused: /, 'REFUSED, running on the file: ')}`));
+    } catch (e) {
+      console.log('settings: unreadable ' + (e as Error).message);
+    }
   } catch (e) {
     bad = true;
     console.log('db: BROKEN ' + e);

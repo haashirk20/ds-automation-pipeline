@@ -38,6 +38,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-29 | Publishing layer | One hosted bridge for all four platforms |
 | D-30 | Video generation | Higgsfield's MCP server, on the owner's subscription credits |
 | D-31 | Retry rules for a slot | Outages wait without using an attempt; other errors after a paid clip retry once |
+| D-32 | Admin GUI | A loopback web service over the shared database |
 
 ---
 
@@ -223,7 +224,7 @@ the pipeline uses the public endpoint and reuses its last good brief on failure.
 
 **Why.** Hetzner, the expected choice, listed every cloud type as unavailable on the day of
 research and its prices had moved. Tying provisioning to one provider's Terraform resources would
-have been the wrong bet. A single idempotent `infra/setup.sh` for Ubuntu 24.04 works on any host.
+have been the wrong bet. Manual setup steps for Ubuntu 24.04 (STARTUP.md section 4) work on any host. A setup script was planned and not written.
 Serverless would split state and rendering across services to save a VM that costs $10.
 
 **Shortlist.** Hetzner CX33 or CAX21 (about $10–12), Netcup VPS 1000 (about $16), Hostinger KVM 2
@@ -368,6 +369,10 @@ pipeline nothing that Muapi's API does not, and Muapi is already the documented 
 
 **Why.** Node runs it directly, so it needs no parser dependency, allows comments, and is
 type-checked. It is validated again at startup. Secrets stay in `.env`.
+
+**Amended 2026-11-14 (D-32).** The file is now the defaults and ceilings. Sparse overrides saved from
+the admin page live in the database and are merged and validated with the same schema on every
+tick. The file format is unchanged.
 
 ## D-24 HTTP and SDKs: built-in `fetch` (2026-11-11)
 
@@ -637,6 +642,45 @@ lateness window often enough that slots are lost.
 
 Not used: fal.ai (no provider exists for tier 1), the Higgsfield REST API (separate prepaid balance,
 D-30) and direct platform apps (D-29).
+
+## D-32 Admin GUI: a loopback web service over the shared database (2026-11-14)
+
+**Chosen.** A second compose service, `admin`: same image, published on `127.0.0.1` only, reached by
+SSH tunnel or Tailscale. Server-rendered HTML on `node:http`, no client JavaScript, no new
+dependency. The file is the defaults and ceilings. The database holds sparse, versioned overrides and
+prompt versions. The pipeline merges and validates them with the same zod schema and guard rules on
+every tick and in every producer, and falls back to the file with a `config_invalid` alert. One
+admin: a scrypt hash in the database set by `admin password`, a session cookie, Host and Origin
+checks, a CSRF token, and a CSP with no script source.
+
+**Master prompt: both.** `video` is the style text that frames every Higgsfield request (the first
+paragraph of `buildClipPrompt`, moved to `prompts/video.md`; the sentence limiting speech to the one
+line stays in code and comes last). `house` is a house style text (`prompts/house.md`) prepended to
+the writer prompts only (`ugc`, `copy`, `hooks`, `script`), never to `claims`, `copycheck` or
+`vision`, and fixed for the life of a process so the prompt cache holds.
+
+**Locked (read-only on the page, with a reason).** `claims`, `copycheck` and `vision` prompts and the
+frame-check effort; `publish.*`; `disclosure.*`; `DRY_RUN`; `timezone`; account handles; `render.*`;
+`watchdogMinutes`; `creative.mode`; `tiers.clipSeconds`; free-form `t2.params`; tier 1 and
+`capsUsd.t1`; `brand.*`; `photo-tags.json`.
+
+**Alternatives.** Editing files over SSH and restarting. A server inside the pipeline process. A
+hosted admin or a public TLS port. AdminJS or a JavaScript front end with a build step. YAML or JSON
+config replacing D-23.
+
+**Why.** The admin holds no API key in its environment, but it can read the database file that holds the
+OAuth tokens, and its environment carries the alert webhook and bot credentials.
+Every guardrail sits in the shared loader, so a value written straight into the database is refused
+the same way.
+
+**Cost.** One more container (about 100 MB of RAM). The admin can read the database file that holds
+the OAuth tokens; its code never queries them (a test checks this).
+
+**Revisit when.** A second person needs access, the page must be reachable without a tunnel, or the
+owner wants to try a prompt from the page.
+
+**Later hardening.** Move `oauth_tokens` to a separate database file on a volume the admin does not mount.
+
 
 ## Open questions for the owner
 

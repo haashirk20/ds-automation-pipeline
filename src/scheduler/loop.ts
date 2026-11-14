@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { env, type Config } from '../config/index.ts';
+import { resolveConfig } from '../config/overrides.ts';
 import { kvSet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { housekeepingDaily } from '../ops/housekeeping.ts';
@@ -14,7 +15,8 @@ import { addDays, localDateOf, localHHMM } from './time.ts';
 // Resolves when the producer for one slot has exited, however it exited.
 export type Spawn = (slotId: string, now: Date) => Promise<void>;
 export type Producer = { busy(): boolean; start(slotId: string, now: Date): Promise<void> };
-export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean };
+// With `rebuild`, run() reads the config again before every tick and rebuilds the publishers from it.
+export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean; rebuild?: (config: Config) => Record<string, Publisher> };
 
 // One slot at a time. start() returns a promise the caller may ignore.
 export function makeProducer(spawnFn: Spawn): Producer {
@@ -88,10 +90,17 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   const retryAfter = new Date(now.getTime() - RETRY_GAP_MINUTES * 60000).toISOString();
   const planned: { id: string }[] = [];
   for (const { id, error, updated_at } of db.prepare("SELECT id, error, updated_at FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string; error: string | null; updated_at: string }[]) {
-    if (db.prepare("SELECT 1 FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").get(id, lateBefore)) {
-      if (error === null || updated_at <= retryAfter) planned.push({ id });
+    const open = db.prepare("SELECT platform FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").all(id, lateBefore) as { platform: string }[];
+    if (open.length) {
+      // Every platform switched off (paused): leave the slot planned and spend nothing; turning one back on in time resumes it.
+      const paused = !open.some((o) => (config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled);
+      if (!paused && (error === null || updated_at <= retryAfter)) planned.push({ id });
     } else {
-      db.prepare("UPDATE slots SET status = 'failed', error = 'too late', updated_at = ? WHERE id = ? AND status = 'planned'").run(now.toISOString(), id);
+      // Past lateness with every pending row on a platform that is switched off: failed quietly as 'paused'.
+      const rows = db.prepare("SELECT platform FROM publications WHERE slot_id = ? AND state = 'pending'").all(id) as { platform: string }[];
+      const paused = rows.length > 0 && rows.every((o) => !(config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled);
+      db.prepare("UPDATE slots SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'planned'").run(paused ? 'paused' : 'too late', now.toISOString(), id);
+      if (paused) continue;
       await alert(db, 'produce_failed', id, `${id} was not produced: too late`, now);
     }
   }
@@ -125,7 +134,14 @@ export async function run(deps: Deps, clock: () => Date, once: boolean): Promise
       process.exit(1);
     }, deps.config.watchdogMinutes * 60000);
     try {
-      await tick(deps, now);
+      let d = deps;
+      if (deps.rebuild) {
+        const r = await resolveConfig(deps.db, now);
+        d = { ...deps, config: r.config, publishers: deps.rebuild(r.config) };
+        const prompts = Object.fromEntries((deps.db.prepare("SELECT substr(key, 13) AS k, value FROM kv WHERE key LIKE 'text_active:%'").all() as { k: string; value: string }[]).map((x) => [x.k, Number(x.value)]));
+        kvSet(deps.db, 'pipeline_state', JSON.stringify({ dryRun: env.dryRun(), configVersion: r.version, promptVersions: prompts, tickAt: now.toISOString() }));
+      }
+      await tick(d, now);
     } catch (e) {
       log.error('tick failed', { error: String(e) });
       await alert(deps.db, 'tick_failed', 'tick', `tick failed: ${e}`, now);

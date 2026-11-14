@@ -7,9 +7,11 @@ import { SafeZone } from '../contracts.ts';
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM');
 const base = { handle: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1), cta: z.string().min(1), safe: SafeZone };
 
+// The request sets these itself; a preset may not.
+const FIXED_PARAMS = ['model', 'prompt', 'aspect_ratio', 'duration', 'use_unlim', 'get_cost', 'medias'];
 const tierSchema = z.object({
   provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive(),
-  params: z.record(z.string(), z.unknown()).default({}), maxCredits: z.number().positive().optional(), keepCredits: z.number().min(0).optional(),
+  params: z.record(z.string(), z.unknown()).refine((p) => !FIXED_PARAMS.some((k) => Object.hasOwn(p, k)), `must not set ${FIXED_PARAMS.join(', ')}`).default({}), maxCredits: z.number().positive().optional(), keepCredits: z.number().min(0).optional(),
 });
 
 const schema = z
@@ -53,6 +55,7 @@ const schema = z
       maxJobsPerSlot: z.number().int().min(1),
       t1: tierSchema,
       t2: tierSchema,
+      t2Presets: z.record(z.string(), tierSchema).default({}),
     }),
     ops: z.object({ summaryAt: hhmm, snapshotAt: hhmm, keepDays: z.number().int().min(1), diskAlertPercent: z.number().min(1).max(100) }),
     watchdogMinutes: z.number().positive(),
@@ -80,9 +83,13 @@ export function parseConfig(input: unknown): Config {
 }
 
 // PIPELINE_CONFIG names a file to load in place of config/pipeline.config.ts; it is validated the same way.
-export async function loadConfig(): Promise<Config> {
+export async function loadRaw(): Promise<unknown> {
   const file = process.env.PIPELINE_CONFIG;
-  return parseConfig(file ? (await import(pathToFileURL(path.resolve(file)).href)).default : raw);
+  return file ? (await import(pathToFileURL(path.resolve(file)).href)).default : raw;
+}
+
+export async function loadConfig(): Promise<Config> {
+  return parseConfig(await loadRaw());
 }
 
 // Accepts 'my-store', 'my-store.myshopify.com' or 'https://my-store.myshopify.com/'. The result goes

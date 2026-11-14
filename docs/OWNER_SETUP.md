@@ -1,6 +1,6 @@
 # What the pipeline needs from you
 
-Everything in one place. Each item switches on the part named beside it.
+Everything in one place. Each item switches on the part named beside it. For running and hosting the stack, see `STARTUP.md`.
 
 **Put secrets in the `.env` file, not in chat.** `.env.example` lists every variable.
 
@@ -23,7 +23,7 @@ Everything in one place. Each item switches on the part named beside it.
    check of 2026-11-14 passed the Wan clip and was split on the Seedance clip, because of a
    hood-like collar.
 3. Confirm `config/product-notes.json` (section 4).
-4. Set `HEALTHCHECK_URL` and keep the Discord webhook (section 4).
+4. Set `HEALTHCHECK_URL` and `HEALTHCHECK_DAILY_URL` (section 7) and keep the Discord webhook (section 4).
 5. Optional: connect Facebook and Instagram (section 2).
 
 ## 1. Sign the pipeline in to Higgsfield (done 2026-11-14)
@@ -94,11 +94,8 @@ Set `visibility: 'public'` per platform when you are happy with what you see.
 - **`config/product-notes.json`** says what the product looks like and visibly does. The current
   note says the power button glows red when the heat is on, as in your reference videos. Correct
   it if that is wrong.
-- **healthchecks.io** (`HEALTHCHECK_URL`): the free plan allows 20 checks. One check tells you when
-  the server itself is down. Keep the Discord webhook (`ALERT_DISCORD_WEBHOOK`) in `.env` too, since
-  alerts go there. Add a second check for `HEALTHCHECK_DAILY_URL`: period 1 day, grace about
-  3 hours. The pipeline pings it only after the daily summary has been delivered, so a day without a
-  ping means the summary never arrived.
+- **healthchecks.io** (`HEALTHCHECK_URL`, `HEALTHCHECK_DAILY_URL`): section 7. Keep the Discord
+  webhook (`ALERT_DISCORD_WEBHOOK`) in `.env` too, since alerts go there.
 - **A server** (Phase 7): Ubuntu 24.04, 4 vCPU, 8 GB, your SSH key on it, about $10–17 a month.
 - **Backups** (Phase 7): section 5.
 
@@ -141,6 +138,88 @@ journal pages never replay onto the restored file.
 The restored database holds the tokens as they were at backup time. Higgsfield's may be stale: if
 `node src/cli.ts doctor` reports the sign-in expired, run
 `docker compose run --rm pipeline node src/cli.ts auth higgsfield`. Delete `./restore` afterwards.
+
+## 6. Admin page
+
+A small web page for changing the schedule, the video preset, the prompts and the caps. It runs as
+the `admin` service, listens on the VM's loopback only (`127.0.0.1:8080`, or `ADMIN_PORT`), and
+holds none of your API keys in its environment. It can read the database file that holds the OAuth
+tokens, and its environment carries the alert webhook and bot credentials. Nothing on the internet can reach it.
+
+**Set the password** (once, at least 12 characters; run it again to change it, which logs everyone out):
+
+```bash
+docker compose run --rm --no-deps admin node src/cli.ts admin password
+```
+
+**Open it from your laptop** through an SSH tunnel:
+
+```bash
+ssh -L 9000:127.0.0.1:8080 <user>@<vm>
+```
+
+Leave that running and browse to http://localhost:9000. Log in as `admin` with the password. Sessions
+end after 60 idle minutes or 12 hours. Anyone who can reach the port can trigger the global login lockout
+by failing five logins; `admin password` clears it. `PIPELINE_CONFIG` is not supported together with the
+admin, because the admin validates against `config/pipeline.config.ts`.
+
+**Tailscale instead** (unverified, check `tailscale serve --help` on your version; login works over https
+because the Origin check accepts `https://<host>`, but this was not tested on a real tailnet): install
+Tailscale on the VM and the laptop, then on the VM run something like
+`tailscale serve --bg 8080` (older versions: `tailscale serve --bg http://127.0.0.1:8080`). Put the
+VM's MagicDNS name in `ADMIN_HOSTS` in `.env` (for example `vm.tailnet-name.ts.net`) and run
+`docker compose up -d admin`. Without that, the page answers 421 to the name. Everyone on your
+tailnet can then reach the page, and the password is the only gate.
+
+**What you can change:** slot times, the number of slots, which platforms are enabled (all off pauses
+the pipeline), visibility, the safe zone, the video preset and its lower caps, the `t0` share, the
+monthly model cap, the models for the concept writer, the claim judge and the frame check, the
+`ugc`, `copy`, `hooks`, `script`, `video` and `house` prompts, the per-product note, and the retention
+and disk settings. A file value is a ceiling: the page can lower a cap, never raise it above
+`config/pipeline.config.ts`.
+
+**What is locked, and why.** Read-only on the page, edit the file instead:
+- `claims`, `copycheck` and `vision` prompts and the frame-check effort: they are the guard against
+  false claims and bad clips (D-21, D-28).
+- Publish and disclosure settings, account handles, `DRY_RUN`, `timezone`: a wrong value posts to the
+  wrong place, at the wrong time, or without disclosure.
+- `render.*`, `watchdogMinutes`, `creative.mode`, `tiers.clipSeconds`, free-form `t2.params`, tier 1,
+  `brand.*` and `photo-tags.json`: they tie to the renderer, the budget maths and the brand.
+- Secrets and tokens are never shown.
+
+**How a change takes effect.** Saving makes a new numbered version after a diff page. The pipeline
+reads it at the start of the next tick, within a minute, and Overview then says "version N in use".
+A slot already in production finishes on the old version. New slot times apply from the first day not
+yet planned (the page shows the date). Slots already planned or ready keep their times, copy and
+render. Visibility and enabled are read when posting.
+
+**Roll back.** History, then Activate on an older version. "Use file" on the History page resets all
+settings to the file; for one prompt it resets that prompt; a single setting goes back by entering the file
+value. If a stored version ever fails validation, the pipeline
+uses the file config and sends a `config_invalid` alert.
+
+## 7. Healthchecks.io
+
+Two checks tell you when the pipeline or its alerts have stopped. The free plan allows 20 checks.
+
+1. Create a free account at healthchecks.io.
+2. Create check 1, "pipeline tick": period 5 minutes, grace 10 minutes. Copy its ping URL into
+   `HEALTHCHECK_URL` in `.env`. The loop pings at the end of every tick, and a tick runs about once
+   a minute (`src/scheduler/loop.ts` sleeps 60 s between ticks).
+3. Create check 2, "daily summary": period 1 day, grace about 3 hours. Copy its ping URL into
+   `HEALTHCHECK_DAILY_URL`. The pipeline pings it once a day, after `ops.summaryAt`, and only when
+   the summary reached a real alert channel (`src/ops/summary.ts`).
+4. Set the notification (email is enough) under Integrations, and make sure both checks use it.
+5. `docker compose up -d` to restart the stack with the new `.env`.
+6. Run `docker compose run --rm pipeline node src/cli.ts doctor`. Both URLs should show as set. Within
+   a few minutes check 1 turns green. Check 2 turns green after the first summary, so it stays
+   "new" until then.
+
+What an alert means:
+- **Pipeline tick is down:** nothing is running. The VM is off, Docker is stopped, or the loop is dead
+  or stuck. Check `docker compose ps` and `docker compose logs pipeline`.
+- **Daily summary is down:** the summary was not delivered. The alert webhook may be broken, so test
+  `ALERT_DISCORD_WEBHOOK`. The pipeline may still be posting, because the tick check is green.
 
 ## Not needed any more
 

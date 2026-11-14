@@ -263,6 +263,31 @@ test('loop marks a planned slot with nothing left to publish in time as failed: 
   assert.deepEqual(started, ['2026-11-12#2']);
 });
 
+test('all platforms disabled: a planned slot is not started; re-enabled in time, it is', async () => {
+  const db = fresh();
+  planDay(db, config, '2026-11-12', NOW);
+  const off = structuredClone(config);
+  for (const p of Object.values(off.platforms)) p.enabled = false;
+  const started: string[] = [];
+  const producer = makeProducer(async (id) => void started.push(id));
+  await tick({ db, config: off, publishers, producer, wait: true }, NOW);
+  assert.deepEqual(started, []);
+  assert.deepEqual([slot(db, '2026-11-12#1').status, slot(db, '2026-11-12#1').error], ['planned', null]);
+  await tick({ db, config, publishers, producer, wait: true }, new Date(NOW.getTime() + 60000));
+  assert.deepEqual(started, ['2026-11-12#1', '2026-11-12#2']);
+});
+
+test('all platforms disabled and past lateness: the slot fails as paused with no alert', async () => {
+  const db = fresh();
+  planDay(db, config, '2026-11-12', NOW);
+  const off = structuredClone(config);
+  for (const p of Object.values(off.platforms)) p.enabled = false;
+  const producer = makeProducer(async () => {});
+  await tick({ db, config: off, publishers, producer, wait: true }, new Date('2026-11-13T00:00:00Z'));
+  assert.deepEqual([slot(db, '2026-11-12#1').status, slot(db, '2026-11-12#1').error], ['failed', 'paused']);
+  assert.equal((db.prepare("SELECT count(*) AS n FROM events WHERE kind = 'produce_failed'").get() as { n: number }).n, 0);
+});
+
 test('a producer child that ignores SIGTERM is killed after the grace period', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'child-'));
   const pidFile = join(dir, 'pid');

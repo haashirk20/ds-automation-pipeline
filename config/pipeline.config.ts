@@ -1,3 +1,6 @@
+// Tier 2 is the Higgsfield tier; the admin page may switch to any entry of tiers.t2Presets.
+const WAN = { provider: 'higgsfield', model: 'wan3_0', usdPerClip: 0.57, params: { resolution: '720p', generate_audio: true }, maxCredits: 30, keepCredits: 350 };
+
 // Default pipeline config. Validated at startup by src/config/index.ts.
 // All times are local to `timezone`, 24h HH:MM.
 export default {
@@ -87,9 +90,12 @@ export default {
     // quoted at 26.25 credits, so usdPerClip is 0.57. A job quoted above maxCredits is not started, and a job
     // is not started when it would leave fewer than keepCredits credits. keepCredits 350 sits above
     // Higgsfield's auto-refill threshold of 300.
-    t2: { provider: 'higgsfield', model: 'wan3_0', usdPerClip: 0.57, params: { resolution: '720p', generate_audio: true }, maxCredits: 30, keepCredits: 350 },
-    // The alternative model, at 37.5 credits:
-    // t2: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 0.82, params: { mode: 'fast', resolution: '720p', generate_audio: true }, maxCredits: 40, keepCredits: 350 },
+    t2: { ...WAN },
+    // The choices the admin page offers for t2. The alternative model, Seedance 2.0, is quoted at 37.5 credits.
+    t2Presets: {
+      wan3_0_720p: { ...WAN },
+      seedance_2_0_fast_720p: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 0.82, params: { mode: 'fast', resolution: '720p', generate_audio: true }, maxCredits: 40, keepCredits: 350 },
+    },
   },
   // Operations. summaryAt: local time after which the daily summary for yesterday is sent. snapshotAt: local time
   // after which the nightly database snapshot is written for the backup container; housekeeping runs after it.

@@ -31,16 +31,25 @@ const REVIEW = /review|rated|\bstars?\b|customers (say|love)/i;
 const BANNED = /best.?sell|#\s?1|number one|guarantee|\bcure|\bheal|pain relief|medical|doctor/i;
 const FREE_SHIPPING = /free\s+(shipping|delivery)/i;
 
+// The matched phrase with a little context, at most 80 characters, so an error never echoes a whole text.
+const snip = (text: string, re: RegExp): string => {
+  const m = re.exec(text);
+  if (!m) return text.slice(0, 80);
+  const s = Math.max(0, m.index - 20);
+  return text.slice(s, Math.min(text.length, m.index + m[0].length + 20)).slice(0, 80);
+};
+const URGENT_OR_DISCOUNT = (t: string) => (DISCOUNT.test(t) ? DISCOUNT : URGENCY);
+
 // Banned wording in one string, according to the brief's rules.
 export function languageProblems(brief: Brief, raw: string, where: string): string[] {
   const text = norm(raw);
   const out: string[] = [];
-  if (!brief.rules.discountClaims && (DISCOUNT.test(text) || URGENCY.test(text))) out.push(`${where}: discount or urgency language "${text}"`);
-  if (!brief.rules.reviewClaims && REVIEW.test(text)) out.push(`${where}: review language "${text}"`);
-  if (BANNED.test(text)) out.push(`${where}: banned phrase "${text}"`);
+  if (!brief.rules.discountClaims && (DISCOUNT.test(text) || URGENCY.test(text))) out.push(`${where}: discount or urgency language "${snip(text, URGENT_OR_DISCOUNT(text))}"`);
+  if (!brief.rules.reviewClaims && REVIEW.test(text)) out.push(`${where}: review language "${snip(text, REVIEW)}"`);
+  if (BANNED.test(text)) out.push(`${where}: banned phrase "${snip(text, BANNED)}"`);
   // A look-alike letter from another script ("bеstseller" with a Cyrillic е) reads the same and matches no pattern.
-  if (/[^\p{Script=Latin}\P{L}]/u.test(text)) out.push(`${where}: non-Latin letters in "${text}"`);
-  if (FREE_SHIPPING.test(text) && !brief.facts.some((f) => FREE_SHIPPING.test(norm(f.text)))) out.push(`${where}: free shipping is not in the facts: "${text}"`);
+  if (/[^\p{Script=Latin}\P{L}]/u.test(text)) out.push(`${where}: non-Latin letters in "${snip(text, /[^\p{Script=Latin}\P{L}]/u)}"`);
+  if (FREE_SHIPPING.test(text) && !brief.facts.some((f) => FREE_SHIPPING.test(norm(f.text)))) out.push(`${where}: free shipping is not in the facts: "${snip(text, FREE_SHIPPING)}"`);
   return out;
 }
 
@@ -65,8 +74,8 @@ export function dollarProblems(brief: Brief, raw: string, where: string): string
   const amounts = text.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) ?? [];
   const ok = priceForms(brief);
   for (const a of amounts) if (!ok.includes(a)) out.push(`${where}: price "${a}" is not "${brief.product.priceText}"`);
-  if (/(?![0-9])\p{Nd}/u.test(text)) out.push(`${where}: non-ASCII digits in "${text}"`);
-  if (/[\p{Sc}--[$]]/v.test(text) || /\$(?!\s?\d)/.test(text)) out.push(`${where}: stray currency symbol in "${text}"`);
+  if (/(?![0-9])\p{Nd}/u.test(text)) out.push(`${where}: non-ASCII digits in "${snip(text, /(?![0-9])\p{Nd}/u)}"`);
+  if (/[\p{Sc}--[$]]/v.test(text) || /\$(?!\s?\d)/.test(text)) out.push(`${where}: stray currency symbol in "${snip(text, /[\p{Sc}--[$]]|\$(?!\s?\d)/v)}"`);
   return out;
 }
 

@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../src/db/index.ts';
@@ -6,6 +6,7 @@ import { parseConfig } from '../src/config/index.ts';
 import raw from '../config/pipeline.config.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { makeProducer } from '../src/scheduler/loop.ts';
+import { Brief } from '../src/contracts.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
 // Facebook and Instagram are off in the shipped config; the suite exercises all four.
@@ -56,3 +57,11 @@ export function fakePublishers(impl: Publisher['publish'] = async () => ({ postI
 }
 
 export { PermanentError };
+
+// The sample brief, stored the way ingest stores it.
+export const sampleBrief = Brief.parse(JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8')).brief);
+export function seedBrief(db: ReturnType<typeof openDb>) {
+  db.prepare("INSERT INTO products (handle, title, raw_json, fetched_at) VALUES (?,?,'{}','t')").run(sampleBrief.product.handle, sampleBrief.product.title);
+  db.prepare('INSERT INTO briefs (handle, source_hash, json, built_at) VALUES (?,?,?,?)').run(sampleBrief.product.handle, sampleBrief.sourceHash, JSON.stringify(sampleBrief), 't');
+  return sampleBrief;
+}

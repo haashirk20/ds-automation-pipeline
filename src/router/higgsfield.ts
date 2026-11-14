@@ -72,7 +72,7 @@ export function higgsfieldProvider(db: Db, config: Config, deps: HiggsDeps): Cli
   };
 
   const params = (job: ClipJob, extra: Record<string, unknown>) => ({
-    model: t.model, prompt: job.prompt, aspect_ratio: '9:16', duration: job.seconds, use_unlim: false, ...t.params,
+    ...t.params, model: t.model, prompt: job.prompt, aspect_ratio: '9:16', duration: job.seconds, use_unlim: false,
     ...(t.model.startsWith('kling_o3') && job.shots.length ? { multi_shots: true, multi_prompt: job.shots.map((x) => ({ prompt: x.prompt, duration: x.seconds })) } : {}),
     ...extra,
   });

@@ -5,7 +5,7 @@ import { UgcConcept, type Brief } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { callJson } from '../llm/client.ts';
-import { systemPrompt } from '../llm/prompts.ts';
+import { activeText, promptText, systemPrompt } from '../llm/prompts.ts';
 import { dollarProblems, judgeTexts, languageProblems, norm, textProblems, urlsIn, words } from './claims.ts';
 
 export class ConceptRejectedError extends Error {
@@ -20,6 +20,8 @@ const NOTES = join(import.meta.dirname, '../../config/product-notes.json');
 
 // The owner's note on what the product looks like; null when there is none.
 export function productLook(handle: string, file: string = NOTES): string | null {
+  const edited = activeText(`note:${handle}`);
+  if (edited !== undefined) return edited;
   if (!existsSync(file)) return null;
   const notes = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { look?: string }>;
   return Object.hasOwn(notes, handle) ? (notes[handle].look ?? null) : null;
@@ -114,7 +116,7 @@ export function buildClipPrompt(brief: Brief, c: UgcConcept, refNotes: string[],
     return `Shot ${i + 1} (${start}-${t}s): ${s.prompt}`;
   });
   const prompt = [
-    'Vertical 9:16 video that looks like real user-generated content: filmed handheld, natural light, slight camera shake, no colour grading, no filters. No on-screen text, no subtitles, no captions, no watermark, no music. Nothing is written anywhere in the scene: no signs, posters, papers with writing, labels, stickers, or screens showing text or logos.',
+    promptText('video'),
     `Setting: ${c.setting}\nPerson: ${c.person}`,
     product,
     shotLines.join('\n'),

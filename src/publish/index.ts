@@ -124,11 +124,18 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     const why = d.handle_json ? `${d.why}, a post request may have been sent` : d.why;
     if (db.prepare("UPDATE publications SET state = ?, error = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(state, why, d.slot_id, d.platform).changes !== 1) continue;
     if (d.handle_json) await alert(db, 'publish_needs_attention', `${d.slot_id}/${d.platform}`, `${d.slot_id} ${d.platform} needs_attention: ${why}`, now);
+    else if (!config.platforms[d.platform as keyof Config['platforms']]?.enabled) log.info('row skipped, platform disabled', { slot: d.slot_id, platform: d.platform, why: d.why });
     else await alert(db, 'publish_skipped', d.slot_id, `${d.slot_id} skipped: ${d.why}`, now);
   }
 
   const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];
   for (const p of due) {
+    // Switched off after planning: nothing was sent for this row, so it is skipped. A row with a handle resumes.
+    if (!platformCfg(p).enabled && !p.handle_json) {
+      db.prepare("UPDATE publications SET state = 'skipped', error = 'platform disabled' WHERE slot_id = ? AND platform = ? AND state = 'pending' AND handle_json IS NULL").run(p.slot_id, p.platform);
+      log.info('row skipped, platform disabled', { slot: p.slot_id, platform: p.platform });
+      continue;
+    }
     if (env.dryRun()) {
       log.info('dry-run publish', { slot: p.slot_id, platform: p.platform, title: p.title ?? p.slot_id, caption: p.caption ?? '', aiDisclosure: aiDisclosure(p), visibility: platformCfg(p).visibility, file: p.file_path });
       db.prepare("UPDATE publications SET state = 'published', dry_run = 1, post_id = 'dry-run', published_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(ts, p.slot_id, p.platform);

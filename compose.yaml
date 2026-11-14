@@ -1,5 +1,7 @@
 services:
   pipeline:
+    # Both services use this tag, so the image is built once.
+    image: ad-pipeline:local
     build:
       context: .
       dockerfile: infra/Dockerfile
@@ -30,6 +32,45 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  # Admin page (D-32). Same image, no env_file: it holds no API key, so a bug in it can neither
+  # post nor spend. Published on the host loopback only; reach it by SSH tunnel or Tailscale.
+  admin:
+    image: ad-pipeline:local
+    command: ["node", "src/cli.ts", "admin", "serve"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    depends_on: [pipeline]
+    environment:
+      DATA_DIR: /app/data
+      BACKUP_STATUS_DIR: /app/backup-status
+      ADMIN_HOSTS: ${ADMIN_HOSTS:-}
+      ALERT_DISCORD_WEBHOOK: ${ALERT_DISCORD_WEBHOOK:-}
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+    ports: ["127.0.0.1:${ADMIN_PORT:-8080}:8080"]
+    volumes:
+      - pipeline-data:/app/data
+      - backup-status:/app/backup-status:ro
+      - ./config:/app/config:ro
+    networks: [admin]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: json-file
       options:
@@ -67,6 +108,10 @@ services:
       options:
         max-size: 10m
         max-file: "5"
+
+# Own network for the admin page, so the pipeline container cannot reach it.
+networks:
+  admin:
 
 # Named volumes take their initial ownership (node user) from the image's /app/data and /app/out.
 volumes:

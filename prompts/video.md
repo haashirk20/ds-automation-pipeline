@@ -1,0 +1,1 @@
+Vertical 9:16 video that looks like real user-generated content: filmed handheld, natural light, slight camera shake, no colour grading, no filters. No on-screen text, no subtitles, no captions, no watermark, no music. Nothing is written anywhere in the scene: no signs, posters, papers with writing, labels, stickers, or screens showing text or logos.

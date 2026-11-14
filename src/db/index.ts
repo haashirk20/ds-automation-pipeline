@@ -26,8 +26,12 @@ export function migrate(db: Db): void {
   for (const f of files) {
     const v = parseInt(f, 10);
     if (v <= schemaVersion(db)) continue;
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE'); // the pipeline and the admin service may start together
     try {
+      if (v <= schemaVersion(db)) {
+        db.exec('ROLLBACK');
+        continue;
+      }
       db.exec(readFileSync(join(dir, f), 'utf8'));
       db.exec(`PRAGMA user_version = ${v}`);
       db.exec('COMMIT');

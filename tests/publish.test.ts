@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { publishDue } from '../src/publish/index.ts';
 import { AmbiguousError, ClaimLostError, RetryableError } from '../src/publish/types.ts';
+import { parseConfig } from '../src/config/index.ts';
 import { AT_SLOT1, PermanentError, config, fakePublishers, readyDb } from './helpers.ts';
 
 const SLOT = '2026-11-12#1';
@@ -296,4 +297,33 @@ test('the error text written to the row is scrubbed', async () => {
   const { publishers } = fakePublishers(async () => { throw new PermanentError('bad Bearer abc123token'); });
   await publishDue(db, config, publishers, AT_SLOT1);
   assert.equal(row(db, 'youtube').error, 'bad Bearer [redacted]');
+});
+
+test('a disabled platform: a pending row without a handle is skipped, one with a handle resumes', async () => {
+  const db = await readyDb();
+  const off = parseConfig({ ...config, platforms: { ...config.platforms, youtube: { ...config.platforms.youtube, enabled: false }, tiktok: { ...config.platforms.tiktok, enabled: false } } });
+  db.prepare("UPDATE publications SET handle_json = '{\"u\":1}' WHERE slot_id = ? AND platform = 'tiktok'").run(SLOT);
+  const { publishers, calls } = fakePublishers();
+  await publishDue(db, off, publishers, AT_SLOT1);
+  const yt = rows(db)[0];
+  assert.deepEqual([yt.state, yt.error], ['skipped', 'platform disabled']);
+  assert.equal(rows(db, `SELECT * FROM publications WHERE slot_id = '${SLOT}' AND platform = 'tiktok'`)[0].state, 'published');
+  assert.deepEqual(calls.map((c: any) => c.idempotencyKey).sort(), [`${SLOT}:facebook`, `${SLOT}:instagram`, `${SLOT}:tiktok`]);
+});
+
+test('a disabled platform: skipped rows raise no publish_skipped alert, enabled ones still do', async () => {
+  const db = await readyDb();
+  const off = parseConfig({ ...config, platforms: { ...config.platforms, youtube: { ...config.platforms.youtube, enabled: false } } });
+  db.prepare("UPDATE slots SET status = 'failed' WHERE id = ?").run(SLOT);
+  const { publishers } = fakePublishers();
+  await publishDue(db, off, publishers, AT_SLOT1);
+  assert.equal(rows(db)[0].error, 'slot failed');
+  // the other three platforms are enabled, so the slot still gets its one alert
+  assert.equal(rows(db, `SELECT * FROM events WHERE key = '${SLOT}'`).length, 1);
+  const db2 = await readyDb();
+  const allOff = parseConfig({ ...config, platforms: Object.fromEntries(Object.entries(config.platforms).map(([k, v]) => [k, { ...v, enabled: false }])) });
+  db2.prepare("UPDATE slots SET status = 'failed' WHERE id = ?").run(SLOT);
+  await publishDue(db2, allOff, publishers, AT_SLOT1);
+  assert.equal(rows(db2, `SELECT * FROM events WHERE key = '${SLOT}'`).length, 0);
+  assert.equal(rows(db2, `SELECT * FROM publications WHERE slot_id = '${SLOT}' AND state = 'skipped'`).length, 4);
 });

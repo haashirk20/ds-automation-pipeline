@@ -138,10 +138,11 @@ The same steps 1, 2, 3 and 10 to 12 apply. In between:
 
 ## Runtime shape
 
-Two services, started with `docker compose up -d` and restarted by Docker
+Three services, started with `docker compose up -d` and restarted by Docker
 (`restart: unless-stopped`). `pipeline` is built from the repository; its command is
 `node src/cli.ts run`, and compose sets `DRY_RUN=1` unless the environment says otherwise.
-`backup` is the official restic image running `infra/backup.sh` (see Operations). It shares no
+`pipeline` listens on no port. `admin` is the same image running `node src/cli.ts admin serve`
+(see Admin). `backup` is the official restic image running `infra/backup.sh` (see Operations). It shares no
 code and no secrets with `pipeline`; the only link is the `backup-status` volume, read-only in
 `pipeline`.
 
@@ -169,10 +170,37 @@ which cancels its Chrome, and 20 seconds later its whole process group gets SIGK
 produces every planned slot before it publishes, which is how the dry run is exercised.
 
 CLI commands: `run [--once]`, `plan`, `publish`, `produce --slot ID`, `ingest [--print]`,
-`samples`, `doctor`, `health`, `after-restore` and `auth higgsfield`. `--now ISO` moves the clock. Only `cli.ts`
+`samples`, `doctor`, `health`, `after-restore`, `auth higgsfield`, `admin serve` and `admin password`. `--now ISO` moves the clock. Only `cli.ts`
 reads the clock.
 
-There is no cron, no Redis, no queue broker and no web server. The database is the queue.
+There is no cron, no Redis and no queue broker. The only web server is the admin page, in its own
+service. The database is the queue.
+
+## Admin
+
+A second compose service, `admin` (D-32), gives the owner a page to change settings and prompts. It
+runs the same image and shares the `pipeline-data` volume (SQLite in WAL mode). It has no `env_file`
+and so no API key in its environment: only the three `ALERT_*` variables, for the lockout alert. It can
+still read the database file that holds the OAuth tokens (later hardening: D-32). Inside the container it listens on 0.0.0.0:8080; the host publishes
+`127.0.0.1:${ADMIN_PORT:-8080}` only, and the service sits on its own network. The owner reaches it by
+SSH tunnel or Tailscale.
+
+**Edits.** The config file holds defaults and ceilings. The database holds sparse, numbered
+overrides (`config_versions`) and prompt versions (`text_versions`), with the active one named in
+`kv`. `src/config/overrides.ts` merges an override into the file object and runs the same zod
+schema and guard rules (ceilings, floors, whitelists, cross-field rules) in two places: the admin
+before it saves, and the pipeline on every tick and in each producer. A stored override that fails
+falls back to the file and sends `config_invalid`. A tick reads the active version at its start; a
+producer keeps the snapshot it loaded. Each save is one transaction, checks the version the form was
+based on, and writes an `audit` row. Rollback activates an older version; "Use file" removes the
+pointer. Prompts: `claims`, `copycheck` and `vision` are locked; `house` is prepended to the writer
+prompts only; `video` is the Higgsfield style text and the speech sentence stays in code.
+
+**Security.** One admin, a scrypt hash in `kv`, a session cookie (`HttpOnly`, `SameSite=Strict`,
+stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
+per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB, and
+a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
+database value. The code never queries `oauth_tokens` (a test checks this).
 
 ## Slot and publication states
 
@@ -187,8 +215,12 @@ publication:  pending -> uploading -> published
                  |            \-> skipped (permanent error or retries exhausted, with no handle)
                  |            \-> needs_attention (ambiguous, or a handle is stored; alert; never re-posted blindly)
                  \-> skipped (slot failed, or more than maxLateness past its time, with no handle)
+                 \-> skipped (platform disabled, no handle; logged, no alert)
                  \-> needs_attention (the same two cases, with a handle stored)
 ```
+
+A planned slot whose pending platforms are all switched off waits, and nothing is spent. Past
+`maxLatenessMinutes` it becomes `failed` with error `paused` and raises no alert.
 
 A slot ID is `<local date>#<index>`, for example `2026-11-12#1`. A publication is keyed by
 `(slot_id, platform)`. A slot becomes `done` when none of its publications is `pending` or
@@ -458,8 +490,9 @@ code calls the model. - **Daily summary.** After `ops.summaryAt`, once a day, re
 
 ## Security
 
-- `compose.yaml` publishes no port. Every integration is an outbound call. The sign-in listener is
-  bound to loopback and runs only during `auth higgsfield`. Unverified: the VM's firewall.
+- `compose.yaml` publishes one port: the admin page, on the host's `127.0.0.1` only (see Admin).
+  Every integration is an outbound call. The sign-in listener is bound to loopback and runs only
+  during `auth higgsfield`. Unverified: the VM's firewall.
 - The container runs as the non-root `node` user with all capabilities dropped,
   `no-new-privileges`, a process limit and a memory limit. Secrets are read from the environment
   and redacted in logs and alerts.
@@ -488,7 +521,7 @@ code calls the model. - **Daily summary.** After `ops.summaryAt`, once a day, re
 
 ```
 src/                 one TypeScript package; each folder is a module
-  cli.ts             run | plan | publish | produce | ingest | samples | doctor | health | auth
+  cli.ts             run | plan | publish | produce | ingest | samples | doctor | health | auth | admin
   contracts.ts       shared schemas: brief, script, concept, edit list
   config/  db/       config loader and validation; SQLite and migrations
   shopify/           Admin API and public feed fetch, asset download, brief builder
@@ -498,6 +531,7 @@ src/                 one TypeScript package; each folder is a module
   router/            tier choice, spend ledger, MCP client, Higgsfield sign-in and provider
   publish/           the bridge publisher, the registry, the claim and retry logic
   scheduler/  ops/   tick loop, planner, time; alerts and logging
+  admin/             the admin page: server, auth, pages (Phase 6b)
 templates/           Remotion compositions (React): Ugc, Ad and three ad templates
 prompts/             versioned prompt files, one per model purpose
 tools/tts/           Kokoro CLI (Python, uv)
@@ -546,6 +580,7 @@ The orchestrator plans, routes, reviews diffs and keeps `DECISIONS.md` current.
 | 4 Tiers | Router picks tiers by config and logs cost | Tests with a fake provider, then one real clip within budget |
 | 5 Publishing | One private test post per connected platform | Post ids read back from the bridge |
 | 6 Scheduler and ops | Two slots a day per platform, alerts, summary, cleanup | A compressed-time run in `DRY_RUN`, then one real day |
+| 6b Admin | Via an SSH tunnel the owner logs in, changes a slot time, the clip preset and the `ugc` prompt, sees the new version in use within one tick and rolls one back; a guardrail-breaking edit is refused by the page and by the loader; port 8080 is unreachable from outside the VM | Tests, then the walk-through on the VM |
 | 7 Deploy | 48 hours unattended | Logs and the publications table |
 | 8 Feedback | Weekly ranking changes the sampler | Weights change after a metrics pull |
 
