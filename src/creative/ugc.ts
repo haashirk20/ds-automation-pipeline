@@ -28,6 +28,8 @@ export function productLook(handle: string, file: string = NOTES): string | null
 const EMOJI = /\p{Extended_Pictographic}/gu;
 const NO_NUMBERS = new Set<string>();
 const EQUIPMENT = /\b(phone|smartphone|tripod|selfie stick|camera crew)\b/i;
+// The video model also makes the sound, so speech in a scene text would be spoken; the one spoken line belongs in `line`.
+const SPEECH = /\b(says?|said|saying|tells?|told|telling|asks?|asked|asking|shouts?|shouted|shouting|whispers?|whispered|whispering|repl(?:y|ies|ied|ying)|announc(?:e|es|ed|ing)|explains?|explained|explaining|speaks?|spoke|speaking|talks?|talked|talking|yells?|yelled|yelling|mutters?|muttered|exclaims?|exclaimed)\b/i;
 // Lower case, no emoji, no punctuation, single spaces: two captions that differ only in these are the same.
 const squash = (s: string): string => norm(s).toLowerCase().replace(EMOJI, ' ').replace(/[\p{P}\p{S}️]/gu, ' ').replace(/\s+/g, ' ').trim();
 
@@ -57,10 +59,14 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
     if ([...s.action].length > 300) p.push(`${where}: action is over 300 characters`);
     if (/["“”]/.test(s.action)) p.push(`${where}: action has quotation marks`);
     if (EQUIPMENT.test(s.action)) p.push(`${where}: action mentions filming equipment`);
-    // An action describes a picture, so counts in it ("two coworkers") are not claims and are not checked as numbers.
-    p.push(...languageProblems(brief, s.action, where), ...dollarProblems(brief, s.action, where));
     if (urlsIn(s.action).length) p.push(`${where}: action has a link`);
   });
+  // Scene text describes a picture, so counts in it ("two coworkers") are not claims and are not checked as numbers.
+  const scene = [...c.shots.map((s, i) => [`shot ${i + 1}`, s.action] as const), ['setting', c.setting], ['person', c.person]] as const;
+  for (const [where, text] of scene) {
+    p.push(...languageProblems(brief, text, where), ...dollarProblems(brief, text, where));
+    if (SPEECH.test(text)) p.push(`${where}: speech in the scene text; the one spoken line belongs in the line field`);
+  }
 
   if (!/\bwoman\b/i.test(c.person)) p.push('person must be a woman');
   return p;
@@ -108,7 +114,7 @@ export function buildClipPrompt(brief: Brief, c: UgcConcept, refNotes: string[],
     return `Shot ${i + 1} (${start}-${t}s): ${s.prompt}`;
   });
   const prompt = [
-    'Vertical 9:16 video that looks like real user-generated content: filmed handheld, natural light, slight camera shake, no colour grading, no filters. No on-screen text, no subtitles, no captions, no watermark, no music.',
+    'Vertical 9:16 video that looks like real user-generated content: filmed handheld, natural light, slight camera shake, no colour grading, no filters. No on-screen text, no subtitles, no captions, no watermark, no music. Nothing is written anywhere in the scene: no signs, posters, papers with writing, labels, stickers, or screens showing text or logos.',
     `Setting: ${c.setting}\nPerson: ${c.person}`,
     product,
     shotLines.join('\n'),

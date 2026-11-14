@@ -125,6 +125,8 @@ export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, no
     const ask = req.purpose === 'script' ? /headline \(show\): (.+)\nsay: (.+)\n/.exec(req.user) : null;
     if (ask) fixture.beats[0].chunks = [{ say: ask[2], show: ask[1] }];
     for (const b of fixture.beats ?? []) b.factIds = b.factIds.filter((f: string) => known.has(f));
+    const judged = Number(/^Judge these (\d+)/.exec(req.user)?.[1]); // the claims fixture covers more items than a caption check asks about
+    if (req.purpose === 'claims' && judged) fixture.verdicts = fixture.verdicts.filter((v: { chunk: number }) => v.chunk <= judged);
     for (const v of fixture.verdicts ?? []) if (!known.has(v.factId)) v.factId = [...known][0] ?? null;
     const out = req.schema.parse(fixture);
     record(db, now, req, 'stub', { input_tokens: 0, output_tokens: 0 }, 0);

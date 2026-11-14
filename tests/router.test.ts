@@ -2,7 +2,7 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import raw from '../config/pipeline.config.ts';
 import { loadConfig, parseConfig } from '../src/config/index.ts';
 import { Brief } from '../src/contracts.ts';
@@ -10,12 +10,13 @@ import { setLlmClient } from '../src/llm/client.ts';
 import { produceSlot, type ProduceDeps } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { chooseTier, clipProviders, generateClip, monthSpendUsd, type ClipProvider } from '../src/router/index.ts';
+import { ClipPendingError, JobEndedError } from '../src/router/errors.ts';
 import { NeedsSignInError } from '../src/router/higgsfield-auth.ts';
 import { config, fresh } from './helpers.ts';
 
 const NOW = new Date('2026-11-12T02:30:00Z');
 const cfg = (mix: { t0: number; t1: number; t2: number }, over: Record<string, unknown> = {}) =>
-  parseConfig({ ...raw, tiers: { ...raw.tiers, mix, ...over } });
+  parseConfig({ ...raw, creative: { ...raw.creative, mode: 'ad' }, tiers: { ...raw.tiers, mix, clipSeconds: 4, ...over } }); // these tests exercise the ad path
 const T1 = cfg({ t0: 0, t1: 1, t2: 0 });
 
 // A provider that records calls; `stall` makes fetch fail once, to simulate a crash after submit.
@@ -88,10 +89,8 @@ test('generateClip: submits once, stores the job id before waiting, resumes with
     assert.equal(r.job_id, id);
     return orig(id, out, s);
   };
-  // Crash: put the row back into 'submitted' by hand after the failed first call, as a killed process would leave it.
-  assert.equal(await generateClip(db, T1, reg, job(db), NOW), false);
-  assert.equal(rows(db)[0].state, 'failed');
-  db.prepare("UPDATE spend SET state = 'submitted', error = NULL").run();
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  assert.equal(rows(db)[0].state, 'submitted');
   assert.equal(await generateClip(db, T1, reg, job(db), NOW), true);
   assert.equal(calls.submit, 1);
   assert.deepEqual(calls.fetch, ['job-1', 'job-1']);
@@ -117,7 +116,7 @@ test('generateClip: a reserved row is never re-submitted; maxJobsPerSlot holds',
   assert.equal(rows(db).length, 2);
 });
 
-test('generateClip: provider error marks failed with a scrubbed error', async () => {
+test('generateClip: a submit error marks failed with a scrubbed error', async () => {
   const db = fresh();
   const { reg } = mkProvider({ failSubmit: true });
   assert.equal(await generateClip(db, T1, reg, job(db), NOW), false);
@@ -125,6 +124,93 @@ test('generateClip: provider error marks failed with a scrubbed error', async ()
   assert.equal(r.state, 'failed');
   assert.ok(!r.error.includes('abcdef123456'));
   assert.equal(r.quoted_usd, 0.17);
+});
+
+test('generateClip: a plain fetch error leaves the row submitted and rejects with ClipPendingError; the next call resumes the same job', async () => {
+  const db = fresh();
+  const { p, calls, reg } = mkProvider();
+  const realFetch = p.fetch;
+  p.fetch = async (_id, out) => { writeFileSync(out, 'half'); throw new Error('HTTP 503 Bearer abcdef123456'); };
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), (e: Error) => e instanceof ClipPendingError && !e.message.includes('abcdef123456'));
+  assert.equal(rows(db)[0].state, 'submitted');
+  assert.equal(existsSync(job(db).outFile + '.part'), false);
+  p.fetch = realFetch;
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), true);
+  assert.equal(calls.submit, 1);
+  assert.deepEqual(calls.fetch, ['job-1']);
+  assert.equal(rows(db).length, 1);
+  assert.equal(rows(db)[0].state, 'succeeded');
+});
+
+test('generateClip: a job still unfetched more than 2 hours after it was created is marked failed and returns false', async () => {
+  const db = fresh();
+  const { p, reg } = mkProvider();
+  p.fetch = async () => { throw new Error('HTTP 503'); };
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  const later = new Date(NOW.getTime() + 2 * 3600_000 + 1000);
+  assert.equal(await generateClip(db, T1, reg, job(db), later), false);
+  assert.equal(rows(db)[0].state, 'failed');
+  assert.match(rows(db)[0].error, /did not finish within 2 hours/);
+});
+
+test('generateClip: a NeedsSignInError during fetch alerts once a day and waits', async () => {
+  const db = fresh();
+  const { p, reg } = mkProvider();
+  p.fetch = async () => { throw new NeedsSignInError('refresh refused'); };
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  assert.equal(rows(db)[0].state, 'submitted');
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'clip_sign_in'").get() as any).n, 1);
+});
+
+test('generateClip: a JobEndedError from fetch marks failed and returns false', async () => {
+  const db = fresh();
+  const { p, reg } = mkProvider();
+  p.fetch = async () => { throw new JobEndedError('job ended as failed'); };
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), false);
+  assert.equal(rows(db)[0].state, 'failed');
+  // the resume path behaves the same
+  db.prepare("UPDATE spend SET state = 'submitted'").run();
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), false);
+  assert.equal(rows(db)[0].state, 'failed');
+});
+
+test('generateClip: resuming a submitted job with a signed-out provider rejects with ClipPendingError and alerts once a day', async () => {
+  const db = fresh();
+  let signedIn = true;
+  const { p, calls, reg } = mkProvider();
+  p.configured = () => signedIn;
+  p.fetch = async () => { throw new Error('HTTP 503'); };
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  signedIn = false;
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  await assert.rejects(generateClip(db, T1, reg, job(db), NOW), ClipPendingError);
+  assert.equal(rows(db)[0].state, 'submitted');
+  assert.equal(calls.submit, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'clip_sign_in'").get() as any).n, 1);
+});
+
+test('generateClip: the stored clip path is relative to DATA_DIR and a second call finds the clip', async () => {
+  const db = fresh();
+  const { calls, reg } = mkProvider();
+  assert.equal(await generateClip(db, T1, reg, job(db), NOW), true);
+  const stored = rows(db)[0].file_path;
+  assert.equal(stored, join('clips', 'c.mp4'));
+  assert.ok(!isAbsolute(stored));
+  const other = { ...job(db), outFile: join(process.env.DATA_DIR!, 'clips', 'copy.mp4') };
+  assert.equal(await generateClip(db, T1, reg, other, NOW), true);
+  assert.equal(readFileSync(other.outFile, 'utf8'), 'video');
+  assert.equal(calls.submit, 1);
+  assert.equal(calls.fetch.length, 1);
+});
+
+test('alerts: a delivery that failed does not hide the alert for the rest of the day', async () => {
+  const db = fresh();
+  const { p, reg } = mkProvider();
+  p.check = async () => { throw new Error('quote too high'); };
+  db.prepare("INSERT INTO events (ts, kind, key, message, delivered) VALUES (?, 'clip_refused', '2026-11-12', 'x', 0)").run(NOW.toISOString());
+  await generateClip(db, T1, reg, job(db), NOW);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'clip_refused'").get() as any).n, 2);
 });
 
 test('PIPELINE_CONFIG loads an alternative file and rejects an invalid one', async () => {
@@ -141,7 +227,7 @@ test('PIPELINE_CONFIG loads an alternative file and rejects an invalid one', asy
   } finally {
     delete process.env.PIPELINE_CONFIG;
   }
-  assert.equal((await loadConfig()).tiers.mix.t0, 1);
+  assert.equal((await loadConfig()).tiers.mix.t2, 1); // the shipped default
 });
 
 // produceSlot with a clip
@@ -231,4 +317,21 @@ test('generateClip: abort during fetch leaves the row submitted; the next call r
   assert.equal(calls.submit, 1);
   assert.equal(rows(db).length, 1);
   assert.equal(rows(db)[0].state, 'succeeded');
+});
+
+test('chooseTier: a slot with a paid job keeps its tier at the cap and without a provider; failed or rejected rows do not', async () => {
+  const db = fresh();
+  const ins = db.prepare("INSERT INTO spend (slot_id, tier, provider, model, state, quoted_usd, created_at, updated_at) VALUES (?, 't1','fal','m',?,?,?,?)");
+  ins.run('fill#1', 'failed', 15, NOW.toISOString(), NOW.toISOString()); // the month is at the cap
+  ins.run('sub#1', 'submitted', 0, NOW.toISOString(), NOW.toISOString());
+  ins.run('ok#1', 'succeeded', 0, NOW.toISOString(), NOW.toISOString());
+  ins.run('bad#1', 'failed', 0, NOW.toISOString(), NOW.toISOString());
+  ins.run('bad#2', 'rejected', 0, NOW.toISOString(), NOW.toISOString());
+  const { reg } = mkProvider();
+  assert.equal(await chooseTier(db, T1, reg, 'sub#1', NOW), 't1');
+  assert.equal(await chooseTier(db, T1, mkProvider({ configured: false }).reg, 'ok#1', NOW), 't1');
+  assert.equal(await chooseTier(db, T1, reg, 'bad#1', NOW), 't0');
+  assert.equal(await chooseTier(db, T1, reg, 'bad#2', NOW), 't0');
+  const c0 = cfg({ t0: 1, t1: 0, t2: 0 }); // the mix changed since the job was made
+  assert.equal(await chooseTier(db, c0, reg, 'sub#1', NOW), 't1');
 });

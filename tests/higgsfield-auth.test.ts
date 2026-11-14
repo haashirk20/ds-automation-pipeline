@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { NeedsSignInError, accessToken, authorize, higgsfieldStatus, refresh, type AuthIo } from '../src/router/higgsfield-auth.ts';
+import { NeedsSignInError, accessToken, authorize, defaultIo, higgsfieldStatus, refresh, type AuthIo } from '../src/router/higgsfield-auth.ts';
 import { fresh } from './helpers.ts';
 
 const NOW = new Date('2026-11-13T12:00:00Z');
@@ -114,4 +114,27 @@ test('discovery refuses an endpoint off higgsfield.ai; a refresh outage is not r
   await authorize(db, NOW, io(net([tok({})]).f, ok));
   await assert.rejects(refresh(db, NOW, net([() => json({}, 503)]).f), (e: Error) => !(e instanceof NeedsSignInError) && /503/.test(e.message));
   assert.equal(accessToken(db), 'AT1');
+});
+
+test('sign-in listener: a request with the wrong state gets 400 and the wait goes on; the right state ends it', async () => {
+  const ac = new AbortController();
+  const wait = defaultIo().waitForRedirect(ac.signal, 'good');
+  const hit = async (q: string) => { for (let i = 0; ; i++) { try { return await fetch('http://127.0.0.1:53682/callback' + q); } catch (e) { if (i > 50) throw e; await new Promise((r) => setTimeout(r, 50)); } } };
+  assert.equal((await hit('?code=x&state=evil')).status, 400);
+  assert.equal((await hit('?code=x')).status, 400);
+  let settled = false;
+  wait.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(settled, false);
+  assert.equal((await hit('?code=x&state=good')).status, 200);
+  assert.equal(await wait, 'http://127.0.0.1:53682/callback?code=x&state=good');
+});
+
+test('token and registration requests refuse redirects', async () => {
+  const db = fresh();
+  const n = net([tok({})]);
+  const seen: [string, unknown][] = [];
+  const f = ((u: string, init?: RequestInit) => { seen.push([u, init?.redirect]); return n.f(u, init); }) as typeof fetch;
+  await authorize(db, NOW, io(f, ok));
+  for (const end of ['/oauth/register', '/oauth/token']) assert.equal(seen.find(([u]) => u.endsWith(end))![1], 'error');
 });

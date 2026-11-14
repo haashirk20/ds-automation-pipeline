@@ -46,6 +46,17 @@ test('each line, shot, colour, person rule fails', () => {
   has(with_({ person: 'A man in a grey polo.' }), /woman/);
 });
 
+test('setting and person get the language and price checks; speech is rejected in an action, the setting and the person', () => {
+  has(with_({ setting: 'A shop with a 50% off sign.' }), /setting.*discount/);
+  has(with_({ person: 'A woman in a navy cardigan, rated five stars.' }), /person.*review/);
+  has(with_({ setting: 'An office, the price tag reads $12.' }), /setting.*price/);
+  has(shot0('She tells her coworker it is cold.'), /shot 1.*speech/);
+  has(shot0('Her coworker shouting from across the room.'), /shot 1.*speech/);
+  has(with_({ setting: 'An office where the radio announces the weather.' }), /setting.*speech/);
+  has(with_({ person: 'A woman in a cardigan who whispers to her friend.' }), /person.*speech/);
+  assert.deepEqual(conceptProblems(brief, with_({ setting: 'A quiet office, a radio on a shelf.' }), S, []), []);
+});
+
 test('owner example captions: year in the first is rejected by number rule', () => {
   assert.deepEqual(conceptProblems(brief, with_({ caption: 'Best Business expense ive made all year 😭🥶' }), S, []), []);
   assert.ok(conceptProblems(brief, with_({ caption: 'POV: you find the coziest gift of 2026... 🎄🎄🎄' }), S, []).some((p) => /number 2026/.test(p)));
@@ -61,8 +72,9 @@ test('buildClipPrompt', () => {
   assert.equal(r.prompt.split('She says to the camera').length, 2);
   assert.match(r.prompt, /logo\. It appears only printed on the lid.*"Giftwell"/);
   assert.match(r.prompt, /only spoken words/);
+  assert.match(r.prompt, /no music\. Nothing is written anywhere in the scene: no signs, posters, papers with writing, labels, stickers, or screens showing text or logos\./);
   assert.deepEqual(r.shots.map((s) => s.seconds), [3, 4, 4, 4]);
-  assert.ok(!/logo/.test(buildClipPrompt(brief, good, ['a'], { ...opts, logo: false }).prompt));
+  assert.ok(!/gift box/.test(buildClipPrompt(brief, good, ['a'], { ...opts, logo: false }).prompt.split('Shot 1')[0]));
   const quiet = buildClipPrompt(brief, with_({ line: '' }), ['a'], opts);
   assert.match(quiet.prompt, /Nobody speaks\./);
   assert.ok(!/says to the camera/.test(quiet.prompt));

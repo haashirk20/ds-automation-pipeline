@@ -1,29 +1,31 @@
 # Costs
 
-Volume: 2 slots a day × 4 platforms = 8 posts a day, about 60 slots and 240 posts a month.
-Budget: about US$100 a month for everything paid. Prices checked 2026-11-11. EUR→USD 1.107.
-Items marked **(unverified)** were not confirmed on an official page.
+Volume: 2 slots a day, about 60 slots and 60 videos a month. Two platforms are enabled now (YouTube
+and TikTok), so about 120 posts a month. With Facebook and Instagram it is about 240.
+Budget: about US$100 a month for everything paid. The VM prices were checked 2026-11-11, EUR to USD
+1.107. The Higgsfield and bridge figures come from the owner's account and from D-30 and D-29, not
+from a page read today. Items marked **(unverified)** were not confirmed.
 
 ## Monthly total
 
-| Line | Default config | Hard cap in config | Notes |
+| Line | Default config | Hard limit | Notes |
 |---|---|---|---|
-| VM | $10–17 | — | 4 vCPU / 8 GB class |
-| Anthropic API | ~$3.30 | $10 | Sonnet 5.5 + Haiku 5.5 |
-| Tier 1 clips (open-weight, hosted) | ~$5 | $15 | 40% of slots |
-| Tier 2 clips (premium) | ~$4 | $25 | 10% of slots |
-| Bridge for TikTok | $0–16 | — | Zernio's free accounts, or Upload-Post |
-| Backups, alerts, monitoring, music | $0 | — | Free tiers, owned assets |
-| Remotion licence | $0 | — | Free up to 3 employees. $100 a month minimum above that |
-| **Total** | **~$22–45** | **≤ $91 worst case** | Worst case = every cap hit, $24 bridge, $17 VM |
+| VM | $10-17 | none | 4 vCPU / 8 GB class |
+| Higgsfield subscription (video) | $65 | $65 | Ultra plan, 3,000 credits a month. A flat price: it does not change with use |
+| Anthropic API | about $2 | $10 | `llm.monthlyCapUsd`. Estimate, see "Model calls" |
+| Bridge (Zernio) | $0 | $12 | $0 with YouTube and TikTok connected. $12 with Facebook and Instagram added |
+| Backups, alerts, monitoring | $0 | none | Free tiers |
+| Remotion licence | $0 | none | Free up to 3 employees. $100 a month minimum above that |
+| **Total now** | **$77-84** | | VM $10-17 + $65 + $2 + $0 |
+| **Total with all four platforms** | **$89-96** | **$104** | Hard limit = VM $17 + $65 + API cap $10 + bridge $12 |
 
-Worst case stays under $100 because the caps are enforced in code: when a cap is reached the router
-falls back to Tier 0 and sends one alert. No line can grow without a config change. Each provider
-account is also prepaid and topped up by hand to no more than its cap, with auto-reload off, so the
-ledger is not the only limit. The one thing that breaks the worst case is the company growing past
-three employees, which adds Remotion's $100.
+The hard limit of $104 is above the $100 budget by $4. The subscription is fixed, so the room left
+for everything else is small. The API cap is the one line that can be lowered (`llm.monthlyCapUsd`).
+The one thing that breaks the budget by more is the company growing past three employees, which
+adds Remotion's $100.
 
-Cheapest setup: Tier 0 only, Zernio's free accounts, a $10 VM. About $13 a month.
+Cheapest setup: a $10 VM, the bridge on its free accounts, and the subscription: about $77 with the
+API estimate.
 
 ## VM
 
@@ -52,87 +54,90 @@ which is what Oracle's reclaim rule removes. It would be usable only if upgradin
 pay-as-you-go exempts the instance, and that was not confirmed. Remotion and the TTS model both run
 on ARM64.
 
-## LLM tokens
+## Model calls
 
-Prices per million tokens: Sonnet 5.5 $2 in, $10 out, $0.10 cache read, $2.50 cache write.
-Haiku 5.5 $0.10 in, $0.50 out. Output figures include adaptive-thinking tokens.
+Prices per million tokens, from `src/llm/client.ts`: Sonnet 5.5 $2 in, $10 out, $0.10 cache read,
+$2.50 cache write. Haiku 5.5 $0.10 in, $0.50 out, $0.01 cache read, $0.125 cache write. Opus 5.5
+$4 in, $20 out. The models are set in `config/pipeline.config.ts` under `llm.models`: `script` is
+Sonnet 5.5, `copy` and `qa` are Haiku 5.5, `escalation` is Opus 5.5 (off).
 
-| Call | Model | Per month | Tokens per call (in / out) | Cost per month |
-|---|---|---|---|---|
-| Script for one slot | Sonnet 5.5 | 60, plus ~30% regenerations | 2,500 cached + 800 / 2,500 | $2.40 |
-| Hook library refill | Sonnet 5.5 | 4 | 4,000 / 6,000 | $0.27 |
-| Weekly strategy review | Sonnet 5.5 | 4–5 | 15,000 / 4,000 | $0.30 |
-| Per-platform titles, captions, hashtags | Haiku 5.5 | 60 | 3,000 / 1,500 | $0.06 |
-| Claim check | Haiku 5.5 | 80 | 3,000 / 500 | $0.04 |
-| QA vision, 6 frames × 4 renders (planned) | Haiku 5.5 | 60 | 17,000 / 1,200 | $0.14 |
-| Clip check against the source photo | Haiku 5.5 | ~36 | 3,500 / 300 | $0.02 |
-| Product image tagging, error classification (planned) | Haiku 5.5 | few | small | < $0.05 |
-| Opus 5.5 escalation (off by default) | Opus 5.5 | 0 | 20,000 / 4,000 | $0.16 each |
-| **Total** | | | | **~$3.30** |
+Every request goes through `callJson`, which checks the month's spend against `llm.monthlyCapUsd`
+(**$10**) first and writes a row to `llm_calls`. At the cap, calls stop.
 
-Prompt caching: the brand and product context is one stable prefix of about 2,500 tokens. The
-day's calls run back to back, so every call after the first reads it from cache. The saving is
-cents at this volume. It is wired in because the prefix is already structured that way.
+No live call has been made yet, so the token counts below are estimates, not readings. The system
+text is the rules file plus the brief, about 2,000 to 2,700 tokens, and the estimates ignore prompt
+caching, so they are on the high side. Re-read the real figures from `llm_calls` after the first
+live day.
 
-The Batch API would halve this line. It is not used: the saving is under $2 a month and it adds an
-asynchronous wait to the daily job.
+'ugc' mode (default), per slot:
 
-## AI video clips
+| Purpose | Where | Model | Calls | Tokens in / out (estimate) | Cost per slot |
+|---|---|---|---|---|---|
+| `ugc` | `src/creative/ugc.ts` | Sonnet 5.5 | 1, up to 2 | 3,100 / 2,000 | $0.026 |
+| `claims` | the judge of the caption and spoken line, `src/creative/claims.ts` | Haiku 5.5 | 1 per concept | 2,200 / 300 | $0.0004 |
+| `copy` | `src/creative/copy.ts` | Haiku 5.5 | 1 | 2,500 / 1,000 | $0.0008 |
+| `copycheck` | `src/creative/copy.ts` | Haiku 5.5 | 1 | 2,400 / 500 | $0.0005 |
+| `vision` | frame check of a new clip, 6 frames plus a photo, `src/qa/vision.ts` | Haiku 5.5 | 1 per clip, up to 2 | 4,400 / 400 | $0.0006 |
 
-One 3–4 second image-to-video hook shot per slot, on the slots the router sends to Tier 1 or 2.
+A typical slot costs about $0.028, so 60 slots cost about $1.70. If every slot needed two concepts
+and two clip checks, a slot would cost about $0.056 and the month about $3.30. Both are far under
+the $10 cap. A slot that reuses a stored clip makes no `ugc` call.
 
-| Tier | Provider and model | Price | Per 4 s 720p clip |
+'ad' mode (not the default): `hooks` and `script` (Sonnet 5.5) replace `ugc`, and the same `copy`,
+`copycheck`, `claims` and `vision` calls apply. The earlier estimate for that mode was about $3.30 a
+month.
+
+Not built yet: the weekly review in `src/feedback` (Phase 8) has no `callJson` request yet. The Opus
+escalation is off (`llm.escalationEnabled: false`) and has no `callJson` request.
+
+The Batch API would halve these lines. It is not used: the saving is under $2 a month and it adds a
+wait to the daily job.
+
+## Video: Higgsfield credits
+
+Clips are generated through Higgsfield's MCP server on the owner's subscription credits (D-30). The
+Ultra plan was bought at $65 a month and grants 3,000 credits a month. Unused credits are removed at
+renewal. One credit is $65 / 3,000, about $0.0217.
+
+| Model, 15 s, 720p | Credits a clip | Dollars a clip | 60 clips a month |
 |---|---|---|---|
-| 1 | fal.ai LTX-2 image-to-video | "$0.0018 per megapixel of generated video data" | ~$0.16 |
-| 1 | Higgsfield API, Wan 3.0 | "from 0.038 / s" | ~$0.15 **(a "from" price)** |
-| 1 | fal.ai Wan 2.2 A14B | $0.08 per video-second at 720p | $0.32 |
-| 2 | Higgsfield API, Seedance 2.5 | "from 0.118 / s" | ~$0.47 |
-| 2 | Higgsfield API, Kling 4.0 | "from 0.126 / s" | ~$0.50 |
-| 2 | Muapi, kling-v2.1-standard-i2v | $0.225 per generation | $0.23 (clip length not stated) |
-| 2 | Veo 3.1 Fast | ~$0.10 / s **(unverified)** | ~$0.40 |
-| 2 | Runway Gen-4 Turbo | ~6 credits / s | ~$0.46 |
+| Wan 3.0 (default) | 26.25 | about $0.57 | 1,575 credits, about $34 |
+| Seedance 2.0 fast | 37.5 | about $0.82 | 2,250 credits, about $49 |
 
-Default mix: 50% Tier 0, 40% Tier 1, 10% Tier 2. With 20% of clips rejected by QA and regenerated:
-24 × $0.16 × 1.2 ≈ $4.60 for Tier 1 and 6 × $0.50 × 1.2 ≈ $3.60 for Tier 2.
+The dollar figures are the credits times $0.0217. The $34 and $49 are the share of the $65 that the
+clips use. The subscription costs $65 whether they are made or not.
 
-Exact per-clip prices are read from the provider at integration time (Phase 4) and stored in the
-router's price table. The router checks the price and the remaining budget before every job.
+Limits in `config/pipeline.config.ts`, `tiers`:
 
-### Tier 1 versus Tier 2
+| Setting | Value | What it means |
+|---|---|---|
+| `capsUsd.t2` | 52 | About 2,400 credits a month, or 91 clips at 26.25 credits. Failed jobs count at their quoted price |
+| `maxJobsPerSlot` | 2 | A slot starts at most two paid jobs, retries included. Worst case 60 x 2 x 26.25 = 3,150 credits, which the $52 cap stops at about 2,400 |
+| `maxCredits` | 30 | A quote above 30 credits stops the job. Seedance 2.0 fast (37.5) needs `maxCredits` raised to 40, as the config comment says |
+| `keepCredits` | 350 | A job that would leave fewer than 350 credits is not started. It is above Higgsfield's auto-refill threshold of 300, so the pipeline cannot trigger an automatic purchase |
 
-On price, Tier 1 costs about a third of Tier 2: $0.16 a clip against $0.50, so $9.60 against $30 a
-month if all 60 slots used a clip. On quality the answer is not known yet. Phase 4 generates the
-same hook shot on both tiers from the same photo and prompt, and the default mix is replaced by
-what that shows. If Tier 1 holds up on product shots, Tier 2's share goes to zero.
+The balance is read from Higgsfield before each job. Each job writes a ledger row in dollars.
 
-### Self-run GPU versus hosted, honestly
-
-| Approach | GPU cost | Fixed cost | Per clip at 60 a month |
-|---|---|---|---|
-| Hosted pay-per-clip (fal.ai LTX-2) | included | $0 | ~$0.16 |
-| RunPod on-demand L40S ($0.79/h), started per daily batch | ~12 min per clip with cold start and model load | 60 GB weights volume at $0.07/GB = $4.20 | ~$0.23 |
-| RunPod on-demand RTX 4090 ($0.34/h), same pattern | same, if the model fits 24 GB | $4.20 | ~$0.14 |
-| Any GPU running 24/7 | $0.34/h × 730 h | — | $248 a month flat |
-
-At this volume a self-run GPU saves between nothing and about $1 a month. It adds pod start and
-stop logic, a weights volume, a ComfyUI or diffusers workflow to maintain, and a new way to fail at
-night. Hosted wins. The comparison flips at several hundred clips a month, which is the point to
-revisit it. A 24/7 GPU is never cheaper.
+There is no fal.ai tier. No provider exists for `t1`, and `mix.t1` is 0. The Higgsfield REST API is
+not used: it bills a separate prepaid balance (D-30).
 
 ## Other lines
 
 | Item | Choice | Cost |
 |---|---|---|
-| TikTok bridge | Zernio: first 2 connected accounts free, $6 per account after, unlimited posts. Upload-Post: $16/mo yearly or $24 monthly, unlimited uploads | $0–24 |
+| Bridge | Zernio: the first 2 connected accounts are free, $6 a month for each further account, unlimited posts. YouTube and TikTok are connected now, so $0. Facebook and Instagram added: $12 | $0 now, $12 with four platforms |
 | Backups | Cloudflare R2: 10 GB free, free egress. The backup set is under 1 GB | $0 |
 | Alerts | Discord webhook or Telegram bot | $0 |
 | Dead-man's switch | healthchecks.io Hobbyist: 20 checks | $0 |
-| Music | Tracks we own or CC0, stored in the repo | $0 |
+| Music | 'ad' mode only: beds synthesized by our code (D-16). 'ugc' mode adds no music | $0 |
 | Render engine | Remotion, free for companies of up to 3 employees. Above that the automation licence has a $100/month minimum | $0 |
-| Text-to-speech | Kokoro-82M, Apache-2.0, on the VM's CPU | $0 |
+| Text-to-speech | 'ad' mode only: Kokoro-82M, Apache-2.0, on the VM's CPU. In 'ugc' mode the video model speaks | $0 |
+
+The bridge prices are as reported from the owner's account on 2026-11-13. They were not re-read
+today.
 
 ## Changing the budget
 
-All caps live in `config/pipeline.config.ts` under `tiers.caps` and `llm.monthlyCapUsd`. The tier
-mix is `tiers.mix`. Setting the Tier 1 and Tier 2 shares to zero makes the pipeline cost the VM plus
-about $4.
+The video limits are in `config/pipeline.config.ts` under `tiers`: `capsUsd`, `maxJobsPerSlot`,
+`t2.maxCredits` and `t2.keepCredits`. The model-call cap is `llm.monthlyCapUsd`. To change the
+video model, replace the `t2` line with the commented alternative and check `maxCredits`.

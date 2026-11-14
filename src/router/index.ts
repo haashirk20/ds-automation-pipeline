@@ -5,6 +5,7 @@ import { env, type Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
+import { ClipPendingError, JobEndedError } from './errors.ts';
 import { NeedsSignInError } from './higgsfield-auth.ts';
 import { higgsfieldProvider } from './higgsfield.ts';
 
@@ -52,6 +53,9 @@ export function monthSpendUsd(db: Db, tier: string, now: Date): number {
 }
 
 export async function chooseTier(db: Db, config: Config, providers: Record<string, ClipProvider>, slotId: string, now: Date): Promise<Tier> {
+  // A job already paid for keeps its tier, so it is fetched or used even at the cap or when the provider is signed out.
+  const paid = db.prepare("SELECT tier FROM spend WHERE slot_id = ? AND state IN ('submitted','succeeded') ORDER BY id DESC LIMIT 1").get(slotId) as { tier: Tier } | undefined;
+  if (paid) return paid.tier;
   const { mix } = config.tiers;
   const u = createHash('sha256').update('tier:' + slotId).digest().readUInt32BE(0) / 2 ** 32;
   const drawn: Tier = u < mix.t0 ? 't0' : u < mix.t0 + mix.t1 ? 't1' : 't2';
@@ -60,7 +64,7 @@ export async function chooseTier(db: Db, config: Config, providers: Record<strin
   if (!providers[t.provider]?.configured()) return 't0';
   if (monthSpendUsd(db, drawn, now) + t.usdPerClip > config.tiers.capsUsd[drawn]) {
     const key = `${drawn}:${now.toISOString().slice(0, 7)}`;
-    if (!db.prepare("SELECT 1 FROM events WHERE kind = 'budget_cap' AND key = ?").get(key)) {
+    if (!db.prepare("SELECT 1 FROM events WHERE kind = 'budget_cap' AND key = ? AND delivered = 1").get(key)) {
       await alert(db, 'budget_cap', key, `${drawn} monthly cap of $${config.tiers.capsUsd[drawn]} reached: slots fall back to tier 0 until next month`, now);
     }
     return 't0';
@@ -68,7 +72,9 @@ export async function chooseTier(db: Db, config: Config, providers: Record<strin
   return drawn;
 }
 
-type Row = { id: number; state: string; job_id: string | null; file_path: string | null; provider: string };
+type Row = { id: number; state: string; job_id: string | null; file_path: string | null; provider: string; created_at: string };
+// A submitted job that has not given a file this long after it was created is given up; the slot then uses a stored clip.
+export const PENDING_JOB_MAX_MS = 2 * 3600_000;
 const setState = (db: Db, id: number, state: string, now: Date, f: { job_id?: string; file_path?: string; error?: string } = {}) =>
   db.prepare('UPDATE spend SET state = ?, job_id = COALESCE(?, job_id), file_path = COALESCE(?, file_path), error = ?, updated_at = ? WHERE id = ?')
     .run(state, f.job_id ?? null, f.file_path ?? null, f.error ?? null, now.toISOString(), id);
@@ -83,12 +89,15 @@ export async function generateClip(
   job: { slotId: string; tier: PaidTier; images: string[]; prompt: string; shots: ClipJob['shots']; outFile: string; signal: AbortSignal }, now: Date,
 ): Promise<boolean> {
   const t = config.tiers[job.tier];
-  const rows = db.prepare('SELECT id, state, job_id, file_path, provider FROM spend WHERE slot_id = ? ORDER BY id').all(job.slotId) as Row[];
+  const rows = db.prepare('SELECT id, state, job_id, file_path, provider, created_at FROM spend WHERE slot_id = ? ORDER BY id').all(job.slotId) as Row[];
   mkdirSync(path.dirname(job.outFile), { recursive: true });
   const tmp = job.outFile + '.part';
+  const dataDir = path.resolve(env.dataDir());
   const finish = (id: number) => {
     renameSync(tmp, job.outFile);
-    setState(db, id, 'succeeded', now, { file_path: job.outFile });
+    const rel = path.relative(dataDir, job.outFile);
+    // Relative to DATA_DIR, so a database moved between the host and the container keeps its clips.
+    setState(db, id, 'succeeded', now, { file_path: rel.startsWith('..') || path.isAbsolute(rel) ? job.outFile : rel });
     return true;
   };
   const fail = (id: number, e: unknown) => {
@@ -100,21 +109,43 @@ export async function generateClip(
   };
 
   // (a) already done
-  const done = rows.find((r) => r.state === 'succeeded' && r.file_path && existsSync(r.file_path));
+  const stored = (r: Row) => path.resolve(dataDir, r.file_path!);
+  const done = rows.find((r) => r.state === 'succeeded' && r.file_path && existsSync(stored(r)));
   if (done) {
-    if (done.file_path !== job.outFile) copyFileSync(done.file_path!, job.outFile);
+    if (stored(done) !== path.resolve(job.outFile)) copyFileSync(stored(done), job.outFile);
     return true;
   }
+  // Once a day per kind. A failed delivery does not count, so it cannot hide the alert.
+  const dailyAlert = async (kind: string, text: string) => {
+    const day = now.toISOString().slice(0, 10);
+    if (!db.prepare('SELECT 1 FROM events WHERE kind = ? AND key = ? AND delivered = 1').get(kind, day)) await alert(db, kind, day, text, now);
+  };
+  const signIn = (name: string) => dailyAlert('clip_sign_in', `${name} needs a sign-in: run "node src/cli.ts auth ${name}". Slots use tier 0 until then`);
+  // The job exists at the provider and may be paid for: only a job that can never give a file is marked failed.
+  const fetchFailed = async (r: Row, e: unknown): Promise<false> => {
+    if (e instanceof JobEndedError || job.signal.aborted) return fail(r.id, e) as false;
+    try { unlinkSync(tmp); } catch { /* nothing was written */ }
+    if (now.getTime() - Date.parse(r.created_at) > PENDING_JOB_MAX_MS) {
+      log.warn('clip job abandoned after the time limit', { slot: job.slotId });
+      return fail(r.id, new Error('the job did not finish within 2 hours')) as false;
+    }
+    log.warn('clip fetch interrupted; the job stays submitted', { slot: job.slotId, error: scrub(String(e)) });
+    if (e instanceof NeedsSignInError) await signIn(r.provider);
+    throw new ClipPendingError('clip job not fetched yet: ' + scrub(String(e)).slice(0, 200));
+  };
   // (b) submitted earlier: fetch that job, never submit again
   const sub = rows.find((r) => r.state === 'submitted' && r.job_id);
   if (sub) {
     const p = providers[sub.provider];
-    if (!p?.configured()) return false; // leave the row; the job may still finish
+    if (!p?.configured()) {
+      await signIn(sub.provider);
+      throw new ClipPendingError(`${sub.provider} is signed out; the submitted job is fetched after a sign-in`);
+    }
     try {
       await p.fetch(sub.job_id!, tmp, job.signal);
       return finish(sub.id);
     } catch (e) {
-      return fail(sub.id, e);
+      return await fetchFailed(sub, e);
     }
   }
   // A 'reserved' row means a crash between reserving and storing the job id. Whether the job exists is unknown, so it is never re-submitted.
@@ -131,21 +162,25 @@ export async function generateClip(
     await p.check?.(cj);
   } catch (e) {
     const kind = e instanceof NeedsSignInError ? 'clip_sign_in' : 'clip_refused';
-    const day = now.toISOString().slice(0, 10);
     log.warn('clip job not started', { slot: job.slotId, kind, error: scrub(String(e)) });
-    if (!db.prepare('SELECT 1 FROM events WHERE kind = ? AND key = ?').get(kind, day)) {
-      await alert(db, kind, day, kind === 'clip_sign_in' ? `${p.name} needs a sign-in: run "node src/cli.ts auth ${p.name}". Slots use tier 0 until then` : `${p.name} clip not started (${scrub(String(e)).slice(0, 200)}): slots use tier 0`, now);
-    }
+    if (kind === 'clip_sign_in') await signIn(p.name);
+    else await dailyAlert(kind, `${p.name} clip not started (${scrub(String(e)).slice(0, 200)}): slots use tier 0`);
     return false;
   }
   const id = Number(db.prepare("INSERT INTO spend (slot_id, tier, provider, model, state, quoted_usd, created_at, updated_at) VALUES (?,?,?,?, 'reserved', ?,?,?)")
     .run(job.slotId, job.tier, p.name, t.model, t.usdPerClip, now.toISOString(), now.toISOString()).lastInsertRowid);
+  let jid: string;
   try {
     const { jobId } = await p.submit(cj);
     setState(db, id, 'submitted', now, { job_id: jobId }); // before waiting
-    await p.fetch(jobId, tmp, job.signal);
-    return finish(id);
+    jid = jobId;
   } catch (e) {
     return fail(id, e);
+  }
+  try {
+    await p.fetch(jid, tmp, job.signal);
+    return finish(id);
+  } catch (e) {
+    return await fetchFailed({ id, state: 'submitted', job_id: jid, file_path: null, provider: p.name, created_at: now.toISOString() }, e);
   }
 }

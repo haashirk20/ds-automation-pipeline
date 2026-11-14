@@ -61,6 +61,9 @@ const schema = z
     const counts = new Set(Object.values(c.platforms).filter((p) => p.enabled).map((p) => p.slots.length));
     const m = c.tiers.mix;
     if (Math.abs(m.t0 + m.t1 + m.t2 - 1) > 1e-6) ctx.addIssue({ code: 'custom', path: ['tiers', 'mix'], message: 'shares must sum to 1' });
+    if (c.creative.mode === 'ugc' && (c.tiers.clipSeconds < 14 || c.tiers.clipSeconds > 16)) ctx.addIssue({ code: 'custom', path: ['tiers', 'clipSeconds'], message: "must be between 14 and 16 when creative.mode is 'ugc'" });
+    if (c.creative.mode === 'ugc' && c.render.produceTimeoutMinutes < c.tiers.maxJobsPerSlot * 40 + 10) ctx.addIssue({ code: 'custom', path: ['render', 'produceTimeoutMinutes'], message: "must be at least tiers.maxJobsPerSlot * 40 + 10 when creative.mode is 'ugc'" });
+    if (c.platforms.instagram.enabled && c.platforms.instagram.visibility === 'private') ctx.addIssue({ code: 'custom', path: ['platforms', 'instagram', 'visibility'], message: "instagram has no private mode: set its visibility to 'public' or disable it" });
     if (counts.size > 1) ctx.addIssue({ code: 'custom', path: ['platforms'], message: 'enabled platforms must have the same number of slots' });
   });
 

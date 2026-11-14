@@ -59,10 +59,14 @@ export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?:
     });
 }
 
+// A slot the producer put back to 'planned' with an error waits this long before it starts again.
+const RETRY_GAP_MINUTES = 10;
+
 const hasSlots = (db: Db, date: string) => !!db.prepare('SELECT 1 FROM slots WHERE local_date = ?').get(date);
 
 export async function tick(deps: Deps, now: Date): Promise<void> {
   const { db, config } = deps;
+  kvSet(db, 'heartbeat', now.toISOString()); // a tick that publishes can take minutes; health must still see the loop alive
   const today = localDateOf(now, config.timezone);
   const tomorrow = addDays(today, 1);
   if (localHHMM(now, config.timezone) >= config.produceAt && !hasSlots(db, tomorrow)) planDay(db, config, tomorrow, now);
@@ -78,10 +82,12 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
 
   // Only slots that still have something to publish in time are worth producing.
   const lateBefore = new Date(now.getTime() - config.publish.maxLatenessMinutes * 60000).toISOString();
+  const retryAfter = new Date(now.getTime() - RETRY_GAP_MINUTES * 60000).toISOString();
   const planned: { id: string }[] = [];
-  for (const { id } of db.prepare("SELECT id FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string }[]) {
-    if (db.prepare("SELECT 1 FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").get(id, lateBefore)) planned.push({ id });
-    else {
+  for (const { id, error, updated_at } of db.prepare("SELECT id, error, updated_at FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string; error: string | null; updated_at: string }[]) {
+    if (db.prepare("SELECT 1 FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").get(id, lateBefore)) {
+      if (error === null || updated_at <= retryAfter) planned.push({ id });
+    } else {
       db.prepare("UPDATE slots SET status = 'failed', error = 'too late', updated_at = ? WHERE id = ? AND status = 'planned'").run(now.toISOString(), id);
       await alert(db, 'produce_failed', id, `${id} was not produced: too late`, now);
     }
@@ -107,7 +113,8 @@ export async function run(deps: Deps, clock: () => Date, once: boolean): Promise
   for (;;) {
     const now = clock();
     // Watchdog: a hung tick makes the process exit so Docker restarts it.
-    const dog = setTimeout(() => {
+    // Not armed for run --once: that tick waits for every producer, and each has its own timeout.
+    const dog = once ? undefined : setTimeout(() => {
       log.error('watchdog: tick exceeded limit, exiting', { minutes: deps.config.watchdogMinutes });
       process.exit(1);
     }, deps.config.watchdogMinutes * 60000);

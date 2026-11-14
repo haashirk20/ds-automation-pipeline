@@ -33,6 +33,8 @@ The owner's own videos follow one pattern. Keep to it.
 - The last shot is the payoff.
 - Say where the camera is in plain words: "close on her face at arm's length", "looking straight down at the desk", "from across the room". Never mention a phone, a tripod or any filming equipment: the video model would put it in the picture.
 - Nothing may be written anywhere in the scene. No signs, labels, screens with words, price tags or packaging text. The only exception is the shop's logo on a plain cardboard gift box, which you may show by writing "the gift box".
+- Keep anything that carries writing out of the picture: no screen facing the camera, no papers, posters, calendars, book covers or shop fronts. A laptop may appear closed or seen from behind.
+- No speech anywhere in the plan except `line`. Do not write that anyone says, asks, tells, shouts or whispers something, in an action, the setting or the person.
 - Keep every shot something a person could really film in one take. No effects, no slow motion, no split screen, no time-lapse.
 - Do not put quotation marks in an action.
 

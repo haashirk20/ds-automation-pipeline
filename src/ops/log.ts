@@ -8,7 +8,10 @@ export function scrub(s: string): string {
   }
   return s
     .replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/g, 'Bearer [redacted]')
-    .replace(/access_token=[^&\s"']+/g, 'access_token=[redacted]')
+    .replace(/(access_token|refresh_token)=[^&\s"']+/g, '$1=[redacted]')
+    .replace(/"(access_token|refresh_token)"\s*:\s*"[^"]*"/g, '"$1":"[redacted]"')
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[redacted-jwt]')
+    .replace(/\bshp[a-z]{2}_[A-Za-z0-9]+/g, '[redacted-shopify-token]')
     .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[redacted]')
     .replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/[^\s"']+/g, '[redacted-webhook]');
 }

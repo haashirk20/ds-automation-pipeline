@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseConfig } from '../src/config/index.ts';
 import { setLlmClient } from '../src/llm/client.ts';
 import { Brief, Script, TEMPLATES } from '../src/contracts.ts';
 import { ttsLines } from '../src/creative/assemble.ts';
@@ -10,9 +11,9 @@ import { PALETTES, chooseVariant, produceSlot, type ProduceDeps } from '../src/r
 import { planDay } from '../src/scheduler/planner.ts';
 import { childSpawn, makeProducer, tick } from '../src/scheduler/loop.ts';
 import { checkScript, judgeClaims } from '../src/creative/claims.ts';
-import { copyProblems, fallbackCopy } from '../src/creative/copy.ts';
+import { aboutScript, copyProblems, fallbackCopy } from '../src/creative/copy.ts';
 import { publishDue } from '../src/publish/index.ts';
-import { AT_SLOT1, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';
+import { AT_SLOT1, adConfig, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';
 import { makePublishers } from '../src/publish/registry.ts';
 const publishers = makePublishers(config, { now: () => new Date() });
 
@@ -52,7 +53,7 @@ test('produceSlot with the stub model: planned, producing, ready; files in place
   planDay(db, config, '2026-11-12', NOW);
   const seen: string[] = [];
   const T = new Date('2026-11-12T02:31:00Z');
-  await produceSlot(db, config, '2026-11-12#1', T, fakeDeps({ render: async (o) => { seen.push(slot(db).status); writeFileSync(o.outFile, 'x'); } }));
+  await produceSlot(db, adConfig, '2026-11-12#1', T, fakeDeps({ render: async (o) => { seen.push(slot(db).status); writeFileSync(o.outFile, 'x'); } }));
   assert.deepEqual([...new Set(seen)], ['producing']);
   const s = slot(db);
   assert.equal(s.status, 'ready', s.error);
@@ -68,6 +69,20 @@ test('produceSlot with the stub model: planned, producing, ready; files in place
   }
 });
 
+test("'ad' mode: a pending clip waits the slot instead of posting without it", async () => {
+  stubOn();
+  const db = fresh();
+  seedBrief(db);
+  planDay(db, config, '2026-11-12', NOW);
+  const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t1: 0, t2: 1 } } });
+  const higgsfield = { name: 'higgsfield', configured: () => true, submit: async () => ({ jobId: 'j1' }), fetch: async () => { throw new Error('HTTP 503'); } };
+  await produceSlot(db, cfg, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps({ providers: { higgsfield }, prepareImage: async (_s, _c, out) => writeFileSync(out, 'jpg') }));
+  const s = slot(db);
+  assert.deepEqual([s.status, s.attempt], ['planned', 0]);
+  assert.match(s.error, /clip job not fetched yet/);
+  assert.equal((db.prepare("SELECT state FROM spend").get() as any).state, 'submitted');
+});
+
 test('a second claimant fences the first producer out', async () => {
   stubOn();
   const db = fresh();
@@ -77,10 +92,10 @@ test('a second claimant fences the first producer out', async () => {
   const gate = new Promise<void>((r) => (release = r));
   let inRender!: () => void;
   const started = new Promise<void>((r) => (inRender = r));
-  const first = produceSlot(db, config, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps({ render: async (o) => { inRender(); await gate; writeFileSync(o.outFile, 'first'); } }));
+  const first = produceSlot(db, adConfig, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps({ render: async (o) => { inRender(); await gate; writeFileSync(o.outFile, 'first'); } }));
   await started;
   db.prepare("UPDATE slots SET status = 'planned' WHERE id = '2026-11-12#1'").run(); // stale recovery
-  await produceSlot(db, config, '2026-11-12#1', new Date('2026-11-12T03:10:00Z'), fakeDeps({ render: async (o) => writeFileSync(o.outFile, 'second') }));
+  await produceSlot(db, adConfig, '2026-11-12#1', new Date('2026-11-12T03:10:00Z'), fakeDeps({ render: async (o) => writeFileSync(o.outFile, 'second') }));
   assert.equal(slot(db).status, 'ready');
   release();
   await first; // stops without writing
@@ -97,14 +112,14 @@ test('cancel: the slot stays producing for stale recovery', async () => {
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
   const stop = new AbortController();
-  await assert.rejects(produceSlot(db, config, '2026-11-12#1', NOW, fakeDeps({ signal: stop.signal, render: async () => { stop.abort(); throw new Error('render cancelled'); } })));
+  await assert.rejects(produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps({ signal: stop.signal, render: async () => { stop.abort(); throw new Error('render cancelled'); } })));
   assert.equal(slot(db).status, 'producing');
 });
 
 test('no brief and an unreachable store: the slot is released to planned, attempts not burned', async () => {
   const db = fresh();
   planDay(db, config, '2026-11-12', NOW);
-  await produceSlot(db, config, '2026-11-12#1', NOW, fakeDeps({ ingest: async () => { throw new Error('store down'); } }));
+  await produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps({ ingest: async () => { throw new Error('store down'); } }));
   const s = slot(db);
   assert.deepEqual([s.status, s.attempt], ['planned', 0]);
   assert.equal((db.prepare("SELECT count(*) c FROM events WHERE kind = 'ingest_failed'").get() as any).c, 2); // ingest failed, slot waits
@@ -123,7 +138,7 @@ test('degraded: no model, reuses the oldest valid old script, fallback copy from
   db.prepare("UPDATE slots SET master_json = ? WHERE id = '2026-11-05#1'").run(JSON.stringify({ script: { nonsense: true }, variant: { template: 'gift-guide' } }));
   capReached(db);
   planDay(db, config, '2026-11-12', NOW);
-  await produceSlot(db, config, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps());
+  await produceSlot(db, adConfig, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps());
   const s = slot(db);
   assert.equal(s.status, 'ready', s.error);
   const m = JSON.parse(s.master_json);
@@ -136,13 +151,33 @@ test('degraded: no model, reuses the oldest valid old script, fallback copy from
   assert.equal((db.prepare("SELECT count(*) c FROM events WHERE kind = 'degraded'").get() as any).c, 1);
 });
 
+test("'ad' mode ignores 'ugc' rows in its history: the old script and the previous template come from 'ad' rows", async () => {
+  const db = fresh();
+  seedBrief(db);
+  oldSlot(db, '2026-09-01#1', '2026-09-01', script);
+  oldSlot(db, '2026-11-09#1', '2026-11-09', script);
+  db.prepare("UPDATE slots SET master_json = ? WHERE id = '2026-11-09#1'").run(JSON.stringify({ script, variant: { template: 'gift-guide' } }));
+  oldSlot(db, '2026-09-02#1', '2026-09-02', script);
+  db.prepare("UPDATE slots SET master_json = ? WHERE id = '2026-09-02#1'").run(JSON.stringify({ mode: 'ugc', concept: {}, clipFile: 'clips/x.mp4' }));
+  oldSlot(db, '2026-11-10#1', '2026-11-10', script);
+  db.prepare("UPDATE slots SET master_json = ? WHERE id = '2026-11-10#1'").run(JSON.stringify({ mode: 'ugc', concept: {}, clipFile: 'clips/y.mp4' }));
+  capReached(db);
+  planDay(db, config, '2026-11-12', NOW);
+  await produceSlot(db, adConfig, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps());
+  const s = slot(db);
+  assert.equal(s.status, 'ready', s.error);
+  const m = JSON.parse(s.master_json);
+  assert.deepEqual(m.script, script);
+  assert.notEqual(m.variant.template, 'gift-guide'); // the newest row is 'ugc'; the previous 'ad' row used gift-guide
+});
+
 test('degraded: a stored script with a stale price is rejected', async () => {
   const db = fresh();
   seedBrief(db, { ...brief, product: { ...brief.product, priceText: '$54.99' } });
   oldSlot(db, '2026-09-01#1', '2026-09-01', script); // says and shows $49.99
   capReached(db);
   planDay(db, config, '2026-11-12', NOW);
-  await produceSlot(db, config, '2026-11-12#1', NOW, fakeDeps());
+  await produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps());
   assert.equal(slot(db).status, 'failed');
   assert.match(slot(db).error, /no usable old slot/);
 });
@@ -152,7 +187,7 @@ test('no hook, no old slot: the slot fails with an alert', async () => {
   seedBrief(db);
   capReached(db);
   planDay(db, config, '2026-11-12', NOW);
-  await produceSlot(db, config, '2026-11-12#1', NOW, fakeDeps());
+  await produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps());
   assert.equal(slot(db).status, 'failed');
   assert.equal((db.prepare("SELECT count(*) c FROM events WHERE kind = 'produce_failed'").get() as any).c, 1);
 });
@@ -263,7 +298,7 @@ test('claim bypasses: zero-width characters, fullwidth digits, spoken price, inv
 });
 
 test('claim bypasses: copy with an invented count and claim hashtags', () => {
-  const base = fallbackCopy(brief, script);
+  const base = fallbackCopy(brief, aboutScript(script));
   assert.deepEqual(copyProblems(brief, base), []);
   const withCaption = (caption: string, hashtags = base.youtube.hashtags) => ({ ...base, youtube: { ...base.youtube, caption, hashtags, text: `${caption}\n\n${brief.product.url}\n\n${brief.disclosures.join('\n')}\n\n${hashtags.join(' ')}` } });
   has(copyProblems(brief, withCaption('Over 10,000 sold')), /number 10000/);

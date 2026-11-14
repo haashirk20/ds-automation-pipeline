@@ -2,6 +2,9 @@
 // in the same commit.
 import { z } from 'zod';
 
+// Added to Facebook and Instagram captions of AI videos: the bridge has no AI-label field for them.
+export const AI_LINE = '\n\nMade with AI.';
+
 export const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
 export const Platform = z.enum(PLATFORMS);
 export type Platform = z.infer<typeof Platform>;

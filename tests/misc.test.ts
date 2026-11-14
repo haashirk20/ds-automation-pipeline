@@ -110,3 +110,33 @@ test('scrub: env secret values, Bearer tokens, bot tokens, webhook URLs', () => 
     assert.deepEqual((redact({ msg: 'x', e: 'Bearer tok123' }) as any).e, 'Bearer [redacted]');
   } finally { delete process.env.MY_API_KEY; }
 });
+
+test('scrub: refresh tokens, JSON token fields, JWTs and Shopify tokens', () => {
+  const jwt = 'eyJhbGciOi.eyJzdWIiOiIx.sig_-9';
+  const out = scrub(`refresh_token=rrr111&x=1 {"access_token":"aaa222","refresh_token": "bbb333"} ${jwt} shpat_0123abcDEF shpca_9z`);
+  assert.ok(!/rrr111|aaa222|bbb333|eyJ|shpat_|shpca_/.test(out), out);
+  assert.ok(out.includes('x=1'));
+});
+
+// Runs from an empty directory (so no developer .env is loaded) with a minimal environment.
+const CLI = join(import.meta.dirname, '../src/cli.ts');
+const cli = (args: string[], dry: string) => {
+  try {
+    execFileSync(process.execPath, [CLI, ...args], { cwd: mkdtempSync(join(tmpdir(), 'cwd-')), env: { PATH: process.env.PATH, DRY_RUN: dry, DATA_DIR: mkdtempSync(join(tmpdir(), 'cli-')) }, stdio: 'pipe' });
+    return { status: 0, stderr: '' };
+  } catch (e: any) { return { status: e.status as number, stderr: String(e.stderr) }; }
+};
+
+test('run and publish refuse a clock override unless DRY_RUN is 1', () => {
+  for (const args of [['run', '--once'], ['publish']]) {
+    const r = cli(['--now', '2026-11-12T17:20:00Z', ...args], '0');
+    assert.equal(r.status, 2, args.join(' '));
+    assert.match(r.stderr, /refused/);
+  }
+});
+
+// `run --once` would start the Remotion producer, so the accepted case uses `publish`, which goes through the same check.
+test('with DRY_RUN=1 a clock override is accepted', () => {
+  const r = cli(['--now', '2026-11-12T17:20:00Z', 'publish'], '1');
+  assert.deepEqual([r.status, r.stderr], [0, '']);
+});

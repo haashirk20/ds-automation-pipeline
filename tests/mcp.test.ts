@@ -60,3 +60,14 @@ test('mcp: a body over 5 MB is refused', async () => {
   const m = await openMcp({ url: 'https://x/mcp', token: 't', fetch: f });
   await assert.rejects(m.call('t', {}), /too large/);
 });
+
+test('mcp: requests refuse redirects, because they carry the bearer token', async () => {
+  const seen: unknown[] = [];
+  const f = (async (_u: string, init: RequestInit) => {
+    seen.push(init.redirect);
+    const body = JSON.parse(init.body as string);
+    return body.method === 'initialize' ? json(result(body.id, {})) : new Response(null, { status: 202 });
+  }) as unknown as typeof fetch;
+  await openMcp({ url: 'https://x/mcp', token: 'tok', fetch: f });
+  assert.deepEqual(seen, ['error', 'error']);
+});

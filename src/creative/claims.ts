@@ -25,7 +25,7 @@ export const words = (s: string): number => s.trim().split(/\s+/).filter(Boolean
 // odd spacing) cannot slip past the patterns below.
 export const norm = (s: string): string => s.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim();
 
-const DISCOUNT = /% off|\b\d+\s*off\b|half[\s-]*(off|price)|\bbogo\b|buy (one|1)\b|clearance|discount|\bsales?\b|save \$|was \$|\bdeals?\b/i;
+const DISCOUNT = /% off|\b\d+\s*off\b|half[\s-]*(off|price)|\bbogo\b|buy (one|1)\b|clearance|discount|\bsales?\b|save \$|was \$|(?<!\bbig )\bdeals?\b(?! with\b)/i; // not "no big deal" or "deal with it"
 const URGENCY = /limited time|today only|last chance|hurry|selling fast|while supplies last|\bact now\b|ends (soon|tonight)/i;
 const REVIEW = /review|rated|\bstars?\b|customers (say|love)/i;
 const BANNED = /best.?sell|#\s?1|number one|guarantee|\bcure|\bheal|pain relief|medical|doctor/i;

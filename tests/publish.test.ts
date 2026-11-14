@@ -68,6 +68,15 @@ test('PermanentError skips with error stored', async () => {
   assert.deepEqual([r.state, r.error], ['skipped', 'bad file']);
 });
 
+test('PermanentError after saveHandle needs attention, never skipped', async () => {
+  const db = await readyDb();
+  const { publishers } = fakePublishers(async (i) => { i.saveHandle({ h: 1 }); throw new PermanentError('bad file'); });
+  await publishDue(db, config, publishers, AT_SLOT1);
+  const r = rows(db)[0];
+  assert.equal(r.state, 'needs_attention');
+  assert.match(r.error, /a post request may have been sent: bad file/);
+});
+
 test('Ambiguous and unknown errors need attention, never retried', async () => {
   const db = await readyDb();
   let n = 0;
@@ -247,4 +256,44 @@ test('recovery: too many attempts -> needs_attention', async () => {
   await publishDue(db, config, publishers, AT_SLOT1);
   assert.equal(row(db, 'youtube').state, 'needs_attention');
   assert.equal(calls.filter((c: any) => c.idempotencyKey.endsWith('youtube')).length, 0);
+});
+
+test('retries exhausted after saveHandle: needs_attention with an alert, never skipped', async () => {
+  const db = await readyDb();
+  const { publishers } = fakePublishers(async (i) => { i.saveHandle({ h: 1 }); throw new RetryableError('boom'); });
+  let t = AT_SLOT1;
+  for (let i = 0; i <= config.publish.retryMinutes.length; i++) {
+    await publishDue(db, config, publishers, t);
+    if (i < config.publish.retryMinutes.length) t = new Date(row(db, 'youtube').next_attempt_at);
+  }
+  const r = row(db, 'youtube');
+  assert.equal(r.state, 'needs_attention');
+  assert.match(r.error, /post request may have been sent.*boom/);
+  assert.equal(rows(db, `SELECT * FROM events WHERE kind = 'publish_needs_attention' AND key = '${SLOT}/youtube'`).length, 1);
+});
+
+test('overdue pending row: needs_attention with a handle, skipped without', async () => {
+  const db = await readyDb();
+  db.prepare("UPDATE publications SET handle_json = '{\"h\":1}' WHERE slot_id = ? AND platform = 'youtube'").run(SLOT);
+  await publishDue(db, config, fakePublishers().publishers, min(361));
+  assert.equal(row(db, 'youtube').state, 'needs_attention');
+  assert.match(row(db, 'youtube').error, /too late, a post request may have been sent/);
+  assert.equal(rows(db, `SELECT * FROM events WHERE kind = 'publish_needs_attention' AND key = '${SLOT}/youtube'`).length, 1);
+  assert.equal(row(db, 'facebook').state, 'skipped');
+});
+
+test('failed slot: a pending row with a handle needs attention', async () => {
+  const db = await readyDb();
+  db.prepare("UPDATE slots SET status = 'failed' WHERE id = ?").run(SLOT);
+  db.prepare("UPDATE publications SET handle_json = '{}' WHERE slot_id = ? AND platform = 'tiktok'").run(SLOT);
+  await publishDue(db, config, fakePublishers().publishers, AT_SLOT1);
+  assert.equal(row(db, 'tiktok').state, 'needs_attention');
+  assert.equal(row(db, 'youtube').state, 'skipped');
+});
+
+test('the error text written to the row is scrubbed', async () => {
+  const db = await readyDb();
+  const { publishers } = fakePublishers(async () => { throw new PermanentError('bad Bearer abc123token'); });
+  await publishDue(db, config, publishers, AT_SLOT1);
+  assert.equal(row(db, 'youtube').error, 'bad Bearer [redacted]');
 });

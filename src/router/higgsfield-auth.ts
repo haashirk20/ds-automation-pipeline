@@ -17,7 +17,7 @@ export type AuthIo = {
   fetch: typeof fetch;
   print: (s: string) => void;
   // Resolves with the full redirect URL, from the local listener or a line pasted on stdin.
-  waitForRedirect: (signal: AbortSignal) => Promise<string>;
+  waitForRedirect: (signal: AbortSignal, state: string) => Promise<string>;
   open: typeof openMcp;
 };
 
@@ -56,7 +56,7 @@ function store(db: Db, now: Date, clientId: string, t: any, old?: Row) {
 }
 
 async function tokenRequest(f: typeof fetch, url: string, form: Record<string, string>): Promise<any> {
-  const r = await f(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(form), signal: AbortSignal.timeout(15_000) });
+  const r = await f(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(form), redirect: 'error', signal: AbortSignal.timeout(15_000) });
   if (!r.ok) throw Object.assign(new Error(`token endpoint answered ${r.status}`), { status: r.status }); // the body can echo secrets: not included
   return r.json();
 }
@@ -64,11 +64,13 @@ async function tokenRequest(f: typeof fetch, url: string, form: Record<string, s
 export function defaultIo(): AuthIo {
   return {
     fetch, open: openMcp, print: (s) => console.log(s),
-    waitForRedirect: (signal) => new Promise<string>((resolve, reject) => {
+    waitForRedirect: (signal, state) => new Promise<string>((resolve, reject) => {
       const rl = createInterface({ input: process.stdin });
       const server = createServer((req, res) => {
         if (!req.url?.startsWith('/callback')) { res.statusCode = 404; res.end(); return; }
         res.setHeader('content-type', 'text/plain');
+        // Another local process can hit this port: only the request with our state ends the wait.
+        if (new URL(req.url, 'http://127.0.0.1').searchParams.get('state') !== state) { res.statusCode = 400; res.end('wrong state'); return; }
         res.end('You can close this tab.');
         end(() => resolve('http://127.0.0.1:53682' + req.url));
       });
@@ -87,7 +89,7 @@ export async function authorize(db: Db, now: Date, io: AuthIo = defaultIo()): Pr
   let clientId = row(db)?.client_id;
   if (!clientId) {
     const r = await io.fetch(meta.register, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(15_000),
+      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({ client_name: 'ad-pipeline', redirect_uris: [REDIRECT], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', scope: SCOPE }),
     });
     if (!r.ok) throw new Error(`client registration answered ${r.status}`);
@@ -100,7 +102,7 @@ export async function authorize(db: Db, now: Date, io: AuthIo = defaultIo()): Pr
   for (const [k, v] of Object.entries({ response_type: 'code', client_id: clientId, redirect_uri: REDIRECT, scope: SCOPE, state, code_challenge: b64u(createHash('sha256').update(verifier).digest()), code_challenge_method: 'S256', resource: MCP_URL })) u.searchParams.set(k, v);
   io.print('Open this URL in a browser and sign in. If the browser cannot reach this machine, paste the full URL it ends up on here and press Enter:\n' + u.href);
 
-  const redirect = new URL(await io.waitForRedirect(AbortSignal.timeout(10 * 60_000)));
+  const redirect = new URL(await io.waitForRedirect(AbortSignal.timeout(10 * 60_000), state));
   const q = redirect.searchParams;
   if (q.get('error')) throw new Error('sign-in refused: ' + q.get('error'));
   if (q.get('state') !== state) throw new Error('sign-in rejected: state does not match');

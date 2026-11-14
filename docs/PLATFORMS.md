@@ -1,26 +1,86 @@
 # Platform realities
 
-Researched 2026-11-11 from official documentation, by research agents that quoted their sources.
-The orchestrator re-checked the YouTube revision-history entry and the bridge prices first-hand.
-Everything else is as reported, and each publisher confirms its own facts with a real API call in
-Phase 5. Items marked **(unverified)** come from vendor pages, press or community reports. Three
-facts on this page changed in the last 12 months, so re-check anything here before relying on it later.
+The pipeline posts to all four platforms through one hosted bridge, Zernio (D-29). The first
+section says how. The sections after it describe each platform's own API. They were researched on
+2026-11-11 and are kept as background: the pipeline no longer calls those APIs directly. Items marked
+**(unverified)** come from vendor pages, press or community reports. Re-check anything in the
+background sections before relying on it.
 
-## Summary
+## Publishing through the bridge
 
-| Platform | Private test (Phase 5 exit) | Public, unattended posting | Blocking step | Lead time |
-|---|---|---|---|---|
-| YouTube Shorts | Same day, `privacyStatus: "unlisted"` | Same day | Publish the OAuth consent screen to "In production" | minutes |
-| Facebook Page Reels | Same day: app in Development mode, visible to app roles only | Switch app to Live, Standard Access | None expected. Fallback: App Review + Business Verification | minutes (weeks if fallback) |
-| TikTok | Same day through a Sandbox app: `SELF_ONLY`, account set to private | **Not possible with our own app.** TikTok's audit excludes internal tools. Needs a hosted bridge with an audited app | Pick a bridge and create the account | same day |
-| Instagram Reels | Same day: upload and process, stop before publishing | Same day: set `visibility` to `public` | None expected: same Meta app and token as Facebook. Fallback: App Review | minutes |
+`src/publish/bridge.ts` is the only publisher. The base URL is `https://zernio.com/api/v1`, and every
+call carries `Authorization: Bearer <key>`. The key is `BRIDGE_API_KEY` in `.env`.
 
-The three findings that decide feasibility:
+**Request sequence.**
+1. `GET /accounts` finds the active account whose username matches the platform's `handle` in the
+   config (for Facebook, the display name also matches).
+2. TikTok only: `GET /accounts/{id}/tiktok/creator-info?mediaType=video` lists the privacy levels
+   the account is offered.
+3. `POST /media/presign` with `filename`, `contentType` and `size` returns `uploadUrl` and
+   `publicUrl`. The file is sent with `PUT` to `uploadUrl`.
+4. `saveHandle` stores the media URL and the time.
+5. `POST /posts` with `content`, `publishNow: true`, `platforms: [{platform, accountId}]`,
+   `mediaItems` and an `Idempotency-Key` header. The returned post id is stored at once.
+6. `GET /posts/{id}` is polled every 10 seconds until the platform's status is `published`
+   (success) or `failed` (permanent error, never retried).
+
+**What each platform gets.**
+
+| Platform | Fields sent | Private means |
+|---|---|---|
+| YouTube | `platformSpecificData`: `title` (at most 100 characters), `visibility`, `madeForKids: false`, `containsSyntheticMedia` | The video is private |
+| TikTok | Top-level `tiktokSettings`: `privacy_level`, `allow_comment`, `allow_duet`, `allow_stitch`, `content_preview_confirmed`, `express_consent_given`, `video_made_with_ai`. Public adds `commercialContentType: "brand_organic"`. Private adds `draft: true` | A draft in the account's TikTok inbox. The owner posts or discards it there |
+| Facebook | `platformSpecificData`: `contentType: "reel"`, `title` | `facebookSettings.draft: true` |
+| Instagram | None beyond the common fields | Instagram has no private mode. A private post is refused with a permanent error |
+
+For TikTok the publisher asks for `PUBLIC_TO_EVERYONE` when public. When private it uses
+`SELF_ONLY` if the account is offered it, otherwise the first level offered. A business account is
+offered only `PUBLIC_TO_EVERYONE`, so the draft flag is what keeps a private post unpublished.
+
+**How double posts are prevented.**
+- The handle (media URL, time, post id) is stored before the `POST /posts` request. No stored handle
+  means nothing was posted. A stored handle is used first on every call: with a post id the
+  publisher only polls that post.
+- The `Idempotency-Key` is the publication's own key. The bridge keeps it for 24 hours.
+- If the handle is older than 23 hours and holds no post id, the key may have expired, so the
+  publication becomes `needs_attention`. It is not posted again.
+- A `409` answer with `details.existingPostId` means the post exists. The publisher stores that id
+  and polls it. An `idempotency_conflict` code is treated as retryable.
+
+**AI disclosure.** The bridge has a label field for YouTube (`containsSyntheticMedia`) and TikTok
+(`video_made_with_ai`). Both are set from the render's disclosure flag. It has none for Facebook
+and Instagram, so for those two the publisher appends the line "Made with AI." to the caption when
+the flag is set. That change is being applied to the code now, and has no live post behind it.
+
+**Verified live on 2026-11-13 with the owner's key.**
+- A private YouTube post. A signed-out viewer saw "Private video".
+- A TikTok inbox draft.
+- A second run resumed both posts from the stored handle and created nothing new.
+- Connected accounts: YouTube and TikTok. Facebook and Instagram are not connected and are disabled
+  in the config.
+
+**Not verified.** Facebook and Instagram posts. A public TikTok post. Whether the Facebook and
+Instagram fields above are accepted by the bridge as written.
+
+---
+
+## Summary of the platforms' own requirements
+
+This is background for posting directly, which the pipeline does not do. The pipeline's own path is
+the bridge above.
+
+| Platform | Direct posting, private test | Direct posting, public and unattended | Blocking step |
+|---|---|---|---|
+| YouTube Shorts | Same day, `privacyStatus: "unlisted"` | Same day | Publish the OAuth consent screen to "In production" |
+| Facebook Page Reels | Same day: app in Development mode | Switch the app to Live, Standard Access | None expected. Fallback: App Review and Business Verification |
+| TikTok | Sandbox app: `SELF_ONLY` | Not possible with our own app. TikTok's audit excludes internal tools | A hosted bridge with an audited app |
+| Instagram Reels | Same day: upload and process, stop before publishing | Same day | None expected. Same Meta app and token as Facebook |
+
+The findings behind D-01 and D-02:
 
 1. **TikTok will not audit this tool.** Public posting through our own TikTok app is off the table.
 2. **YouTube removed the private lock on 2026-11-02.** No audit is needed for public uploads.
-3. **Facebook and Instagram share one Meta app and one token**, so the fourth platform adds no new
-   approval step.
+3. **Facebook and Instagram share one Meta app and one token.**
 
 ---
 
@@ -71,7 +131,7 @@ Selection criteria at integration time: public posting confirmed by a real post,
 passes `is_aigc` and the brand toggle through, accepts a file upload, has a status endpoint, and
 accepts an idempotency key or a reference we can search for afterwards.
 
-**Bridge API (Zernio), read from its docs on 2026-11-13, untested.** Base
+**Bridge API (Zernio), read from its docs on 2026-11-13.** The first section of this page says what the pipeline sends. Base
 `https://zernio.com/api/v1`, header `Authorization: Bearer <key>`.
 1. `GET /accounts` lists connected accounts. A post refers to one by `accountId`.
 2. `POST /media/presign` with `filename`, `contentType` and `size` returns `uploadUrl` and
@@ -133,9 +193,7 @@ Shorts flag.
 
 **Private lock removed.** Revision history, 2026-11-02: "Videos uploaded through the videos.insert
 method from unverified API projects are no longer restricted to private viewing mode." If
-`privacyStatus` is omitted the upload defaults to **public**. The pipeline always sets it
-explicitly: `unlisted` while the platform's `visibility` is `private`, and `public` after the owner
-changes it. `DRY_RUN` makes no upload at all.
+`privacyStatus` is omitted the upload defaults to **public**. Through the bridge the pipeline sends `visibility` explicitly, so this default is not reached.
 [Revision history](https://developers.google.com/youtube/v3/revision_history)
 
 **Quota.** Granular buckets since 2026-06-01: 100 `videos.insert` calls per day in their own
@@ -190,8 +248,7 @@ App Review plus Business Verification, which takes weeks.
 
 **Tokens.** Short-lived user token (Graph API Explorer) → long-lived user token (about 60 days) →
 Page token from `/me/accounts`. "Long-lived Page access token do not have an expiration date." It
-can still be invalidated by a password change, a role change or an app-secret reset, so the
-pipeline checks it daily with `/debug_token` and alerts.
+can still be invalidated by a password change, a role change or an app-secret reset.
 
 **Limits.** 30 API-published Reels per Page per 24 hours. 9:16, 1080×1920 recommended, 24–60 fps,
 **3 to 90 seconds**, H.264, AAC 48 kHz.
@@ -219,8 +276,7 @@ Checked first-hand on 2026-11-12 in Meta's content publishing guide and media re
 [IG User media](https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media)
 
 Resumable upload is "Only for apps that have implemented Facebook Login for Business." The other
-route is `video_url`, which Meta fetches from "a public server". The pipeline uses the resumable
-upload, so it needs no public host.
+route is `video_url`, which Meta fetches from "a public server". The bridge handles the upload, so the pipeline needs no public host.
 
 **Account.** A professional (Business or Creator) Instagram account linked to the Facebook Page.
 The Instagram user ID is read from the Page (`/{page-id}?fields=instagram_business_account`). The
@@ -236,17 +292,13 @@ Reels: MP4 or MOV with the moov atom at the front, 23–60 fps, 9:16 recommended
 3 seconds to 15 minutes, at most 300 MB.
 
 **Container states.** `IN_PROGRESS`, `FINISHED`, `PUBLISHED`, `ERROR`, `EXPIRED`. A container that
-is not published within 24 hours expires. The publisher reads the state before any retry, so a
-lost response to `media_publish` cannot cause a second post.
+is not published within 24 hours expires. 
 
-**No private posts.** Professional accounts are public and the API has no unlisted mode. With
-`visibility: 'private'` the pipeline uploads the Reel and waits for `FINISHED`, which proves the
-token, the upload and Instagram's processing, and then does not publish. The container expires on
-its own.
+**No private posts.** Professional accounts are public and the API has no unlisted mode. Through the
+bridge a private Instagram post is refused (see the first section).
 
 **AI disclosure.** The media reference lists no AI-disclosure parameter. Instagram adds its own
-"AI info" label when it detects AI content. When a render contains AI-generated footage, the
-caption ends with the line "Video includes AI-generated footage."
+"AI info" label when it detects AI content. The pipeline appends "Made with AI." to the caption.
 
 **Links.** Caption links are not clickable. The call to action is "Link in bio", and the store link
 goes in the profile.
@@ -258,16 +310,17 @@ watch time **(metric names unverified; several were renamed in 2025)**.
 
 ## AI-disclosure matrix
 
-Computed per render from its manifest. No one sets these by hand.
+Computed per render from its manifest. No one sets these by hand. In 'ugc' mode every video is
+AI-generated, so the flag is always on (D-28).
 
-| What the render contains | TikTok `is_aigc` | YouTube `containsSyntheticMedia` | Facebook `is_ai_generated` | Instagram |
+| What the render contains | TikTok | YouTube | Facebook | Instagram |
 |---|---|---|---|---|
-| AI-generated video clip (Tier 1 or 2) | true | true | true | A line in the caption |
-| AI-generated music | true | true | true | — |
-| Real photos, motion graphics, synthetic voice only (Tier 0) | `disclosure.tier0`, default true | `disclosure.tier0`, default true | `disclosure.tier0`, default true | — |
+| AI-generated video clip, or AI music | `video_made_with_ai: true` | `containsSyntheticMedia: true` | Caption line "Made with AI." | Caption line "Made with AI." |
+| Real photos, motion graphics, synthetic voice only ('ad' mode) | `disclosure.tier0`, default true | `disclosure.tier0`, default true | `disclosure.tier0`, default true, same caption line | Same |
 
 Tier 0 is a grey area on every platform. The default over-discloses, because an unlabeled video
-can be removed and a labeled one is not penalized by the published policies.
+can be removed and a labeled one is not penalized by the published policies. The direct-API fields
+(`is_aigc`, `is_ai_generated`) are described in the sections above and are not sent.
 
 ## Duplicate and repetitive content
 
@@ -306,12 +359,12 @@ Each platform has its own preset, and Phase 5 test posts are checked by eye agai
 
 ## What the owner has to set up
 
-| Platform | Steps | Time |
-|---|---|---|
-| YouTube | Google Cloud project, enable YouTube Data API v3 and YouTube Analytics API, consent screen External + In production, Desktop OAuth client | 15 min |
-| Facebook | Meta app (type Business), user token from Graph API Explorer, switch app to Live | 15 min |
-| TikTok | Sandbox app for the test post (Login Kit + Content Posting API, Desktop redirect). Bridge account for public posting | 20 min |
-| Instagram | Make the Instagram account a professional account and link it to the Facebook Page. Add the Instagram permissions to the same Meta app | 10 min |
+| Step | Time |
+|---|---|
+| Create a Zernio account and connect each platform's account in its dashboard. YouTube and TikTok are connected. Facebook and Instagram are not: connecting each adds $6 a month (D-29) | 10 min each |
+| Put the bridge key in `.env` as `BRIDGE_API_KEY` | 1 min |
+| After connecting Facebook or Instagram, set `enabled: true` for it in `config/pipeline.config.ts`. Instagram needs `visibility: 'public'`, because it has no private mode | 2 min |
 
-The store already serves `/policies/privacy-policy` and `/policies/terms-of-service`, which cover
-the privacy and terms URLs these developer portals ask for.
+The owner needs no Google, Meta or TikTok developer app. The store serves `/policies/privacy-policy`
+and `/policies/terms-of-service`. They were needed for those developer portals and are no longer
+asked for.

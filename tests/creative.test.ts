@@ -1,12 +1,12 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Brief, Script } from '../src/contracts.ts';
+import { Brief, PLATFORMS, Script, UgcConcept } from '../src/contracts.ts';
 import { setLlmClient } from '../src/llm/client.ts';
 import { checkHook, checkScript } from '../src/creative/claims.ts';
 import { hookFloor, pickHook, refillHooks } from '../src/creative/hooks.ts';
 import { writeScript, ScriptRejectedError } from '../src/creative/script.ts';
-import { writeCopy, CopyRejectedError } from '../src/creative/copy.ts';
+import { aboutConcept, aboutScript, copyProblems, fallbackCopy, writeCopy } from '../src/creative/copy.ts';
 import { config, fresh } from './helpers.ts';
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
@@ -122,7 +122,7 @@ test('writeScript retries once with the problems, then throws ScriptRejectedErro
 test('writeCopy (stub) builds platform text: link only where clickable, disclosures, hashtags', async () => {
   const db = fresh();
   process.env.LLM_STUB = '1';
-  const c = await writeCopy(db, config, brief, sample(0), NOW, 's1');
+  const c = await writeCopy(db, config, brief, aboutScript(sample(0)), NOW, 's1');
   for (const p of ['youtube', 'facebook'] as const) assert.ok(c[p].text.includes(brief.product.url), p);
   for (const p of ['instagram', 'tiktok'] as const) assert.ok(!c[p].text.includes('http'), p);
   for (const p of Object.keys(c) as (keyof typeof c)[]) {
@@ -131,22 +131,83 @@ test('writeCopy (stub) builds platform text: link only where clickable, disclosu
   }
 });
 
-test('writeCopy fails loudly on bad copy', async () => {
+// A client that answers the copy writer with `copy` and the judge with `verdicts`, and records the judge's request.
+function copyClient(copy: object, verdicts: object = fixture('copycheck')) {
+  const judged: string[] = [];
+  setLlmClient({
+    create: async (p: any) => {
+      const user: string = p.messages[0].content;
+      const out = user.startsWith('Write copy') || user.startsWith('style: ugc\nWrite copy') ? copy : (judged.push(user), verdicts);
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(out) }], usage: { input_tokens: 1, output_tokens: 1 } };
+    },
+  });
+  return judged;
+}
+
+test('writeCopy gives a platform that fails a code check the fallback copy and leaves the others alone', async () => {
   const good = fixture('copy');
-  async function run(edit: (c: any) => void) {
+  const bad = [
+    (c: any) => (c.youtube.title = 'x'.repeat(91)),
+    (c: any) => (c.tiktok.hashtags = ['#a', '#b']),
+    (c: any) => (c.tiktok.hashtags = ['#a', '#b', '#c d']),
+    (c: any) => (c.facebook.caption = 'Big discount today'),
+    (c: any) => (c.instagram.caption = 'Visit evil.com now'),
+    (c: any) => (c.youtube.caption = 'x'.repeat(2300)),
+    (c: any) => (c.youtube.caption = 'Only $19.99 today'),
+  ];
+  const about = aboutScript(sample(0));
+  const fb = fallbackCopy(brief, about);
+  const kept = await (async () => { copyClient(good); return writeCopy(fresh(), config, brief, about, NOW, 's1'); })();
+  for (const edit of bad) {
     const c = structuredClone(good);
     edit(c);
-    setLlmClient({ create: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(c) }], usage: { input_tokens: 1, output_tokens: 1 } }) });
-    return writeCopy(fresh(), config, brief, sample(0), NOW, 's1');
+    const judged = copyClient(c);
+    const out = await writeCopy(fresh(), config, brief, about, NOW, 's1');
+    const fell = PLATFORMS.filter((p) => out[p].text === fb[p].text);
+    assert.equal(fell.length, 1, `${edit}`);
+    for (const p of PLATFORMS) if (p !== fell[0]) assert.deepEqual(out[p], kept[p]);
+    assert.ok(!judged[0].includes(`\n${fell[0]}: `), 'the judge is not asked about the platform that already failed');
+    assert.deepEqual(copyProblems(brief, out), []);
   }
-  const rejects = (edit: (c: any) => void, re: RegExp) => assert.rejects(run(edit), (e) => e instanceof CopyRejectedError && e.problems.some((p) => re.test(p)));
-  await rejects((c) => (c.youtube.title = 'x'.repeat(91)), /title is 91/);
-  await rejects((c) => (c.tiktok.hashtags = ['#a', '#b']), /hashtags, want 3 to 6/);
-  await rejects((c) => (c.tiktok.hashtags = ['#a', '#b', '#c d']), /bad hashtag/);
-  await rejects((c) => (c.facebook.caption = 'Big discount today'), /discount/);
-  await rejects((c) => (c.instagram.caption = 'Visit evil.com now'), /URL/);
-  await rejects((c) => (c.youtube.caption = 'x'.repeat(2300)), /max 2200/);
-  await rejects((c) => (c.youtube.caption = 'Only $19.99 today'), /price/);
+});
+
+test('writeCopy falls back for the platform the judge rejects, and for every platform when all fail', async () => {
+  const about = aboutScript(sample(0));
+  const fb = fallbackCopy(brief, about);
+  const verdicts = fixture('copycheck');
+  verdicts.verdicts[3] = { platform: 'tiktok', supported: false, reason: 'no fact' };
+  copyClient(fixture('copy'), verdicts);
+  const out = await writeCopy(fresh(), config, brief, about, NOW, 's1');
+  assert.equal(out.tiktok.text, fb.tiktok.text);
+  assert.notEqual(out.youtube.text, fb.youtube.text);
+  const all = structuredClone(fixture('copy'));
+  for (const p of PLATFORMS) all[p].caption = 'Big discount today';
+  const judged = copyClient(all);
+  const out2 = await writeCopy(fresh(), config, brief, about, NOW, 's1');
+  for (const p of PLATFORMS) assert.equal(out2[p].text, fb[p].text);
+  assert.equal(judged.length, 0);
+});
+
+test('writeCopy throws when the model call fails', async () => {
+  setLlmClient({ create: async () => { throw new Error('boom'); } });
+  await assert.rejects(writeCopy(fresh(), config, brief, aboutScript(sample(0)), NOW, 's1'), /boom/);
+});
+
+test('the copy judge is told the style and what the video shows', async () => {
+  const concept = UgcConcept.parse(fixture('ugc'));
+  const judged = copyClient(fixture('copy'));
+  await writeCopy(fresh(), config, brief, aboutConcept(concept), NOW, 's1');
+  assert.ok(judged[0].startsWith('style: ugc\nWhat the video shows:\nOn-screen caption: '));
+  assert.match(judged[0], /What happens:\n- /);
+  const ad = copyClient(fixture('copy'));
+  await writeCopy(fresh(), config, brief, aboutScript(sample(0)), NOW, 's1');
+  assert.ok(!ad[0].startsWith('style: ugc'));
+});
+
+test('the discount pattern does not match "no big deal" or "deal with", and still matches deals', async () => {
+  const { languageProblems } = await import('../src/creative/claims.ts');
+  for (const t of ['It is no big deal', 'a Big Deal', "She can't deal with the cold", 'Deal with it']) assert.deepEqual(languageProblems(brief, t, 'x'), [], t);
+  for (const t of ['A great deal', 'deals', 'Deal of the day', 'such a good deal, big deal price']) assert.equal(languageProblems(brief, t, 'x').length, 1, t);
 });
 
 test('a look-alike letter from another script is rejected', async () => {

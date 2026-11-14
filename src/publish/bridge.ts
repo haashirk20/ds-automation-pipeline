@@ -1,11 +1,13 @@
 import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
 import { env } from '../config/index.ts';
+import { AI_LINE } from '../contracts.ts';
 import { AmbiguousError, PermanentError, RetryableError, type Publisher } from './types.ts';
 
 // Every platform publishes through the hosted bridge (Zernio); see docs/PLATFORMS.md.
 const BASE = 'https://zernio.com/api/v1';
 const POLL_MS = 10_000;
+const MAX_POLLS = 9; // 90 s; the post id is stored, so the next attempt only reads the post
 const KEY_TTL_MS = 23 * 3600_000; // the bridge forgets an Idempotency-Key after 24 h
 const API_TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 10 * 60_000;
@@ -31,7 +33,7 @@ type PlatformConfig = { handle: string };
 const norm = (s: string | undefined) => (s ?? '').trim().replace(/^@/, '').toLowerCase();
 
 export async function listAccounts(f: typeof fetch, key: string, signal: AbortSignal): Promise<Account[]> {
-  const res = await f(`${BASE}/accounts`, { headers: { authorization: `Bearer ${key}` }, signal });
+  const res = await f(`${BASE}/accounts`, { headers: { authorization: `Bearer ${key}` }, signal, redirect: 'error' });
   if (!res.ok) throw new Error(`bridge GET /accounts: HTTP ${res.status}`);
   return ((await res.json()) as { accounts?: Account[] }).accounts ?? [];
 }
@@ -59,6 +61,7 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
             headers: { authorization: `Bearer ${key}`, ...(init.json ? { 'content-type': 'application/json' } : {}), ...init.headers },
             body: init.json ? JSON.stringify(init.json) : undefined,
             signal: AbortSignal.any([signal, AbortSignal.timeout(API_TIMEOUT_MS)]),
+            redirect: 'error',
           });
         } catch {
           throw new RetryableError(`bridge ${method} ${path}: no response (network error, timeout or abort)`);
@@ -78,15 +81,21 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
       const handle = parseHandle(input.handle);
       async function resolve(postId: string, first?: Post): Promise<{ postId: string; postUrl: string | null }> {
         let post = first;
-        for (;;) {
+        for (let polls = 0; ; polls++) {
           if (!post) {
             if (signal.aborted) throw new RetryableError('still publishing');
-            post = ok('GET', `/posts/${postId}`, await call('GET', `/posts/${encodeURIComponent(postId)}`)).body.post as Post;
+            const r = await call('GET', `/posts/${encodeURIComponent(postId)}`);
+            if (r.status === 429 || r.status >= 500) ok('GET', `/posts/${postId}`, r);
+            // We hold a post id and do not know its state, so this is never a plain failure.
+            if (r.status < 200 || r.status >= 300) throw new AmbiguousError(`bridge: post ${postId} exists at the bridge but cannot be read: HTTP ${r.status}`);
+            post = r.body.post as Post;
           }
           const entry = post.platforms?.find((p) => p.platform === platform);
           const status = entry?.status ?? post.status;
           if (status === 'published') return { postId, postUrl: entry?.platformPostUrl ?? null };
           if (status === 'failed') throw new PermanentError(`bridge: ${platform} publish failed: ${entry?.errorMessage ?? 'no message'}`);
+          if (status === 'cancelled') throw new PermanentError(`bridge: ${platform} post was cancelled`);
+          if (polls >= MAX_POLLS) throw new RetryableError('still publishing');
           post = undefined;
           await deps.sleep(POLL_MS, signal);
           if (signal.aborted) throw new RetryableError('still publishing');
@@ -101,7 +110,7 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
       // Nothing below creates a post until saveHandle has run.
       const account = findAccount(ok('GET', '/accounts', await call('GET', '/accounts')).body.accounts ?? [], platform, cfg.handle);
       if (!account) throw new PermanentError(`bridge: no active ${platform} account for handle ${cfg.handle}`);
-      const body: Record<string, unknown> = { content: input.caption, publishNow: true, platforms: [{ platform, accountId: account._id }] };
+      const body: Record<string, unknown> = { content: input.aiDisclosure && (platform === 'facebook' || platform === 'instagram') ? input.caption + AI_LINE : input.caption, publishNow: true, platforms: [{ platform, accountId: account._id }] };
       const entry = (body.platforms as { platformSpecificData?: unknown }[])[0];
       const title = input.title.slice(0, 100);
       if (platform === 'youtube') entry.platformSpecificData = { title, visibility: input.visibility, madeForKids: false, containsSyntheticMedia: input.aiDisclosure };
@@ -133,6 +142,8 @@ export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps:
       if (!mediaUrl) {
         const size = (await openAsBlob(input.filePath)).size;
         const pre = ok('POST', '/media/presign', await call('POST', '/media/presign', { json: { filename: basename(input.filePath), contentType: 'video/mp4', size } })).body;
+        const isUrl = (u: unknown) => typeof u === 'string' && u.startsWith('https://');
+        if (!isUrl(pre.uploadUrl) || !isUrl(pre.publicUrl)) throw new PermanentError('bridge: media presign returned no usable URL');
         let put: Response;
         try {
           put = await deps.fetch(pre.uploadUrl, { method: 'PUT', headers: { 'content-type': 'video/mp4' }, body: await openAsBlob(input.filePath), signal: AbortSignal.any([signal, AbortSignal.timeout(UPLOAD_TIMEOUT_MS)]) });

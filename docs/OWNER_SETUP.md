@@ -12,11 +12,25 @@ Everything in one place. Each item switches on the part named beside it.
   and the bridge key.
 - YouTube (`shopgiftwell`) and TikTok (`merrymarts`) are connected at the bridge.
 - The logo is in `config/brand/logo.png`. Two reference videos set the style (D-28).
+- The pipeline is signed in to Higgsfield (2026-11-14, section 1).
 
-## 1. Sign the pipeline in to Higgsfield (2 minutes, needed before any video is made)
+## To do now
+
+1. Discard the test draft in the TikTok inbox and delete the private YouTube test video. Both came
+   from the test posts of 2026-11-13.
+2. Choose the video model: look at `out/samples/ugc-wan30.mp4` and `out/samples/ugc-seedance.mp4`.
+   Wan 3.0 is the default and costs 26.25 credits a clip. Seedance 2.0 fast costs 37.5. The frame
+   check of 2026-11-14 passed the Wan clip and was split on the Seedance clip, because of a
+   hood-like collar.
+3. Confirm `config/product-notes.json` (section 4).
+4. Set `HEALTHCHECK_URL` and keep the Discord webhook (section 4).
+5. Optional: connect Facebook and Instagram (section 2).
+
+## 1. Sign the pipeline in to Higgsfield (done 2026-11-14)
 
 Videos are generated on your Higgsfield subscription credits. The pipeline signs in the way an
-assistant app does, once:
+assistant app does. The token was refreshed on 2026-11-14. Run this again only if an alert says
+the sign-in expired:
 
 ```bash
 node src/cli.ts auth higgsfield
@@ -51,6 +65,8 @@ Both are switched off in `config/pipeline.config.ts`. To switch them on:
    further one is $6 a month, so this adds $12 a month.
 3. Set `enabled: true` for both platforms and run `node src/cli.ts doctor`. It prints one line per
    platform: `bridge instagram: ok (...)`.
+4. Set Instagram's `visibility` to `'public'` when you enable it. Instagram has no private mode,
+   and the config refuses `'private'` for an enabled Instagram account.
 
 Put the store link in the Instagram and TikTok bios. Links in their captions are not clickable.
 
@@ -78,8 +94,9 @@ Set `visibility: 'public'` per platform when you are happy with what you see.
 - **`config/product-notes.json`** says what the product looks like and visibly does. The current
   note says the power button glows red when the heat is on, as in your reference videos. Correct
   it if that is wrong.
-- **healthchecks.io** (`HEALTHCHECK_URL`, `HEALTHCHECK_DAILY_URL`): a free account with two checks
-  tells you when the server itself is down.
+- **healthchecks.io** (`HEALTHCHECK_URL`): the free plan allows 20 checks. One check tells you when
+  the server itself is down. Keep the Discord webhook (`ALERT_DISCORD_WEBHOOK`) in `.env` too, since
+  alerts go there.
 - **A server** (Phase 7): Ubuntu 24.04, 4 vCPU, 8 GB, your SSH key on it, about $10–17 a month.
 - **Backups** (Phase 7): Cloudflare R2 keys, `RESTIC_*` and `AWS_*` in `.env`.
 

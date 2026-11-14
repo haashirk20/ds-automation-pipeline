@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { PLATFORMS, type Brief, type Platform, type Script } from '../contracts.ts';
+import { AI_LINE, PLATFORMS, type Brief, type Platform, type Script, type UgcConcept } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { callJson } from '../llm/client.ts';
+import { log } from '../ops/log.ts';
 import { systemPrompt } from '../llm/prompts.ts';
 import { factNumbers, textProblems, urlsIn } from './claims.ts';
 
@@ -21,12 +22,25 @@ export interface PlatformCopy {
   caption?: string; // the model's own caption, before links and disclosures were added
 }
 
+// What the video is about, for the copy writer and the fallback. 'ad' is a scripted ad, 'ugc' a scene with one caption.
+export type CopyAbout = { style: 'ad' | 'ugc'; headline: string; summary: string };
+export const aboutScript = (script: Script): CopyAbout => ({
+  style: 'ad',
+  headline: script.hook.headline,
+  summary: `The video's script:\n${script.beats.map((b) => `${b.kind}: ${b.chunks.map((c) => c.say).join(' ')}`).join('\n')}`,
+});
+export const aboutConcept = (c: UgcConcept): CopyAbout => ({
+  style: 'ugc',
+  headline: c.caption,
+  summary: `On-screen caption: ${c.caption}\nSpoken line: ${c.line.trim() || 'none'}\nWhat happens:\n${c.shots.map((s) => `- ${s.action}`).join('\n')}`,
+});
+
 const Item = z.object({ title: z.string(), caption: z.string(), hashtags: z.array(z.string()) });
 const Schema = z.object(Object.fromEntries(PLATFORMS.map((p) => [p, Item])) as Record<Platform, typeof Item>);
 
 const LINKS_CLICKABLE: readonly Platform[] = ['youtube', 'facebook']; // captions on Instagram and TikTok do not link
 const TITLE_MAX = 90;
-const TEXT_MAX = 2200;
+const TEXT_MAX = 2200 - AI_LINE.length; // Instagram's limit, less the line the bridge adds to AI posts
 
 const clickable = (p: Platform) => LINKS_CLICKABLE.includes(p);
 const assemble = (brief: Brief, p: Platform, caption: string, hashtags: string[]) =>
@@ -37,9 +51,11 @@ export const deTag = (h: string): string =>
   h.replace(/^#/, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/([A-Za-z])(\d)/g, '$1 $2').replace(/(\d)([A-Za-z])/g, '$1 $2').toLowerCase();
 
 // Every deterministic rule for the copy of all platforms. Numbers must come from the brief's facts.
-export function copyProblems(brief: Brief, copy: Record<Platform, PlatformCopy>): string[] {
+// `years` may appear in a caption ("the coziest gift of 2026").
+export function copyProblems(brief: Brief, copy: Record<Platform, PlatformCopy>, years: number[] = []): string[] {
   const problems: string[] = [];
   const allowed = factNumbers(brief.facts.map((f) => f.text));
+  for (const y of years) allowed.add(String(y));
   for (const p of PLATFORMS) {
     const c = copy[p];
     const where = p;
@@ -59,18 +75,17 @@ export function copyProblems(brief: Brief, copy: Record<Platform, PlatformCopy>)
 const Verdicts = z.object({ verdicts: z.array(z.object({ platform: z.string(), supported: z.boolean(), reason: z.string() })) });
 
 // Deterministic copy from the brief and the script alone, for when the copy model cannot be used.
-export function fallbackCopy(brief: Brief, script: Script): Record<Platform, PlatformCopy> {
+export function fallbackCopy(brief: Brief, about: CopyAbout): Record<Platform, PlatformCopy> {
   const alnum = (s: string) => s.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join('');
   const tags = [...new Set([...brief.angles, brief.product.type, brief.shop.name, ...brief.product.title.split(/\s+/)].map(alnum).filter((t) => t.length > 2))].slice(0, 5).map((t) => `#${t}`);
-  const caption = `${script.hook.headline} ${brief.product.title}, ${brief.product.priceText}, at ${brief.shop.name}.`;
+  const caption = about.style === 'ugc' ? `${about.headline}\n${brief.product.title} from ${brief.shop.name}.` : `${about.headline} ${brief.product.title}, ${brief.product.priceText}, at ${brief.shop.name}.`;
   const out = {} as Record<Platform, PlatformCopy>;
-  for (const p of PLATFORMS) out[p] = { title: script.hook.headline.slice(0, TITLE_MAX), text: assemble(brief, p, caption, tags), hashtags: tags, caption };
+  for (const p of PLATFORMS) out[p] = { title: about.headline.slice(0, TITLE_MAX), text: assemble(brief, p, caption, tags), hashtags: tags, caption };
   return out;
 }
 
-export async function writeCopy(db: Db, config: Config, brief: Brief, script: Script, now: Date, slotId: string): Promise<Record<Platform, PlatformCopy>> {
-  const lines = script.beats.map((b) => `${b.kind}: ${b.chunks.map((c) => c.say).join(' ')}`).join('\n');
-  const user = `Write copy for these platforms: ${PLATFORMS.join(', ')}.\nThe video's script:\n${lines}`;
+export async function writeCopy(db: Db, config: Config, brief: Brief, about: CopyAbout, now: Date, slotId: string, years: number[] = []): Promise<Record<Platform, PlatformCopy>> {
+  const user = `${about.style === 'ugc' ? 'style: ugc\n' : ''}Write copy for these platforms: ${PLATFORMS.join(', ')}.\n${about.summary}`;
   const raw = await callJson(
     db,
     config,
@@ -83,22 +98,32 @@ export async function writeCopy(db: Db, config: Config, brief: Brief, script: Sc
     const c = raw[p];
     out[p] = { title: c.title.trim(), text: assemble(brief, p, c.caption, c.hashtags), hashtags: c.hashtags, caption: c.caption.trim() };
   }
-  const problems = copyProblems(brief, out);
-  if (!problems.length) {
-    // One judge call for all platforms: is every claim in the copy backed by a fact?
-    const judged = PLATFORMS.map((p) => `${p}: title: ${out[p].title} | caption: ${out[p].caption} | hashtags: ${out[p].hashtags.join(' ')}`).join('\n');
+  // A platform whose copy fails a check gets the fallback copy; the others keep the model's.
+  const bad = new Map<Platform, string[]>();
+  const reject = (p: Platform, why: string) => bad.set(p, [...(bad.get(p) ?? []), why]);
+  for (const why of copyProblems(brief, out, years)) reject(PLATFORMS.find((p) => why.startsWith(`${p}:`))!, why);
+  const rest = PLATFORMS.filter((p) => !bad.has(p));
+  if (rest.length) {
+    // One judge call for the platforms that passed the code checks: is every claim in the copy backed by a fact?
+    const judged = rest.map((p) => `${p}: title: ${out[p].title} | caption: ${out[p].caption} | hashtags: ${out[p].hashtags.join(' ')}`).join('\n');
     const j = await callJson(
       db,
       config,
-      { purpose: 'copycheck', model: config.llm.models.copy, system: systemPrompt('copycheck', brief), user: `Judge the copy of these ${PLATFORMS.length} platforms.\n${judged}`, schema: Verdicts, maxTokens: 1500, effort: 'low', slotId },
+      { purpose: 'copycheck', model: config.llm.models.copy, system: systemPrompt('copycheck', brief), user: `${about.style === 'ugc' ? 'style: ugc\n' : ''}What the video shows:\n${about.summary}\n\nJudge the copy of these ${rest.length} platforms.\n${judged}`, schema: Verdicts, maxTokens: 1500, effort: 'low', slotId },
       now,
     );
-    for (const p of PLATFORMS) {
+    for (const p of rest) {
       const vs = j.verdicts.filter((v) => v.platform === p);
-      if (vs.length !== 1) problems.push(`${p}: copy check gave ${vs.length} verdicts`);
-      else if (!vs[0].supported) problems.push(`${p}: unsupported claim in the copy: ${vs[0].reason}`);
+      if (vs.length !== 1) reject(p, `${p}: copy check gave ${vs.length} verdicts`);
+      else if (!vs[0].supported) reject(p, `${p}: unsupported claim in the copy: ${vs[0].reason}`);
     }
   }
-  if (problems.length) throw new CopyRejectedError(problems);
+  if (bad.size) {
+    const fb = fallbackCopy(brief, about);
+    for (const p of bad.keys()) out[p] = fb[p];
+    const left = copyProblems(brief, out, years);
+    if (left.length) throw new CopyRejectedError(left);
+    log.warn('copy fell back for some platforms', { slot: slotId, platforms: [...bad.keys()], problems: [...bad.values()].flat() });
+  }
   return out;
 }

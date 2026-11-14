@@ -1,56 +1,57 @@
 # Status
 
-Updated 2026-11-12.
+Updated 2026-11-14.
 
-| Phase | State | Exit criterion met |
-|---|---|---|
-| 0 Research and plan | Done, reviewed by Opus, revised | Yes |
-| 1 Scaffold | Done, reviewed by Opus, fixes applied | Yes: `docker compose up` runs healthy as a non-root user |
-| 2 Ingest | Done, reviewed by Opus, fixes applied | Yes: brief built from the live store |
-| 3 Creative | Done, reviewed by Opus, fixes applied | Yes: three sample ads rendered and sent to the owner |
-| 4 Tiers | In progress: router and ledger. Real providers wait for keys | |
-| 5 Publishing | Waits for platform credentials | |
-| 6 Scheduler and ops | Loop exists. Summary, housekeeping and backups to do | |
-| 7 Deploy | | |
-| 8 Feedback | | |
+| Phase | State |
+|---|---|
+| 0 Research and plan | Done |
+| 1 Scaffold | Done |
+| 2 Ingest | Done |
+| 3 Creative | Done |
+| 4 Tiers | Done in `ugc` mode, with Higgsfield as tier 2. There is no tier 1 provider |
+| 5 Publishing | YouTube and TikTok live-tested privately through the bridge. Facebook and Instagram are not connected |
+| 6 Scheduler and ops | The loop and recovery are done. The daily summary, housekeeping, backups and the second dead-man's switch are not built |
+| 7 Deploy | Not started |
+| 8 Feedback | Not started |
 
-## Decisions from the owner (2026-11-12)
+The tests pass (245 of 245) and the type check is clean. An Opus architect review and an Opus
+security review of the bridge, MCP and `ugc` code were done on 2026-11-14 and their fixes applied.
 
-- The fourth platform is Instagram Reels. LinkedIn is dropped.
-- TikTok goes through a hosted bridge.
-- The store is now called Giftwell and has three employees. Shopify still reports "Merry Marts", so `brand.name` in config sets the name ads use.
-- Web pages are read with the Playwright CLI.
-- API keys arrive on 2026-11-13.
+## Verified live
 
-## What has been seen working
-
-- **The whole chain with model calls stubbed.** Ingest from the live store, two slots planned and produced (eight renders in 2 min 36 s, all passing QA), slot 1 dry-published to four platforms with a title and caption each. The same run passes inside the Docker container.
-- **Three ad designs.** Dark kinetic, light cosy and festive gift guide. All sample renders pass the QA gate: 15 s, 1080×1920, 30 fps, −14.2 LUFS, no black or frozen frames.
-- **Claim checks.** The three sample scripts pass. Rejected in tests: a wrong price on screen or spoken, number words with no supporting fact, discount and urgency wording, "bestseller" with a zero-width character or a Cyrillic look-alike letter, `#50OFF`, "Over 10,000 sold" in a caption.
-- **Docker.** The image (4.1 GB) carries Chrome, Python and the voice model and renders under `cap_drop: ALL`, `no-new-privileges`, a memory limit and a non-root user. `docker compose up` reaches healthy.
-- **Scheduler and publishing state machine.** Atomic claims, fencing, crash recovery, lateness and retries are covered by tests. Rendering runs in a child process and publishing continues meanwhile.
-- **Tests.** 122 pass. Type check clean.
+- **Bridge posts, 2026-11-13.** A private YouTube video and a TikTok inbox draft were posted, and a
+  second run resumed both from the stored handle without a second post (D-29).
+- **Model calls, 2026-11-14.** The concept writer, the claim judge, the frame check, and the copy
+  writer and judge ran against the live API. About $0.31 was spent in all.
+- **Frame check calibration, 2026-11-14.** Five runs each of five labelled clips gave the expected
+  verdict 25 of 25 times (D-28).
+- **Docker.** The image was rebuilt with the pinned emoji font.
+- **Higgsfield sign-in.** `doctor` reported a signed-in token on 2026-11-14.
 
 ## Not verified
 
-- **Anything that calls a live model.** There is no Anthropic API key here. Scripts, hooks, claim judging and copy have only run against fixtures and a fake client.
-- **Audio by ear.** Speech and music are checked by measurement only.
-- **Cancelling a real render on timeout.** Tested with a plain process, not with Chrome.
-- **Platform facts** reported by research agents. `PLATFORMS.md` marks them. Instagram's were read first-hand.
-- **Safe zones.** Estimates until a real post on each platform is looked at.
+- A signed-in Higgsfield video job from the pipeline's own client.
+- A full slot end to end with a real clip.
+- Discord alert delivery.
+- Facebook and Instagram posts, and a public TikTok post.
+- The `umask` and database file-mode change has no test.
 
-## Planned and not built
+## Known gaps
 
-- Vision QA of rendered frames, automatic photo tagging, and the check of an AI clip against its source photo. All three need image input to the model client and a key to verify against.
-- Shopify Admin API mode. Needs credentials to verify against.
-- Real clip providers and all four publishers. Need keys.
+- The ledger records the configured price per clip, not the live quote (D-30, architect finding 8).
+- The frame check is split on the Seedance 2.0 fast sample because of a hood-like collar. It passes
+  the Wan 3.0 sample.
+- A fresh install has no stored clips for the first 14 days (`ugc.reuseAfterDays`), so a slot that
+  cannot make a new clip fails or waits.
 
-## Blockers
+## Owner
 
-- **No API keys yet**: Anthropic, platform apps, bridge, clip providers.
-- **The public product feed rate-limits** (HTTP 429 seen many times). Retries cope. Shopify app credentials would remove it.
-- **The Higgsfield MCP server needs signing in again** (`/mcp`). It is only used at build time.
+`docs/OWNER_SETUP.md` lists what the owner must do.
 
-## Needed from the owner
+## Next
 
-One list, with steps: `OWNER_SETUP.md`.
+1. Phase 6: the daily summary, housekeeping that keeps `data/clips`, backups to Cloudflare R2
+   through a second compose service, the second dead-man's switch, and a compressed-time run in
+   `DRY_RUN`.
+2. Phase 7: deploy, then a 48-hour unattended run.
+3. Phase 8: the feedback loop, using the bridge's analytics (D-29).

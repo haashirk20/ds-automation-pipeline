@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { listAccounts } from '../src/publish/bridge.ts';
 import { makePublishers } from '../src/publish/registry.ts';
 import { AmbiguousError, PermanentError, RetryableError } from '../src/publish/types.ts';
+import { AI_LINE } from '../src/contracts.ts';
 import { config } from './helpers.ts';
 
 const KEY = 'zk_live_supersecretkey123';
@@ -13,7 +15,7 @@ const file = join(mkdtempSync(join(tmpdir(), 'bridge-')), 'v.mp4');
 writeFileSync(file, 'video');
 process.env.BRIDGE_API_KEY = KEY;
 
-type Req = { method: string; path: string; headers: Record<string, string>; body: any };
+type Req = { method: string; path: string; headers: Record<string, string>; body: any; redirect?: string };
 const ACCOUNTS = { accounts: [
   { _id: 'a-yt', platform: 'youtube', username: 'ShopGiftwell', isActive: true },
   { _id: 'a-tt', platform: 'tiktok', username: 'merrymarts', isActive: true },
@@ -24,7 +26,7 @@ const ACCOUNTS = { accounts: [
 const INFO = { privacyLevels: [{ value: 'SELF_ONLY' }, { value: 'PUBLIC_TO_EVERYONE' }], postingLimits: { interactionSettings: { allow_comment: { enabled: true }, allow_duet: { enabled: false }, allow_stitch: { enabled: true } } } };
 const post = (platform: string, status: string, extra = {}) => ({ post: { _id: 'post1', status, platforms: [{ platform, status, platformPostUrl: 'https://p/1', ...extra }] } });
 
-function rig(handlers: { post?: (r: Req, n: number) => Response; get?: (r: Req, n: number) => Response; info?: Response } = {}) {
+function rig(handlers: { presign?: unknown; post?: (r: Req, n: number) => Response; get?: (r: Req, n: number) => Response; info?: Response } = {}) {
   const reqs: Req[] = [];
   const events: string[] = [];
   let nPost = 0, nGet = 0;
@@ -32,12 +34,12 @@ function rig(handlers: { post?: (r: Req, n: number) => Response; get?: (r: Req, 
     const u = String(url);
     const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>));
     const path = u.startsWith('https://zernio.com/api/v1') ? u.slice('https://zernio.com/api/v1'.length) : u;
-    const r: Req = { method: init.method ?? 'GET', path, headers, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body };
+    const r: Req = { method: init.method ?? 'GET', path, headers, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body, redirect: init.redirect };
     reqs.push(r);
     events.push(`${r.method} ${path.split('?')[0]}`);
     if (path === '/accounts') return Response.json(ACCOUNTS);
     if (path.includes('/tiktok/creator-info')) return handlers.info ?? Response.json(INFO);
-    if (path === '/media/presign') return Response.json({ uploadUrl: 'https://storage.example/up?sig=1', publicUrl: 'https://cdn.example/v.mp4', key: 'k', expiresIn: 3600 });
+    if (path === '/media/presign') return Response.json(handlers.presign ?? { uploadUrl: 'https://storage.example/up?sig=1', publicUrl: 'https://cdn.example/v.mp4', key: 'k', expiresIn: 3600 });
     if (u.startsWith('https://storage.example/')) return new Response('', { status: 200 });
     if (path === '/posts') return handlers.post ? handlers.post(r, nPost++) : Response.json(post(platformOf(r), 'published'), { status: 201 });
     if (path.startsWith('/posts/')) return handlers.get ? handlers.get(r, nGet++) : Response.json(post('youtube', 'published'));
@@ -77,7 +79,7 @@ test('fresh publish per platform: request order, key, body, handle saved before 
     assert.equal(p.headers.authorization, `Bearer ${KEY}`);
     assert.deepEqual(p.body.mediaItems, [{ type: 'video', url: 'https://cdn.example/v.mp4' }]);
     assert.equal(p.body.publishNow, true);
-    assert.equal(p.body.content, 'cap');
+    assert.equal(p.body.content, name === 'facebook' || name === 'instagram' ? 'cap' + AI_LINE : 'cap');
     check(p.body);
     const put = h.reqs.find((x) => x.method === 'PUT')!;
     assert.equal(put.headers.authorization, undefined);
@@ -190,4 +192,53 @@ test('tiktok private is an inbox draft, also for a business account that is offe
   assert.equal(s.draft, true);
   assert.equal(s.privacy_level, 'PUBLIC_TO_EVERYONE');
   assert.equal(s.commercialContentType, undefined);
+});
+
+test('the AI line is added to Facebook and Instagram captions only when aiDisclosure is true', async () => {
+  for (const name of ['facebook', 'instagram', 'youtube', 'tiktok']) {
+    for (const ai of [true, false]) {
+      const h = rig({ post: () => Response.json(post(name, 'published'), { status: 201 }) });
+      await run(name, h, { aiDisclosure: ai, visibility: 'public' }).done;
+      const content = h.reqs.find((x) => x.path === '/posts')!.body.content;
+      assert.equal(content, ai && (name === 'facebook' || name === 'instagram') ? 'cap' + AI_LINE : 'cap', `${name} ${ai}`);
+    }
+  }
+});
+
+test('requests to the bridge refuse redirects', async () => {
+  const h = rig();
+  await run('youtube', h).done;
+  for (const r of h.reqs.filter((x) => x.path.startsWith('/'))) assert.equal(r.redirect, 'error', r.path);
+});
+
+test('listAccounts refuses redirects while it carries the key', async () => {
+  const h = rig();
+  await listAccounts(h.f, 'k', new AbortController().signal);
+  assert.equal(h.reqs.find((x) => x.path === '/accounts')!.redirect, 'error');
+});
+
+test('a presign answer without a usable https URL is permanent and saves no handle', async () => {
+  for (const presign of [{ uploadUrl: 'https://storage.example/up' }, { uploadUrl: 'http://storage.example/up', publicUrl: 'https://cdn.example/v.mp4' }]) {
+    const h = rig({ presign });
+    const r = run('youtube', h);
+    await assert.rejects(r.done, (e) => e instanceof PermanentError && /no usable URL/.test(e.message));
+    assert.equal(r.saved.length, 0);
+    assert.ok(!h.events.some((e) => e.startsWith('PUT')));
+  }
+});
+
+test('a post that stays publishing past the poll limit is retryable and its id is saved', async () => {
+  const waits: number[] = [];
+  const h = rig({ post: () => Response.json(post('youtube', 'publishing'), { status: 201 }), get: () => Response.json(post('youtube', 'publishing')) });
+  const r = run('youtube', h, {}, async (ms: number) => { waits.push(ms); });
+  await assert.rejects(r.done, (e) => e instanceof RetryableError && /still publishing/.test(e.message));
+  assert.equal(waits.length, 9);
+  assert.equal((r.saved.at(-1) as any).postId, 'post1');
+});
+
+test('reading a stored post: 404 is ambiguous, 503 retryable, cancelled permanent', async () => {
+  const handle = { mediaUrl: 'm', at: NOW.toISOString(), postId: 'post1' };
+  await assert.rejects(run('youtube', rig({ get: () => Response.json({ error: 'nope' }, { status: 404 }) }), { handle }).done, (e) => e instanceof AmbiguousError && /post1.*cannot be read: HTTP 404/.test(e.message));
+  await assert.rejects(run('youtube', rig({ get: () => Response.json({}, { status: 503 }) }), { handle }).done, RetryableError);
+  await assert.rejects(run('youtube', rig({ get: () => Response.json(post('youtube', 'cancelled')) }), { handle }).done, PermanentError);
 });

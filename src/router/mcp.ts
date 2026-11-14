@@ -55,7 +55,7 @@ export async function openMcp(o: { url: string; token: string; fetch?: typeof fe
     if (session) { headers['mcp-session-id'] = session; headers['mcp-protocol-version'] = PROTOCOL; }
     // 90 s per request (the longest call, jobs_wait, holds for 15 s), so a dead connection cannot hold a slot until its own timeout.
     const limit = AbortSignal.timeout(90_000);
-    const res = await f(o.url, { method: 'POST', headers, body: JSON.stringify(body), signal: o.signal ? AbortSignal.any([o.signal, limit]) : limit });
+    const res = await f(o.url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: o.signal ? AbortSignal.any([o.signal, limit]) : limit });
     if (res.status === 401) { await res.body?.cancel().catch(() => {}); throw new McpAuthError('MCP server answered 401'); }
     if (!res.ok) { await res.body?.cancel().catch(() => {}); throw new Error(`MCP server answered HTTP ${res.status}`); }
     const sid = res.headers.get('mcp-session-id');

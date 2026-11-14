@@ -1,7 +1,7 @@
 import type { Db } from '../db/index.ts';
 import { env, type Config } from '../config/index.ts';
 import { alert } from '../ops/alert.ts';
-import { log } from '../ops/log.ts';
+import { log, scrub } from '../ops/log.ts';
 import { Edl } from '../contracts.ts';
 import { AmbiguousError, ClaimLostError, PermanentError, RetryableError, type Publisher } from './types.ts';
 
@@ -35,7 +35,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     return r.changes === 1;
   };
   const fail = async (p: Row, token: string, state: string, error: string) => {
-    if (!write(p, token, state, { error })) return;
+    if (!write(p, token, state, { error: scrub(error) })) return;
     await alert(db, 'publish_' + state, `${p.slot_id}/${p.platform}`, `${p.slot_id} ${p.platform} ${state}: ${error}`, now);
   };
 
@@ -44,6 +44,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     const ms = config.publish.timeoutMinutes * 60000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let result: { postId: string; postUrl: string | null };
+    let hasHandle = !!p.handle_json; // a stored handle means a post request may have been sent
     try {
       const pub = publishers[p.platform];
       if (!pub) throw new PermanentError(`no publisher for ${p.platform}`);
@@ -62,6 +63,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
           handle: p.handle_json ? JSON.parse(p.handle_json) : null,
           saveHandle: (x) => {
             if (!write(p, token, 'uploading', { handle_json: JSON.stringify(x) })) throw new ClaimLostError('claim lost');
+            hasHandle = true;
           },
           signal: AbortSignal.timeout(ms),
         }),
@@ -72,10 +74,10 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
       if (e instanceof ClaimLostError) return;
       if (e instanceof RetryableError) {
         const mins = config.publish.retryMinutes[p.attempt - 1];
-        if (mins === undefined) return fail(p, token, 'skipped', `retries exhausted: ${msg}`);
-        write(p, token, 'pending', { next_attempt_at: new Date(now.getTime() + mins * 60000).toISOString(), error: msg, claimed_at: null });
+        if (mins === undefined) return hasHandle ? fail(p, token, 'needs_attention', `retries exhausted, a post request may have been sent: ${msg}`) : fail(p, token, 'skipped', `retries exhausted: ${msg}`);
+        write(p, token, 'pending', { next_attempt_at: new Date(now.getTime() + mins * 60000).toISOString(), error: scrub(msg), claimed_at: null });
       } else if (e instanceof PermanentError) {
-        await fail(p, token, 'skipped', msg);
+        await fail(p, token, hasHandle ? 'needs_attention' : 'skipped', hasHandle ? `a post request may have been sent: ${msg}` : msg);
       } else {
         // AmbiguousError or unknown: never retried automatically.
         await fail(p, token, 'needs_attention', (e instanceof AmbiguousError ? '' : 'unexpected: ') + msg);
@@ -114,12 +116,15 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
   }
 
   // Skip overdue rows and rows of failed slots, one alert per slot.
-  const doomed = db.prepare(`SELECT p.slot_id, p.platform, CASE WHEN s.status = 'failed' THEN 'slot failed' ELSE 'too late' END AS why
+  const doomed = db.prepare(`SELECT p.slot_id, p.platform, p.handle_json, CASE WHEN s.status = 'failed' THEN 'slot failed' ELSE 'too late' END AS why
     FROM publications p LEFT JOIN slots s ON s.id = p.slot_id
-    WHERE p.state = 'pending' AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; why: string }[];
+    WHERE p.state = 'pending' AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; handle_json: string | null; why: string }[];
   for (const d of doomed) {
-    db.prepare("UPDATE publications SET state = 'skipped', error = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(d.why, d.slot_id, d.platform);
-    await alert(db, 'publish_skipped', d.slot_id, `${d.slot_id} skipped: ${d.why}`, now);
+    const state = d.handle_json ? 'needs_attention' : 'skipped';
+    const why = d.handle_json ? `${d.why}, a post request may have been sent` : d.why;
+    if (db.prepare("UPDATE publications SET state = ?, error = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(state, why, d.slot_id, d.platform).changes !== 1) continue;
+    if (d.handle_json) await alert(db, 'publish_needs_attention', `${d.slot_id}/${d.platform}`, `${d.slot_id} ${d.platform} needs_attention: ${why}`, now);
+    else await alert(db, 'publish_skipped', d.slot_id, `${d.slot_id} skipped: ${d.why}`, now);
   }
 
   const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];

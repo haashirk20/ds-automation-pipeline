@@ -37,6 +37,7 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-28 | Creative format | AI-generated scene in a user-generated style, one caption |
 | D-29 | Publishing layer | One hosted bridge for all four platforms |
 | D-30 | Video generation | Higgsfield's MCP server, on the owner's subscription credits |
+| D-31 | Retry rules for a slot | Outages wait without using an attempt; other errors after a paid clip retry once |
 
 ---
 
@@ -414,12 +415,24 @@ caption and one spoken line ("It's freezing in here").
 - What the product looks like and visibly does comes from `config/product-notes.json`, written by
   the owner, because Shopify's data does not describe it. The current note says the power button
   glows red when the heat is on, which is what the owner's own reference videos show.
-- A model looks at six frames of every new clip against a product photo before it can be posted
-  (`src/qa/vision.ts`): product present and matching, no stray or garbled text, brand spelled
-  correctly, no obvious generation faults. The verdict is computed in code from its answers.
+- A model looks at eight frames of every new clip (720x1280) before it can be posted
+  (`src/qa/vision.ts`, `prompts/vision.md`). It compares them with the product's reference photos
+  and the owner's product note. It lists every piece of writing it sees by kind. An overlay fails.
+  Prominent writing fails unless it is the shop's name. Background writing never fails. The clip
+  also fails when the product is not visible, when it does not match the note and the references,
+  when the shop name is misspelled, and on a generation fault. A feature or behaviour that
+  contradicts the note is a mismatch, for example a button that glows the wrong colour. The
+  verdict is computed in code from the model's answers.
 - When no new clip can be made (cap reached, credits low, sign-in expired, two rejected clips),
-  the slot reuses a stored clip that has not been posted for `ugc.reuseAfterDays` days. With none
-  available the slot fails and alerts. It does not fall back to a photo ad.
+  the slot reuses a stored clip that has not been posted for `ugc.reuseAfterDays` days. The stored
+  concept is checked again against the current brief first, and the reuse sends a `degraded`
+  alert. With none available the slot fails and alerts. It does not fall back to a photo ad.
+
+**Frame check calibration (2026-11-14).** On Haiku 5.5 at low effort, five runs each of a labelled
+set of five clips gave the expected verdict 25 of 25 times. Two clips made by the owner and one
+Wan 3.0 clip passed. A Kling clip with a blue button and a Seedance Mini clip with a misspelled box
+lid failed. One call costs about $0.0017. The frame check is not proof for other clips: the set is
+small.
 
 **Not checked.** The spoken line is not transcribed at run time. In four test clips the line came
 out word for word, so this is left out until a clip gets it wrong.
@@ -445,12 +458,38 @@ which is what the never-double-post rule needs.
 four accounts cost $12 a month. Posts are unlimited.
 
 **Risk.** One outside service now carries every post. If it is down, publications retry for
-`publish.maxLatenessMinutes` and are then skipped with an alert. A post the bridge reports as
+`publish.maxLatenessMinutes` and are then skipped with an alert, or marked `needs_attention` when a post request may already have been sent. A post the bridge reports as
 failed is treated as final and not retried, on purpose: a missed post is acceptable and a double
-post is not.
+post is not. A permanent error after a handle is stored ends `needs_attention`, not `skipped`,
+because a post request may have been sent. The account list request refuses redirects, like every
+other request that carries the key.
 
-**Status.** Built and tested against fakes. `GET /accounts` checked live. No real post yet.
-Facebook and Instagram are disabled in the config until the owner connects them at the bridge.
+**Status.** Live private test posts on YouTube and a TikTok inbox draft were made on 2026-11-13.
+Running the test again resumed both from the stored handle and created no second post. Facebook and
+Instagram are disabled in the config until the owner connects them at the bridge.
+
+**Facts read from the bridge's documentation on 2026-11-14.**
+- A retry with the same idempotency key within 24 hours returns the original post, whatever the
+  body.
+- `idempotency_conflict` (HTTP 409 with `Retry-After`) means the first request with that key is
+  still being processed.
+- A post with the same content to the same account within 24 hours is refused with 409 and
+  `details.existingPostId`.
+- The presign `uploadUrl` is valid for one hour. The `publicUrl` (media.zernio.com) is valid for
+  seven days.
+- The bridge offers post analytics: `GET /v1/analytics`, by its own post id or the platform's id.
+  YouTube and TikTok give views, likes, comments and shares. It is included in the per-account
+  price. This is the data source for Phase 8.
+
+**Rules the code follows.**
+- A publication with a stored handle is never marked `skipped`. When its retries run out, or it is
+  too late or its slot failed, it becomes `needs_attention`, because a post request may have been
+  sent.
+- Polling a post stops after 90 seconds (nine polls, ten seconds apart). The next attempt reads the
+  stored post id and carries on from there.
+- A post the bridge cannot be read back for, while we hold its id, is `needs_attention`, never a
+  plain failure. A cancelled post is final.
+- Requests to the bridge refuse redirects.
 
 **Revisit when.** The bridge changes price or terms, loses a platform, or reports failures that
 turn out to have posted.
@@ -471,6 +510,11 @@ credits. Higgsfield's terms allow it: section 11.12, "If you use Developer Acces
 Service to any third-party artificial intelligence agent, automation platform, or orchestration
 tool (including via MCP), you are solely responsible for: (i) all actions taken by such agent or
 tool using your credentials" (https://higgsfield.ai/terms, last updated 2026-10-23).
+
+**Limits.** One fetch polls for at most 25 minutes. A job that has given no file 2 hours after it was
+created is marked `failed` and the slot uses a stored clip (D-31). The produce timeout is 90
+minutes. The vision check also fails any writing within edit distance 1 or 2 of the shop's name, of
+any kind, because the model may read a near-miss as the name.
 
 **Cost.** The Ultra plan grants 3,000 credits a month, and unused credits are removed at renewal.
 Quotes for one 15-second 9:16 clip with sound, read from the server on 2026-11-13:
@@ -497,6 +541,14 @@ credit costs on the plan ($65 for 3,000). Before each job the provider reads the
 the server's quote. A quote above `maxCredits` stops the job, and so does a job that would leave
 fewer than `keepCredits`. `keepCredits` is set above Higgsfield's auto-refill threshold (300), so
 the pipeline cannot cause an automatic purchase if the owner turns auto-refill on.
+- Before the paid call, the provider asks for the quote again on the exact request, reference
+  images included, and applies `maxCredits` and `keepCredits` to that quote.
+- A quote answer that holds a started job, or no positive number, stops clips (fail closed).
+- A fetch that fails for any reason other than the job having ended keeps the ledger row
+  `submitted`. The slot waits and resumes the same job. Only a job the server reports as ended is
+  marked `failed`.
+- Known gap: the ledger records the configured `usdPerClip`, not the live quote. The architect's
+  finding 8; not fixed.
 
 **Risks.**
 - `generate_video` has no idempotency key. A call whose outcome is unknown is never repeated, so a
@@ -507,21 +559,54 @@ the pipeline cannot cause an automatic purchase if the owner turns auto-refill o
   then.
 
 **Status.** Built and tested against fakes. Result shapes were observed through another client of
-the same server. No signed-in call from this client yet: the owner has to run the sign-in.
+the same server. No signed-in video job from this client has run yet. The token was refreshed on
+2026-11-14.
 
 **Revisit when.** Higgsfield changes the plan's credits, the quotes, or the MCP tools, or the
 subscription's credits become reachable through the REST API.
+
+## D-31 Retry rules for a slot (2026-11-14)
+
+**Chosen.** `produceSlot` (`src/render/produce.ts`) and `tick` (`src/scheduler/loop.ts`) treat
+errors in three ways.
+- **A passing outage.** The model rate limit or a 5xx (`RetryableLlmError`), and a paid clip that
+  cannot be fetched yet (`ClipPendingError`), put the slot back to `planned` and give back the
+  attempt. A job is waited for at most 2 hours after it was created (`PENDING_JOB_MAX_MS`); then its
+  ledger row is `failed` and the slot uses a stored clip. A fetch polls for at most 25 minutes. A
+  concept-writer outage gives the attempt back only once per slot; a repeat uses it (the slot fails
+  when the attempts are used). One `degraded` alert is sent. An outage of the concept writer with no stored clip to
+  reuse, and of the frame check, take this path. The same holds for `NoBriefError`, which sends an
+  `ingest_failed` alert instead.
+- **Any other error after a clip was paid for** (a ledger row `submitted` or `succeeded`). The slot
+  goes back to `planned` while `attempt < render.maxAttempts` (2), and uses the attempt. The retry
+  finds the paid clip in the ledger and the concept in `master_json`, so it pays nothing twice.
+- **Any other error with no paid clip,** or once the attempts are used: the slot is `failed` and
+  `produce_failed` alerts.
+
+The tick waits 10 minutes, measured from the end of the attempt, before it starts a planned slot that has an error. The "too late" rule
+ends the wait: a planned slot with no pending publication scheduled within
+`publish.maxLatenessMinutes` fails as "too late". A `producing` slot not touched for
+`render.produceTimeoutMinutes` (90, at least `maxJobsPerSlot * 40 + 10` in `ugc` mode) goes back to `planned` while attempts remain.
+
+**Alternatives.** Failing the slot on any error: it loses the paid clip. Giving the attempt back
+for every error: a deterministic error would retry every 10 minutes for hours and use up the model
+budget.
+
+**Revisit when.** A deterministic error is seen to burn the one retry, or an outage lasts past the
+lateness window often enough that slots are lost.
 
 ## Paid services
 
 | Service | Why open source cannot do it | Monthly cost | Cap |
 |---|---|---|---|
-| Anthropic API | Ad copy quality and vision QA | ~$4 | $10 |
-| VM | The pipeline has to run somewhere | $0–17 | — |
-| Hosted open-weight video (fal.ai) | A GPU is needed; renting one ourselves is not cheaper (D-09) | ~$5 | $15 |
-| Higgsfield API | Premium models are closed | ~$4 | $25 |
-| Bridge | TikTok will not audit an internal tool (D-02) | $0–24 | — |
-| Remotion | Free at this company size. Not open source (D-03) | $0, or $100 above 3 employees | — |
+| Higgsfield subscription (video credits, D-30) | Video generation needs closed models | $65 (Ultra plan, 3,000 credits) | Flat price. `tiers.capsUsd.t2` of $52 limits use to about 2,400 credits |
+| Anthropic API | Ad copy quality and vision QA | About $2 | `llm.monthlyCapUsd`, $10 |
+| Bridge, Zernio (D-29) | TikTok will not audit an internal tool (D-02), and one publisher replaces four | $0 with YouTube and TikTok, $12 with Facebook and Instagram added | None. Posts are unlimited |
+| VM | The pipeline has to run somewhere | $10-17 | None |
+| Remotion | Free at this company size. Not open source (D-03) | $0, or $100 above 3 employees | None |
+
+Not used: fal.ai (no provider exists for tier 1), the Higgsfield REST API (separate prepaid balance,
+D-30) and direct platform apps (D-29).
 
 ## Open questions for the owner
 

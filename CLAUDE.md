@@ -28,7 +28,9 @@ docker compose up -d                       # the whole deployment
   stored handle must mean nothing was posted. If the state is ambiguous the publication becomes
   `needs_attention`. It is never re-posted blindly. Every write after a claim carries the claim
   time as a fencing token, and every publisher passes `signal` to its requests.
-- **`DRY_RUN=1` skips the publish call and nothing else.**
+- **`DRY_RUN=1` skips the publish call and nothing else.** A dry run still calls the models and, in
+  'ugc' mode, still generates paid clips. To spend nothing, also set `LLM_STUB=1` and use a config
+  whose tier 2 provider is `fake` with `CLIP_STUB_FILE` set.
 - **Ad claims come from the Shopify brief only.** Tags are not claims. No discounts, reviews or
   statistics that the store data does not contain.
 - **Every paid job checks price and remaining budget first** and writes a ledger row.

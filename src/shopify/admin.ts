@@ -5,7 +5,7 @@ const API_VERSION = '2026-10';
 
 // Never put a response body or credentials in an error: the body may echo them.
 async function post(url: string, init: RequestInit, f: Fetch, what: string): Promise<unknown> {
-  const res = await f(url, { ...init, method: 'POST', signal: AbortSignal.timeout(20_000) });
+  const res = await f(url, { ...init, method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`${what} failed: HTTP ${res.status}`);
   return res.json();
 }

@@ -14,9 +14,10 @@ import { childSpawn, makeProducer, run } from './scheduler/loop.ts';
 import { localDateOf } from './scheduler/time.ts';
 
 const USAGE = 'usage: cli.ts [--now ISO] run [--once] | plan [--date YYYY-MM-DD] | publish | produce --slot ID | ingest [--print] | samples [--clip FILE --caption TEXT [--name NAME]] | doctor | health | auth higgsfield';
-const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY'];
+const ENV_NAMES = ['PIPELINE_CONFIG', 'DRY_RUN', 'DATA_DIR', 'OUT_DIR', 'ALERT_DISCORD_WEBHOOK', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'HEALTHCHECK_URL', 'SHOPIFY_SHOP', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'BRIDGE_API_KEY', 'ANTHROPIC_API_KEY'];
 
 async function main(): Promise<number> {
+  process.umask(0o077); // the database and its journal files hold OAuth tokens
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: { now: { type: 'string' }, once: { type: 'boolean' }, date: { type: 'string' }, print: { type: 'boolean' }, slot: { type: 'string' }, clip: { type: 'string' }, caption: { type: 'string' }, name: { type: 'string' } },
@@ -26,6 +27,7 @@ async function main(): Promise<number> {
     console.error(USAGE);
     return 2;
   }
+  if (existsSync('.env')) process.loadEnvFile('.env');
   // The clock is only read here; below this layer, time arrives as `now`.
   const override = values.now ?? process.env.PIPELINE_NOW;
   const offsetMs = override ? Date.parse(override) - Date.now() : 0;
@@ -33,9 +35,13 @@ async function main(): Promise<number> {
     console.error('invalid --now');
     return 2;
   }
+  // A false clock would defeat the publisher's 23-hour idempotency-key check.
+  if (override && (cmd === 'run' || cmd === 'publish') && !env.dryRun()) {
+    console.error(`--now and PIPELINE_NOW are refused for '${cmd}' unless DRY_RUN=1`);
+    return 2;
+  }
   const clock = () => new Date(Date.now() + offsetMs);
 
-  if (existsSync('.env')) process.loadEnvFile('.env');
   if (cmd === 'health') {
     const db = openDb(env.dataDir());
     const hb = kvGet(db, 'heartbeat');
@@ -77,7 +83,7 @@ async function main(): Promise<number> {
     // SIGTERM from the parent: cancel the render (and its Chrome) and exit non-zero; the slot stays 'producing'.
     const stop = new AbortController();
     process.once('SIGTERM', () => stop.abort());
-    await produceSlot(db, config, values.slot, clock(), { signal: stop.signal });
+    await produceSlot(db, config, values.slot, clock(), { signal: stop.signal, clock });
   } else if (cmd === 'ingest') {
     await runIngest(db, config, clock(), { print: !!values.print });
     kvSet(db, 'ingest_at', clock().toISOString());

@@ -9,7 +9,10 @@ import { makeProducer } from '../src/scheduler/loop.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
 // Facebook and Instagram are off in the shipped config; the suite exercises all four.
-export const config = parseConfig({ ...raw, platforms: { ...raw.platforms, facebook: { ...raw.platforms.facebook, enabled: true }, instagram: { ...raw.platforms.instagram, enabled: true } } });
+export const config = parseConfig({ ...raw, platforms: { ...raw.platforms, facebook: { ...raw.platforms.facebook, enabled: true }, instagram: { ...raw.platforms.instagram, enabled: true, visibility: 'public' } } });
+
+// The photo-ad path: the shipped default is 'ugc'.
+export const adConfig = parseConfig({ ...config, creative: { ...config.creative, mode: 'ad' }, tiers: { ...config.tiers, mix: { t0: 1, t1: 0, t2: 0 }, clipSeconds: 4 } });
 
 // Fresh temp dirs and DB per call; no network alerts.
 export function fresh() {
