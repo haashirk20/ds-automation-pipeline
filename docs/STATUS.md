@@ -38,8 +38,7 @@ security review of the bridge, MCP and `ugc` code were done on 2026-11-14 and th
 ## Not verified
 
 - Phase 6: one real day, and the backup service's first nightly backup of the real database to R2.
-- A signed-in Higgsfield video job from the pipeline's own client.
-- A full slot end to end with a real clip.
+- A full slot posted end to end with a real clip. The 2026-11-14 run reached `ready` and was not posted.
 - Discord alert delivery.
 - Facebook and Instagram posts, and a public TikTok post.
 - The `umask` and database file-mode change has no test.
