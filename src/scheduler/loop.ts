@@ -9,6 +9,7 @@ import { snapshotDaily } from '../ops/snapshot.ts';
 import { summaryDaily } from '../ops/summary.ts';
 import { publishDue } from '../publish/index.ts';
 import type { Publisher } from '../publish/types.ts';
+import { holdsTick } from './holds.ts';
 import { planDay } from './planner.ts';
 import { addDays, localDateOf, localHHMM } from './time.ts';
 
@@ -67,7 +68,7 @@ export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?:
 // A slot the producer put back to 'planned' with an error waits this long before it starts again.
 const RETRY_GAP_MINUTES = 10;
 
-const hasSlots = (db: Db, date: string) => !!db.prepare('SELECT 1 FROM slots WHERE local_date = ?').get(date);
+const hasSlots = (db: Db, date: string) => !!db.prepare("SELECT 1 FROM slots WHERE local_date = ? AND kind = 'planned'").get(date);
 
 export async function tick(deps: Deps, now: Date): Promise<void> {
   const { db, config } = deps;
@@ -89,7 +90,7 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   const lateBefore = new Date(now.getTime() - config.publish.maxLatenessMinutes * 60000).toISOString();
   const retryAfter = new Date(now.getTime() - RETRY_GAP_MINUTES * 60000).toISOString();
   const planned: { id: string }[] = [];
-  for (const { id, error, updated_at } of db.prepare("SELECT id, error, updated_at FROM slots WHERE status = 'planned' ORDER BY id").all() as { id: string; error: string | null; updated_at: string }[]) {
+  for (const { id, error, updated_at } of db.prepare("SELECT id, error, updated_at FROM slots WHERE status = 'planned' ORDER BY kind = 'manual' DESC, id").all() as { id: string; error: string | null; updated_at: string }[]) {
     const open = db.prepare("SELECT platform FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").all(id, lateBefore) as { platform: string }[];
     if (open.length) {
       // Every platform switched off (paused): leave the slot planned and spend nothing; turning one back on in time resumes it.
@@ -108,6 +109,7 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   if (deps.wait) for (const { id } of planned) await deps.producer.start(id, now);
   else if (planned.length && !deps.producer.busy()) void deps.producer.start(planned[0].id, now);
 
+  await holdsTick(db, config, now);
   await publishDue(db, config, deps.publishers, now);
   await snapshotDaily(db, config, now);
   await housekeepingDaily(db, config, now);

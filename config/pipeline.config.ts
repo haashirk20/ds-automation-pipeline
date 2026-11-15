@@ -43,7 +43,12 @@ export default {
   },
   // The 'ugc' mode. reuseAfterDays: a stored clip may be posted again after this many days when no new
   // clip can be made. captionPx: caption text size on the 1080-wide frame.
-  ugc: { reuseAfterDays: 14, captionPx: 84 },
+  // music: the owner's uploaded track, mixed under the clip's sound. volumeDb is its level; duckDb is how far it drops while the
+  // spoken line plays.
+  ugc: { reuseAfterDays: 14, captionPx: 84, music: { volumeDb: -18, duckDb: -10 } },
+  // The admin page's Post button makes a held clip on demand. manualPerDay: most per local day (0 turns the button off).
+  // expireHours: a held clip nobody posted is discarded after this long.
+  approval: { manualPerDay: 3, expireHours: 24 },
   llm: {
     models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5', escalation: 'claude-opus-5-5' },
     // At this spend in a calendar month (UTC) model calls stop and approved scripts are reused.
@@ -91,10 +96,24 @@ export default {
     // is not started when it would leave fewer than keepCredits credits. keepCredits 350 sits above
     // Higgsfield's auto-refill threshold of 300.
     t2: { ...WAN },
-    // The choices the admin page offers for t2. The alternative model, Seedance 2.0, is quoted at 37.5 credits.
+    // Ultra plan price per credit; the ledger records the live quote times this.
+    usdPerCredit: 65 / 3000,
+    // Ceiling on maxCredits for a model added on the admin page.
+    customMaxCredits: 120,
+    // The choices the admin page offers for t2. Quotes below are for 15 s, 9:16, read 2026-11-14 with get_cost and no reference
+    // images (the pipeline re-quotes with images before every paid call). usdPerClip = credits x usdPerCredit, rounded up to the cent.
+    // seedance_2_5* needs mode 'omni_reference' for reference images.
     t2Presets: {
       wan3_0_720p: { ...WAN },
       seedance_2_0_fast_720p: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 0.82, params: { mode: 'fast', resolution: '720p', generate_audio: true }, maxCredits: 40, keepCredits: 350 },
+      // Quoted 67.5 credits.
+      seedance_2_0_std_720p: { provider: 'higgsfield', model: 'seedance_2_0', usdPerClip: 1.47, params: { mode: 'std', resolution: '720p', generate_audio: true }, maxCredits: 75, keepCredits: 350 },
+      // Quoted 75 credits.
+      seedance_2_5_flash_720p: { provider: 'higgsfield', model: 'seedance_2_5_flash', usdPerClip: 1.63, params: { mode: 'omni_reference', resolution: '720p', generate_audio: true }, maxCredits: 83, keepCredits: 350 },
+      // Quoted 105 credits. At about $2.28 a clip the $52 cap allows about 22 clips a month, so the cap stops it mid-month.
+      seedance_2_5_720p: { provider: 'higgsfield', model: 'seedance_2_5', usdPerClip: 2.28, params: { mode: 'omni_reference', resolution: '720p', generate_audio: true }, maxCredits: 116, keepCredits: 350 },
+      // Quoted 18.75 credits. Once lit the button blue and failed the frame check (D-30).
+      kling_o3_std: { provider: 'higgsfield', model: 'kling_o3_image_reference', usdPerClip: 0.41, params: { mode: 'std', sound: 'on' }, maxCredits: 21, keepCredits: 350 },
     },
   },
   // Operations. summaryAt: local time after which the daily summary for yesterday is sent. snapshotAt: local time

@@ -362,3 +362,45 @@ test('after-restore holds back due pending and uploading publications and alerts
   assert.equal(rows[2].error, 'restored from backup: check the platform before posting again');
   assert.equal(events(db, 'restored').length, 1);
 });
+
+test('housekeeping: a held clip stays, a discarded or expired one goes after keepDays, orphan music files are swept', () => {
+  const { db, data, put, slot } = tree();
+  const hold = (id: string, status: string, h: string, clip: string) => {
+    slot(id, status, undefined, { clipFile: `clips/${clip}.mp4` });
+    db.prepare('UPDATE slots SET hold = ? WHERE id = ?').run(h, id);
+    put(path.join(data, 'clips', `${clip}.mp4`));
+  };
+  hold('2026-10-01#101', 'ready', 'waiting', 'waits');
+  hold('2026-10-02#101', 'done', 'approved', 'approved');
+  hold('2026-10-03#101', 'done', 'discarded', 'discarded');
+  hold('2026-10-04#101', 'done', 'expired', 'expired');
+  const sha = 'a'.repeat(64);
+  db.prepare("INSERT INTO music_tracks (sha256, name, file, seconds, lufs, selected, created_at) VALUES (?, 'n', ?, 30, -20, 1, 't')").run(sha, `music/${sha}.m4a`);
+  put(path.join(data, 'music', `${sha}.m4a`));
+  put(path.join(data, 'music', `${'b'.repeat(64)}.m4a`));
+  put(path.join(data, 'music', '.incoming', 'upload.tmp'));
+  put(path.join(data, 'music', 'x.part'));
+  const n = housekeeping(db, config, NOW);
+  const kept = (f: string) => assert.equal(existsSync(path.join(data, f)), true, f);
+  const gone = (f: string) => assert.equal(existsSync(path.join(data, f)), false, f);
+  kept('clips/waits.mp4');
+  kept('clips/approved.mp4');
+  gone('clips/discarded.mp4');
+  gone('clips/expired.mp4');
+  kept(`music/${sha}.m4a`);
+  gone(`music/${'b'.repeat(64)}.m4a`);
+  gone('music/.incoming/upload.tmp');
+  gone('music/x.part');
+  assert.deepEqual(n.errors, []);
+});
+
+test('summary: a manual slot waiting for approval is listed with its expiry', () => {
+  const db = fresh();
+  const ts = '2026-11-13T10:00:00Z';
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, kind, hold, held_at, created_at, updated_at) VALUES ('2026-11-13#101','2026-11-13',101,'ready','manual','waiting',?,?,?)").run(ts, ts, ts);
+  const s = buildSummary(db, config, AT);
+  assert.match(s, /#101 manual ready, waiting for approval/);
+  assert.match(s, /Waiting for approval: 1 \(oldest expires 2026-11-14T10:00:00\.000Z\)/);
+  db.prepare("UPDATE slots SET hold = 'approved'").run();
+  assert.doesNotMatch(buildSummary(db, config, AT), /Waiting for approval/);
+});

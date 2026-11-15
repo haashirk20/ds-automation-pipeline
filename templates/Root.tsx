@@ -31,7 +31,7 @@ export const Root: React.FC = () => (
       height={FRAME.height}
       fps={FRAME.fps}
       durationInFrames={450}
-      defaultProps={{ clipSrc: '', caption: '', top: 250, fontPx: 76, durationMs: 15000 } as UgcProps}
+      defaultProps={{ clipSrc: '', caption: '', top: 250, fontPx: 76, durationMs: 15000, music: null } as UgcProps}
       calculateMetadata={({ props }) => ({ durationInFrames: Math.round((props.durationMs * FRAME.fps) / 1000) })}
     />
     <Composition id="Sheet" component={Sheet} width={1080} height={960} fps={FRAME.fps} durationInFrames={1} defaultProps={{ frames: [] as string[] }} />

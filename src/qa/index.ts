@@ -165,6 +165,13 @@ export function captionStyleOk(s: { fontPx: number; textHex: string; plateHex: s
 // ---- runner ----
 const tryFf = (args: string[]) => ff('ffmpeg', args).then((r) => r, () => null);
 
+// A raw clip must have an audio stream that is not silent for (nearly) its whole length. Same silencedetect as the gate.
+export async function clipHasSound(file: string, seconds: number): Promise<boolean> {
+  const sil = await tryFf(['-nostats', '-i', file, '-vn', '-af', `silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_S}`, '-f', 'null', '-']);
+  if (!sil) return false; // no audio stream (or unreadable)
+  return ![...sil.stderr.matchAll(/silence_duration:\s*([\d.]+)/g)].some((m) => Number(m[1]) >= seconds * 0.9);
+}
+
 const CHECK_NAMES = ['container', 'video', 'duration', 'audio', 'size', 'faststart', 'loudness', 'silence', 'black frames', 'frozen picture'];
 
 // The gate reports, it never throws: any failure yields all ten checks, failed, with the reason.

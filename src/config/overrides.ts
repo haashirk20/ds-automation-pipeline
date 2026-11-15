@@ -5,6 +5,7 @@ import raw from '../../config/pipeline.config.ts';
 import { PRICES } from '../llm/client.ts';
 import { alert } from '../ops/alert.ts';
 import { loadRaw, parseConfig, type Config } from './index.ts';
+import { loadCustomModels, type TierDef } from './models.ts';
 
 type Obj = Record<string, any>;
 export type Limit = { min?: number; max?: number; choices?: unknown[]; reason?: string };
@@ -13,7 +14,7 @@ const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'];
 export const EDITABLE: readonly string[] = [
   'produceAt', 'ops.summaryAt', 'ops.snapshotAt', 'ops.keepDays', 'ops.diskAlertPercent',
   'llm.models.script', 'llm.models.copy', 'llm.models.qa', 'llm.monthlyCapUsd',
-  'ugc.reuseAfterDays', 'ugc.captionPx',
+  'ugc.reuseAfterDays', 'ugc.captionPx', 'ugc.music.volumeDb', 'ugc.music.duckDb', 'approval.manualPerDay',
   'tiers.t2Preset', 'tiers.t2.maxCredits', 'tiers.t2.keepCredits', 'tiers.capsUsd.t2', 'tiers.mix.t0', 'tiers.maxJobsPerSlot',
   ...PLATFORMS.flatMap((p) => [`platforms.${p}.enabled`, `platforms.${p}.visibility`, `platforms.${p}.slots`, ...['top', 'bottom', 'left', 'right'].map((e) => `platforms.${p}.safe.${e}`)]),
 ];
@@ -24,20 +25,23 @@ const LOCKED: [string, string][] = [
   ['timezone', 'Slot times and the database use it.'], ['render', 'The timeouts are tied to the video job limits.'], ['watchdogMinutes', 'Tied to the tick length.'],
   ['creative.mode', 'Changes the whole pipeline.'], ['tiers.clipSeconds', 'Tied to the concept and the model.'], ['tiers.t2.params', 'Free-form model parameters are not checked.'],
   ['tiers.t1', 'No provider exists for it.'], ['tiers.capsUsd.t1', 'No provider exists for it.'], ['brand', 'Brand name and logo are set in the file.'],
+  ['approval.expireHours', 'Held clips are paid for; the expiry is set in the file.'], ['tiers.usdPerCredit', 'The plan price per credit is set in the file.'], ['tiers.customMaxCredits', 'The ceiling for added models is set in the file.'],
   ['photo-tags.json', 'Set in the file.'], ...PLATFORMS.map((p): [string, string] => [`platforms.${p}.handle`, 'The account name at the bridge.']),
 ];
 
-// What each editable field accepts, from the file. `preset`: the t2 preset being edited (its limits replace the file's t2).
-export function limits(fileRaw: unknown, preset?: string): Record<string, Limit> {
+// What each editable field accepts, from the file. `preset`: the t2 preset being edited (its limits replace the file's t2); a
+// custom model's own limits come from `customs`.
+export function limits(fileRaw: unknown, preset?: string, customs: Record<string, TierDef> = {}): Record<string, Limit> {
   const f = parseConfig(fileRaw);
-  const t2 = preset !== undefined && Object.hasOwn(f.tiers.t2Presets, preset) ? f.tiers.t2Presets[preset] : f.tiers.t2;
+  const t2 = preset === undefined ? f.tiers.t2 : Object.hasOwn(f.tiers.t2Presets, preset) ? f.tiers.t2Presets[preset] : Object.hasOwn(customs, preset) ? customs[preset] : f.tiers.t2;
   const models = { choices: Object.keys(PRICES) };
   return {
     ...Object.fromEntries(LOCKED.map(([k, reason]) => [k, { reason }])),
     'ops.keepDays': { min: 3, max: 30 }, 'ops.diskAlertPercent': { min: 50, max: 95 },
     'llm.models.script': models, 'llm.models.copy': models, 'llm.models.qa': models, 'llm.monthlyCapUsd': { min: 0, max: f.llm.monthlyCapUsd },
     'ugc.reuseAfterDays': { min: 7, max: 60 }, 'ugc.captionPx': { min: 56, max: 110 },
-    'tiers.t2Preset': { choices: Object.keys(f.tiers.t2Presets) },
+    'ugc.music.volumeDb': { min: -30, max: -6 }, 'ugc.music.duckDb': { min: -20, max: 0 }, 'approval.manualPerDay': { min: 0, max: f.approval.manualPerDay },
+    'tiers.t2Preset': { choices: [...Object.keys(f.tiers.t2Presets), ...Object.keys(customs)] },
     'tiers.t2.maxCredits': { max: t2.maxCredits }, 'tiers.t2.keepCredits': { min: t2.keepCredits },
     'tiers.capsUsd.t2': { min: 0, max: f.tiers.capsUsd.t2 }, 'tiers.mix.t0': { min: 0, max: 1 }, 'tiers.maxJobsPerSlot': { min: 1, max: f.tiers.maxJobsPerSlot },
     ...Object.fromEntries(PLATFORMS.flatMap((p) => [
@@ -57,15 +61,17 @@ function setPath(o: Obj, path: string, v: unknown): void {
   c[last] = v;
 }
 
-export function effectiveConfig(fileRaw: unknown, o: Record<string, unknown>): { config: Config } | { errors: string[] } {
+// customs: the approved custom models, keyed 'custom:<id>' (see loadCustomModels).
+export function effectiveConfig(fileRaw: unknown, o: Record<string, unknown>, customs: Record<string, TierDef> = {}): { config: Config } | { errors: string[] } {
   const bad = Object.keys(o).filter((p) => !EDITABLE.includes(p));
   if (bad.length) return { errors: bad.map((p) => `${p} cannot be changed here`) };
   const file = parseConfig(fileRaw);
   const merged = structuredClone(fileRaw) as Obj;
   const preset = o['tiers.t2Preset'];
   if (preset !== undefined) {
-    if (typeof preset !== 'string' || !Object.hasOwn(file.tiers.t2Presets, preset)) return { errors: [`tiers.t2Preset: unknown preset ${JSON.stringify(preset)}`] };
-    merged.tiers.t2 = structuredClone(merged.tiers.t2Presets[preset]);
+    const custom = typeof preset === 'string' && Object.hasOwn(customs, preset);
+    if (typeof preset !== 'string' || !(custom || Object.hasOwn(file.tiers.t2Presets, preset))) return { errors: [`tiers.t2Preset: unknown preset ${JSON.stringify(preset)}`] };
+    merged.tiers.t2 = structuredClone(custom ? customs[preset] : merged.tiers.t2Presets[preset]);
   }
   for (const [p, v] of Object.entries(o)) if (p !== 'tiers.t2Preset') setPath(merged, p, v);
   // The GUI sets the share of reused clips; the rest is tier 2 and tier 1 stays off.
@@ -79,7 +85,7 @@ export function effectiveConfig(fileRaw: unknown, o: Record<string, unknown>): {
   }
 
   const errors: string[] = [];
-  const lim = limits(fileRaw, typeof preset === 'string' ? preset : undefined);
+  const lim = limits(fileRaw, typeof preset === 'string' ? preset : undefined, customs);
   for (const [p, v] of Object.entries(o)) {
     const l = lim[p] as Limit | undefined;
     if (!l) continue;
@@ -117,7 +123,7 @@ const setActive = (db: Db, id: number | null) => {
 
 // `o` is the whole sparse map of the new version. baseId is the version the form was opened on.
 export function saveConfig(db: Db, o: Record<string, unknown>, baseId: number | null, note: string, now: Date, fileRaw: unknown = raw): { id: number } | { errors: string[] } {
-  const r = effectiveConfig(fileRaw, o);
+  const r = effectiveConfig(fileRaw, o, loadCustomModels(db, parseConfig(fileRaw), { approvedOnly: true }));
   if ('errors' in r) return r;
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -140,13 +146,19 @@ export function saveConfig(db: Db, o: Record<string, unknown>, baseId: number | 
 }
 
 // id null = use the file again.
-export function activateConfig(db: Db, id: number | null, now: Date): void {
+// Refuses (returns errors) a version the rules reject today, e.g. one that names a removed model.
+export function activateConfig(db: Db, id: number | null, now: Date, fileRaw: unknown = raw): { errors: string[] } | null {
   if (id !== null && !db.prepare('SELECT 1 FROM config_versions WHERE id = ?').get(id)) throw new Error(`no config version ${id}`);
+  if (id !== null) {
+    const r = effectiveConfig(fileRaw, overridesOf(db, id), loadCustomModels(db, parseConfig(fileRaw), { approvedOnly: true }));
+    if ('errors' in r) return r;
+  }
   db.exec('BEGIN IMMEDIATE');
   try {
     setActive(db, id);
     audit(db, 'admin', id === null ? 'config.reset' : 'config.activate', 'config', { id }, now);
     db.exec('COMMIT');
+    return null;
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
@@ -161,7 +173,7 @@ export async function resolveConfig(db: Db, now: Date): Promise<{ config: Config
   if (id === null) return { config: parseConfig(fileRaw), version: 'file' };
   let errors: string[];
   try {
-    const r = effectiveConfig(fileRaw, overridesOf(db, id));
+    const r = effectiveConfig(fileRaw, overridesOf(db, id), loadCustomModels(db, parseConfig(fileRaw), { approvedOnly: true }));
     if ('config' in r) return { config: r.config, version: id };
     errors = r.errors;
   } catch (e) {

@@ -1,10 +1,10 @@
 # Architecture
 
-A single container on a small VM turns the store's Shopify product into two 15-second vertical
+Three compose services on a small VM turn the store's Shopify product into two 15-second vertical
 videos a day and publishes each one to YouTube Shorts, Facebook Page Reels, Instagram Reels and
 TikTok. The pipeline is ordinary code driven by a SQLite database. Language models are called only
-at the creative and judgment steps listed under "Model use at runtime". Nothing listens on a network
-port, except a loopback listener for the one-time Higgsfield sign-in.
+at the creative and judgment steps listed under "Model use at runtime". Two things listen on a port: the admin page (published on the
+host's `127.0.0.1` only) and a loopback listener for the one-time Higgsfield sign-in.
 
 Two creative formats exist, chosen by `creative.mode` (D-28). `ugc`, the default, is one
 AI-generated 15-second scene that looks like something a person filmed, with one caption at the top
@@ -33,31 +33,84 @@ What the product looks like is not in Shopify's data, so the owner writes it in
 
 ## Diagram
 
-```mermaid
-flowchart LR
-  subgraph VM["VM: one container, one long-running process"]
-    LOOP["tick loop (60 s)"]
-    LOOP --> PLAN["plan slots"]
-    LOOP --> PROD["produce (child process)"]
-    LOOP --> PUB["publish due posts"]
-    LOOP --> HB["heartbeat, alerts"]
-    DB[("SQLite data/pipeline.db")]
-    OUT[/"out/ renders, data/clips"/]
-    PROD --> REN["Remotion render"]
-    REN --> QA["QA gate"]
-    QA --> OUT
-  end
-  SHOP["Shopify Admin GraphQL, or the public /products.json"] --> PROD
-  PROD -- "concept, claim judge, frame check, copy" --> LLM["Anthropic API"]
-  PROD -- "tier 2" --> HF["Higgsfield MCP server"]
-  PUB --> BR["Hosted bridge"]
-  BR --> YT["YouTube Shorts"]
-  BR --> FB["Facebook Reels"]
-  BR --> IG["Instagram Reels"]
-  BR --> TT["TikTok"]
-  HB --> ALERT["Discord or Telegram"]
-  HB --> HC["healthchecks.io"]
+The whole flow, top to bottom. Text boxes name the config key of the model that reads them.
+
+```text
+ OWNER (browser over an SSH tunnel or Tailscale)
+   |
+   v
+ admin container -- no API keys, read-only root, own network, 127.0.0.1:8080 only
+   pages: Overview  Settings  Prompts  Posts  Music  Models  Activity  History
+   writes: config_versions, text_versions (house video ugc copy hooks script note:*),
+           manual slots and hold decisions, music_tracks + data/music/*.m4a, video_models
+   reads:  out/ renders (read-only) for the preview player; runs ffmpeg on uploads
+   |
+   v  SQLite data/pipeline.db (WAL): the only channel; the pipeline rereads it every tick
+   |
+ pipeline container -- one process, one tick every 60 s (src/scheduler/loop.ts)
+   1 config = file + active override; prompts = files + active versions
+   2 plan tomorrow's slots at produceAt      3 start one producer child (manual first)
+   4 holds: alert waiting, expire old        5 publishDue
+   6 snapshot, housekeeping, daily summary, heartbeat, healthchecks.io ping
+   |
+   v  produce --slot ID  (child process; every write fenced by the claim time)
+ Shopify Admin API or /products.json --> brief: facts with sources, disclosures, photos
+ config/photo-tags.json --> text-free crops of the photos
+   |
+   v
+ CONCEPT WRITER    llm.models.script   system: house + ugc + brief
+                                       user: length, month, product note, recent captions
+   | code checks: numbers, prices, banned phrases, repeats
+   v
+ CLAIM JUDGE (locked)  llm.models.copy  system: claims + brief   user: caption, spoken line
+   v
+ CLIP PROMPT (code)  video text + setting + person + product note + photo notes + shots
+                     + the speech sentence (kept in code)
+   v
+ HIGGSFIELD MCP  balance, quote, upload references, quote again, one paid job, download
+                 ledger row before submit; live quote x usdPerCredit recorded
+   v
+ FRAME CHECK (locked)  llm.models.qa  system: vision + brief
+                       user: 8 frames, reference photos, product note; verdict in code
+   v
+ CAPTION RENDER  Remotion Ugc: clip + caption + owner track (rotated, dips in shot 1)
+                 -> loudness -14 LUFS -> QA gate (10 checks)
+   v
+ COPY WRITER   llm.models.copy  system: house + copy + brief   user: what the video shows
+ COPY JUDGE (locked)            system: copycheck + brief      user: the copy
+   v
+ COMMIT  one transaction: slot ready, one render row per platform
+         manual slot: hold waiting until the owner presses Post or Discard
+   v
+ PUBLISH  claim row, saveHandle, POST /posts with Idempotency-Key <slot>:<platform>
+          (DRY_RUN=1 skips only this call)
+   v
+ Zernio bridge --> YouTube Shorts | Facebook Page Reels | Instagram Reels | TikTok
+
+ ad mode instead of concept..render: HOOKS (house + hooks), SCRIPT (house + script),
+   CLAIM JUDGE (claims), Kokoro voice, synthesized bed, Ad template per platform, QA
+ planned, not built: WEEKLY REVIEW (Phase 8) -- no prompt and no code exist yet
+ side outputs: alerts to Discord or Telegram; backup container -> restic -> R2
 ```
+
+### Every text a model or the clip service receives
+
+| Text | Source | Editable on the page | `house` first | Model (config key) | Where it is used |
+|---|---|---|---|---|---|
+| `house` | `prompts/house.md` | yes | n/a | none | Prepended to `ugc`, `copy`, `hooks`, `script` |
+| `ugc` | `prompts/ugc.md` | yes | yes | `script` | `creative/ugc.ts`, concept |
+| `copy` | `prompts/copy.md` | yes | yes | `copy` | `creative/copy.ts`, titles, captions and hashtags |
+| `hooks` | `prompts/hooks.md` | yes | yes | `script` | `creative/hooks.ts` (ad) |
+| `script` | `prompts/script.md` | yes | yes | `script` | `creative/script.ts` (ad) |
+| `video` | `prompts/video.md` | yes | no | Higgsfield, not a language model | First paragraph of `buildClipPrompt` |
+| `note:<handle>` | `config/product-notes.json` | yes | no | none | Concept user text, clip prompt, frame-check user text |
+| `claims` | `prompts/claims.md` | locked | no | `copy` | `creative/claims.ts` |
+| `copycheck` | `prompts/copycheck.md` | locked | no | `copy` | `creative/copy.ts` |
+| `vision` | `prompts/vision.md` | locked | no | `qa` | `qa/vision.ts` |
+| speech sentence | code in `buildClipPrompt` | no | no | Higgsfield | Last line of the clip prompt |
+| weekly review | none (planned) | n/a | n/a | n/a | Phase 8 |
+
+Every system text ends with the brief JSON (`systemPrompt`).
 
 ## Data flow for one slot
 
@@ -75,7 +128,8 @@ flowchart LR
    is used. With no stored brief the slot goes back to `planned`.
 4. **Tier.** `chooseTier` draws a tier from the slot id. With the default mix every slot draws
    tier 2. It falls back to tier 0, which means "reuse a stored clip", when the provider is not
-   signed in or the monthly cap is reached.
+   signed in or the monthly cap is reached. A manual slot (see "Posts on demand") is forced to
+   tier 2, and the model is the one chosen on the Posts page.
 5. **Concept.** The script model writes a concept as structured JSON: a setting, one woman, a
    product colour, one caption of at most 12 words, at most one spoken line of at most 9 words, and
    three to five shots whose seconds add up to the clip length. Code checks the caption and line
@@ -92,21 +146,25 @@ flowchart LR
    fails is rejected, and the slot may start one more job, up to `tiers.maxJobsPerSlot` jobs in
    all, each with a new concept.
 8. **Caption render.** Remotion draws the one caption over the clip, below the tallest top safe
-   zone of the enabled platforms, and the audio is normalized to −14 LUFS. The file goes through the
-   QA gate. A file that fails counts as a rejected clip.
+   zone of the enabled platforms. If the owner has ticked music tracks, the least recently used one
+   is mixed under the clip's sound and dips during shot 1 (D-34). The audio is normalized to
+   −14 LUFS. The file goes through the QA gate. A file that fails counts as a rejected clip.
 9. **Reuse.** If no new clip could be made (tier 0, cap reached, credits low, signed out, concept
    writer failed, or every job rejected), the slot reuses a stored clip of the product that was last
    posted at least `ugc.reuseAfterDays` days ago, with the concept it was made from. The concept
    must still pass the checks against the current brief. The slot sends a `degraded` alert, then
    renders and checks the clip again. With none available the slot fails and alerts (or waits, if
-   the cause was a passing model outage). It does not fall back to a photo ad.
+   the cause was a passing model outage). It does not fall back to a photo ad. A manual slot never
+   reuses a clip: with no new clip it fails and shows why. Clips of discarded or expired holds are
+   never reused.
 10. **Copy.** The copy model writes the title, caption and hashtags for the four platforms in one
     call and a second call judges them. Code adds the product link where captions are clickable
     (YouTube, Facebook) and the brief's disclosures. If the model fails, deterministic copy from the
     brief is used.
 11. **Commit.** The one rendered file is copied once per enabled platform. In one transaction the
-    slot becomes `ready` and the render rows are written, fenced by the claim time. The slot's cost
-    is the sum of its model calls and its ledger rows.
+    slot becomes `ready` and the render rows are written, fenced by the claim time. For a manual
+    slot the commit also sets `hold = 'waiting'`. The slot's cost is the sum of its model calls and
+    its ledger rows.
 12. **Publish.** At each platform's time the publisher posts the file through the bridge (see
     "Never double-post"). The AI label is always on, because every video is AI-generated.
 
@@ -155,7 +213,8 @@ so a crash, a restart or a missed minute changes nothing. A tick that runs longe
 |---|---|
 | Plan | Creates slot and publication rows as described above |
 | Stale recovery | A `producing` slot not touched for `render.produceTimeoutMinutes` (90) goes back to `planned`, or fails with an alert once `attempt` reaches `render.maxAttempts` (2) |
-| Produce | Starts one child process for the oldest planned slot if none is running. A planned slot that has an error waits 10 minutes after the attempt ended (not after it was claimed). A planned slot with no pending publication inside the lateness window fails as "too late" |
+| Produce | Starts one child process for the oldest planned slot if none is running, a manual slot first. A planned slot that has an error waits 10 minutes after the attempt ended (not after it was claimed). A planned slot with no pending publication inside the lateness window fails as "too late" |
+| Holds | `holdsTick`: sends `approval_waiting` for each held slot not yet alerted, and expires holds older than `approval.expireHours` (24) |
 | Publish | `publishDue`: recovers stale rows, skips overdue ones, posts the ones due |
 | Snapshot | Once a day after `ops.snapshotAt`: a consistent copy of the database for the backup service. Failure alerts `snapshot_failed` |
 | Housekeeping | Once a day after `ops.snapshotAt`, then the disk check, which alerts `disk_full` above `ops.diskAlertPercent` |
@@ -175,6 +234,52 @@ reads the clock.
 
 There is no cron, no Redis and no queue broker. The only web server is the admin page, in its own
 service. The database is the queue.
+
+## Posts on demand
+
+The Posts page (D-33) makes one video now and posts it only after the owner presses Post. Only
+manual slots are held. Planned slots never wait for a person.
+
+```
+manual slot:  planned -> producing -> ready + hold waiting --Post--> approved -> publish -> done
+                  |                       |--Discard--> discarded (rows skipped) -> done
+                  |                       \--expireHours--> expired (rows skipped, alert) -> done
+                  \-> failed (no new clip: never reuses; rows skipped by publishDue)
+```
+
+A manual slot is a normal slot with `kind = 'manual'`, id `<date>#101` and up, and one `pending`
+publication per enabled platform scheduled at the request time. `src/scheduler/holds.ts` holds the
+database-only functions the admin and the loop share: `planManual`, `approveHold`, `discardHold`
+and `holdsTick`. Each is one transaction, and approve and discard compare-and-set on
+`hold = 'waiting'`.
+
+- **One at a time.** `planManual` refuses while another manual slot is `planned` or `producing`, so
+  a double click or a second tab makes one slot. It also refuses past `approval.manualPerDay` (3) a
+  local day, with no platform enabled, and outside `ugc` mode.
+- **Lateness.** A manual slot must start producing within `maxLatenessMinutes` of the request: the
+  loop's "too late" rule and stale recovery fail the slot, because `scheduled_at` is the request time.
+  `publishDue` does not skip the rows of a manual slot that is still `planned` or `producing`, so
+  the slot is failed, not its rows alone. While it is held the rule is off. Post moves `scheduled_at`
+  to the later of its value and now. If no pending row is left to move (a platform was switched off
+  or the rows were skipped), Post is refused with "Nothing to post" and the hold stays.
+- **Pause.** The button is refused with no platform enabled. A platform switched off later is
+  skipped by the existing rule.
+- **Not claimed while held.** `publishDue` claims only slots whose `hold` is null or `approved`, and
+  it does not treat a `waiting` slot as overdue. Held rows are never claimed, so they never carry a
+  handle. Every skip writes with `handle_json IS NULL`, and approval touches only pending rows with
+  no handle. The publisher path is unchanged.
+- **Discarded and expired clips** are not offered for reuse, and housekeeping deletes them after
+  `ops.keepDays`. A held render is kept, because its rows are pending.
+- **Deleting a music track** never affects a held render: the mix is already in its file.
+- **Planned slots.** `hasSlots` counts only `kind = 'planned'`, so a manual slot does not stop
+  today's planned slots from being made.
+- **Crash points.** Plan, commit, approve, discard and expire are each one transaction. The waiting
+  alert is sent by the tick from the events table, so it goes out even after a crash. A paid call
+  followed by a crash before the submitted write takes the existing reserved-to-failed path and
+  counts at `usdPerClip`.
+
+The admin never calls Higgsfield and never produces: it writes the slot row and the tick does the
+rest.
 
 ## Admin
 
@@ -196,10 +301,31 @@ based on, and writes an `audit` row. Rollback activates an older version; "Use f
 pointer. Prompts: `claims`, `copycheck` and `vision` are locked; `house` is prepended to the writer
 prompts only; `video` is the Higgsfield style text and the speech sentence stays in code.
 
+Three pages write more than settings. **Posts** (D-33) makes a manual slot, plays the held render
+and records Post or Discard. **Music** (D-34) takes uploads and ticks tracks. **Models** (D-35) adds
+Higgsfield models, whose guardrails the page and the pipeline's loader (`src/config/models.ts`)
+both apply. A model added there appears in Settings only after one of its manual test posts has
+been approved.
+
+The admin container mounts the `pipeline-out` volume read-only at `/app/out` (`OUT_DIR`) so that
+the Posts page can stream a held render to the player, and it has 640 MB of memory. Streaming
+(`/media/render`, `/media/music`) answers `Range` with 206. A file is served only if it is a regular
+file inside `OUT_DIR` or `data/music` after symlinks are resolved (`inside()` in
+`src/admin/media.ts`). Approve refuses when any of the slot's render files is outside `OUT_DIR`.
+The admin keeps its own `musicRoot` and path check, so it never loads Remotion.
+
+**Music uploads.** The one multipart route is `POST /music/upload`. Untrusted media is parsed here
+and not in the pipeline container, which holds the keys. The session is checked before any body is
+read and the CSRF field after parsing. The file type comes from the first bytes, with a forced
+demuxer (`mov`, `mp3` or `wav`) and `-protocol_whitelist file`, never from the name. The file is at
+most 40 MB and 5 to 600 s, and at most 50 tracks are kept (a 51st is refused). ffprobe measures it,
+and ffmpeg transcodes it to AAC with metadata stripped at `data/music/<sha256>.m4a`, after which
+loudness is measured. The upload needs a rights confirmation.
+
 **Security.** One admin, a scrypt hash in `kv`, a session cookie (`HttpOnly`, `SameSite=Strict`,
 stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
-per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB, and
-a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
+per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB (the music upload is the one
+exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
 database value. The code never queries `oauth_tokens` (a test checks this).
 
 ## Slot and publication states
@@ -296,8 +422,11 @@ appear only as text printed on a photo are never used. The brief also extracts d
 **`ugc` concept.** See steps 5 and 6 above. The caption and the spoken line may state an opinion,
 never a fact the brief lacks. The woman is a character in a scene and is never presented as a
 customer giving a review. The picture carries no price, logo overlay, end card or call to action.
-The video model makes the voice and the room sound, so there is no voice-over and no music bed. The
-spoken line is not transcribed at run time (D-28).
+The video model makes the voice and the room sound, so there is no voice-over and no synthesized
+music bed. The owner may upload tracks and tick them on the Music page (D-34): `ugc` mode then mixes
+the least recently used ticked track under the clip, at `ugc.music.volumeDb` (−18), dipping by
+`ugc.music.duckDb` (−10) during shot 1, where the prompt puts the spoken line. The spoken line is not
+transcribed at run time (D-28).
 
 **Caption render.** `templates/Ugc.tsx` draws one caption, `ugc.captionPx` (84) wide on the
 1080-pixel frame, below the tallest top safe zone plus 30 px. One render serves every platform.
@@ -312,7 +441,7 @@ spoken line is not transcribed at run time (D-28).
 - *Voice and caption timing.* Kokoro-82M runs through a small Python CLI and returns a WAV plus
   per-word times. Captions are the script itself, timed by the synthesizer. Speech must end by
   14.8 seconds.
-- *Music.* A small Python tool synthesizes an instrumental bed from the slot's seed. Music is ducked
+- *Music.* (`ad` mode only; owner tracks are not used here.) A small Python tool synthesizes an instrumental bed from the slot's seed. Music is ducked
   under the voice and the mix is normalized to −14 LUFS.
 - *Render.* A Remotion composition takes the master edit as props. Three templates exist: bold
   kinetic type, soft lifestyle, and gift-guide cards. The end card shows the exact price string from
@@ -373,9 +502,11 @@ code with PKCE, the client registers itself) and keeps the tokens in `oauth_toke
 token is refreshed once and the call retried, except the paid call. `higgsfield.ts` is the provider.
 The default model is Wan 3.0 at 720p with generated audio, 15 seconds, 9:16.
 
-**Credits and the ledger.** The ledger is in dollars: `tiers.t2.usdPerClip` is the quoted credits
-times what a credit costs on the plan. It records the configured price, not the live quote (known
-gap). Before a new job the provider reads the live balance and asks the server for the quote. Just
+**Credits and the ledger.** The ledger is in dollars. A row is reserved at the upper bound, the larger of the configured
+`usdPerClip` and `maxCredits` times `tiers.usdPerCredit`, which the cap check also uses. When the job is submitted the row stores the exact quote the paid
+call was sent with (`credits`) and its price is those credits times `tiers.usdPerCredit` ($65 per
+3,000 credits). A crash after the paid call and before that write therefore counts the worst case
+(D-35). Before a new job the provider reads the live balance and asks the server for the quote. Just
 before the paid call it asks again for the exact request, reference images included. The job is
 refused when that quote is above `maxCredits` (30) or when the balance after it would be below
 `keepCredits` (350), which sits above Higgsfield's auto-refill threshold so the pipeline cannot
@@ -466,8 +597,13 @@ Every call is `callJson` in `src/llm/client.ts`. Models come from `llm.models` i
 | `script` | `creative/script.ts` | `claude-sonnet-5-5` (`script`) | Writes the four-beat script for a hook (`ad`) |
 
 `llm.models.escalation` (`claude-opus-5-5`) and `llm.escalationEnabled` exist in the config, and no
-code calls the model. - **Daily summary.** After `ops.summaryAt`, once a day, retried every 15 minutes until delivered:
-  yesterday's publications with links, today's slots, model and clip spend this month (and last
+code calls the model.
+
+## Operations
+
+- **Daily summary.** After `ops.summaryAt`, once a day, retried every 15 minutes until delivered:
+  yesterday's publications with links, today's slots (a held manual slot reads "waiting for approval"),
+  a line for the posts waiting for approval, model and clip spend this month (and last
   month's on the 1st), publications needing attention, undelivered alerts and the backup line.
 - **Second dead-man's switch.** `HEALTHCHECK_DAILY_URL` is pinged only after a summary was delivered
   to a real alert channel (with no channel nothing is pinged). The ping is recorded in `kv`
@@ -478,13 +614,15 @@ code calls the model. - **Daily summary.** After `ops.summaryAt`, once a day, re
   of a slot older than `ops.keepDays` whose publications are all `published` or `skipped`, and clips
   in `data/clips` older than `ops.keepDays` that no `ready` or `done` slot's master and no
   `succeeded` spend row of a `planned` or `producing` slot references. Referenced clips are never
-  deleted, because `ugc` reuse needs them. A failing entry is skipped, and any failure alerts
+  deleted, because `ugc` reuse needs them, except those of discarded or expired holds, which go
+  after `keepDays`. It also runs `sweepMusic`, which removes stale uploads in `data/music/.incoming`,
+  `*.part` files and `<sha>.m4a` files with no live track row. A failing entry is skipped, and any failure alerts
   `housekeeping_failed` once a day. Database rows are kept.
 - **Backups.** Two halves. The pipeline writes a consistent snapshot to `data/backup/pipeline.db`
   and then `data/backup/ready` each night. The `backup` service (restic image, uid 1000, data
   volume read-only, secrets in `.env.backup`) backs up that file and `data/clips` to R2 whenever
   `ready` changes, prunes (7 daily, 4 weekly), writes `last-ok` to the `backup-status` volume and
-  checks 5% of the data weekly. Without `RESTIC_REPOSITORY` it idles. The snapshot includes tokens,
+  checks 5% of the data weekly. `data/music` is not backed up: the owner keeps the original files. Without `RESTIC_REPOSITORY` it idles. The snapshot includes tokens,
   so the restic password and keys must also be kept off the VM (D-14).
 - **Deployment (not built).** Hosting, the VM setup and a 48-hour unattended run.
 
@@ -526,12 +664,13 @@ src/                 one TypeScript package; each folder is a module
   config/  db/       config loader and validation; SQLite and migrations
   shopify/           Admin API and public feed fetch, asset download, brief builder
   creative/  llm/    concept, hooks, script, claims, copy, assembly; Anthropic client and cost log
-  tts/  music/       wrappers around the Python tools (ad mode)
+  tts/  music/       wrappers around the Python tools (ad mode); music/tracks.ts picks and sweeps owner tracks
   render/  qa/       producers (produce.ts, produce-ugc.ts), Remotion render; file checks, frame check
   router/            tier choice, spend ledger, MCP client, Higgsfield sign-in and provider
   publish/           the bridge publisher, the registry, the claim and retry logic
-  scheduler/  ops/   tick loop, planner, time; alerts and logging
-  admin/             the admin page: server, auth, pages (Phase 6b)
+  scheduler/  ops/   tick loop, planner, time, holds.ts (manual slots); alerts and logging
+  config/models.ts   custom video model rules, shared by the admin and the loader
+  admin/             the admin page: server, auth, pages, posts, music, models, media (Phases 6b, 6c)
 templates/           Remotion compositions (React): Ugc, Ad and three ad templates
 prompts/             versioned prompt files, one per model purpose
 tools/tts/           Kokoro CLI (Python, uv)
@@ -543,7 +682,7 @@ tests/               node --test
 docs/                this folder
 .claude/agents/  .github/workflows/  .mcp.json  CLAUDE.md
 third_party/         vendored or cloned code, containerized
-out/  data/          renders and database (gitignored)
+out/  data/          renders, database and data/music owner tracks (gitignored)
 ```
 
 The modules are folders in a single package. There is one deployable and one owner, so separate
@@ -581,6 +720,7 @@ The orchestrator plans, routes, reviews diffs and keeps `DECISIONS.md` current.
 | 5 Publishing | One private test post per connected platform | Post ids read back from the bridge |
 | 6 Scheduler and ops | Two slots a day per platform, alerts, summary, cleanup | A compressed-time run in `DRY_RUN`, then one real day |
 | 6b Admin | Via an SSH tunnel the owner logs in, changes a slot time, the clip preset and the `ugc` prompt, sees the new version in use within one tick and rolls one back; a guardrail-breaking edit is refused by the page and by the loader; port 8080 is unreachable from outside the VM | Tests, then the walk-through on the VM |
+| 6c Posts on demand, music, models | In a throwaway compose project, through the browser: an mp3, an m4a, a wav and an mp4 upload and a renamed text file is refused; with two tracks ticked, Make a new post gives a held render that plays with Range 206, with music under the clip dipping in shot 1; Post publishes it with `dry_run = 1` on the next tick; a Discarded post is skipped and never reused; a double click makes one slot; a custom model with a forbidden option is refused by the page and the loader, a valid one is held on its test post and appears in Settings after Post; a ledger row records the live quote; the `ad-pipeline:local` image Id and the real project are unchanged. Then, after the 24-hour dry run, one real manual post with one paid clip | Tests, then the walk-through |
 | 7 Deploy | 48 hours unattended | Logs and the publications table |
 | 8 Feedback | Weekly ranking changes the sampler | Weights change after a metrics pull |
 

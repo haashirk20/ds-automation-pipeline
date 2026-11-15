@@ -21,7 +21,8 @@ export type ClipProvider = {
   configured(): boolean;
   // Throws when a job cannot or must not be started now. Runs before any ledger row is written.
   check?(job: ClipJob): Promise<void>;
-  submit(job: ClipJob): Promise<{ jobId: string }>;
+  // `credits` is the exact quote the paid call was sent with; the ledger records it.
+  submit(job: ClipJob): Promise<{ jobId: string; credits?: number }>;
   // Waits for the job and writes the video to outFile.
   fetch(jobId: string, outFile: string, signal: AbortSignal): Promise<void>;
 };
@@ -29,13 +30,17 @@ export type Tier = 't0' | 't1' | 't2';
 export type PaidTier = 't1' | 't2';
 
 // Test and dry-run stand-in. Offered only when CLIP_STUB_FILE is set, so it cannot be picked by accident.
+// The most a job can cost: the larger of the quoted price and maxCredits at the plan price. Cap checks and the reserved row use it.
+const boundUsd = (t: Config['tiers']['t2'], config: Config): number => Math.max(t.usdPerClip, (t.maxCredits ?? 0) * config.tiers.usdPerCredit);
+
 const fake: ClipProvider = {
   name: 'fake',
   configured: () => {
     const f = env.clipStubFile();
     return !!f && existsSync(f);
   },
-  submit: async () => ({ jobId: 'fake-' + randomBytes(4).toString('hex') }),
+  // Returns credits, like the real provider, so stub runs write the live-quote ledger path.
+  submit: async () => ({ jobId: 'fake-' + randomBytes(4).toString('hex'), credits: Number(process.env.CLIP_STUB_CREDITS) || 26.25 }),
   fetch: async (_id, outFile) => copyFileSync(env.clipStubFile()!, outFile),
 };
 
@@ -52,17 +57,17 @@ export function monthSpendUsd(db: Db, tier: string, now: Date): number {
   return r.s;
 }
 
-export async function chooseTier(db: Db, config: Config, providers: Record<string, ClipProvider>, slotId: string, now: Date): Promise<Tier> {
+export async function chooseTier(db: Db, config: Config, providers: Record<string, ClipProvider>, slotId: string, now: Date, force?: PaidTier): Promise<Tier> {
   // A job already paid for keeps its tier, so it is fetched or used even at the cap or when the provider is signed out.
   const paid = db.prepare("SELECT tier FROM spend WHERE slot_id = ? AND state IN ('submitted','succeeded') ORDER BY id DESC LIMIT 1").get(slotId) as { tier: Tier } | undefined;
   if (paid) return paid.tier;
   const { mix } = config.tiers;
   const u = createHash('sha256').update('tier:' + slotId).digest().readUInt32BE(0) / 2 ** 32;
-  const drawn: Tier = u < mix.t0 ? 't0' : u < mix.t0 + mix.t1 ? 't1' : 't2';
+  const drawn: Tier = force ?? (u < mix.t0 ? 't0' : u < mix.t0 + mix.t1 ? 't1' : 't2');
   if (drawn === 't0') return 't0';
   const t = config.tiers[drawn];
   if (!providers[t.provider]?.configured()) return 't0';
-  if (monthSpendUsd(db, drawn, now) + t.usdPerClip > config.tiers.capsUsd[drawn]) {
+  if (monthSpendUsd(db, drawn, now) + boundUsd(t, config) > config.tiers.capsUsd[drawn]) {
     const key = `${drawn}:${now.toISOString().slice(0, 7)}`;
     if (!db.prepare("SELECT 1 FROM events WHERE kind = 'budget_cap' AND key = ? AND delivered = 1").get(key)) {
       await alert(db, 'budget_cap', key, `${drawn} monthly cap of $${config.tiers.capsUsd[drawn]} reached: slots fall back to tier 0 until next month`, now);
@@ -156,7 +161,7 @@ export async function generateClip(
   if (rows.length >= config.tiers.maxJobsPerSlot) return false;
   const p = providers[t.provider];
   if (!p?.configured()) return false;
-  if (monthSpendUsd(db, job.tier, now) + t.usdPerClip > config.tiers.capsUsd[job.tier]) return false;
+  if (monthSpendUsd(db, job.tier, now) + boundUsd(t, config) > config.tiers.capsUsd[job.tier]) return false;
   const cj: ClipJob = { images: job.images, prompt: job.prompt, shots: job.shots, seconds: config.tiers.clipSeconds, signal: job.signal };
   try {
     await p.check?.(cj);
@@ -168,11 +173,13 @@ export async function generateClip(
     return false;
   }
   const id = Number(db.prepare("INSERT INTO spend (slot_id, tier, provider, model, state, quoted_usd, created_at, updated_at) VALUES (?,?,?,?, 'reserved', ?,?,?)")
-    .run(job.slotId, job.tier, p.name, t.model, t.usdPerClip, now.toISOString(), now.toISOString()).lastInsertRowid);
+    .run(job.slotId, job.tier, p.name, t.model, boundUsd(t, config), now.toISOString(), now.toISOString()).lastInsertRowid);
   let jid: string;
   try {
-    const { jobId } = await p.submit(cj);
-    setState(db, id, 'submitted', now, { job_id: jobId }); // before waiting
+    const { jobId, credits } = await p.submit(cj);
+    // One statement, before waiting. The reserved row held the upper bound (boundUsd); the live quote replaces it.
+    db.prepare("UPDATE spend SET state = 'submitted', job_id = ?, credits = ?, quoted_usd = COALESCE(?, quoted_usd), updated_at = ? WHERE id = ?")
+      .run(jobId, credits ?? null, credits === undefined ? null : credits * config.tiers.usdPerCredit, now.toISOString(), id);
     jid = jobId;
   } catch (e) {
     return fail(id, e);

@@ -70,7 +70,7 @@ test('submit: uploads, confirms, one generate_video with use_unlim false; kling 
       generate_video: (a) => (a.params.get_cost ? quote(37.5) : { results: [{ id: 'job-9', status: 'pending' }] }),
     }, f);
     const out = await higgsfieldProvider(signedIn(), cfgFor(model), r.deps).submit(job());
-    assert.deepEqual(out, { jobId: 'job-9' });
+    assert.deepEqual(out, { jobId: 'job-9', credits: 37.5 });
     assert.deepEqual(r.calls.map((c) => c.name), ['balance', 'media_upload', 'media_confirm', 'generate_video', 'generate_video']);
     assert.deepEqual(puts, [{ url: 'https://up.example/put', type: 'image/jpeg', body: 'jpegbytes' }]);
     assert.deepEqual(r.calls[2].args, { type: 'image', media_ids: ['m1'] });

@@ -144,9 +144,9 @@ test('other methods and unknown paths; nothing is served from disk', async () =>
 
 test('every response carries the security headers and no page has a script tag', async () => {
   const { cookie } = await login();
-  for (const path of ['/login', '/overview', '/settings', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/style.css', '/healthz', '/nope']) {
+  for (const path of ['/login', '/overview', '/settings', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
     const r = await req('GET', path, { cookie });
-    assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
+    assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
     assert.equal(r.headers['x-content-type-options'], 'nosniff');
     assert.equal(r.headers['referrer-policy'], 'same-origin'); // no-referrer makes browsers send Origin: null
     assert.equal(r.headers['cache-control'], 'no-store');
@@ -265,7 +265,7 @@ test('no page shows a token or the password hash, and the admin code never touch
   db.prepare("INSERT OR REPLACE INTO oauth_tokens (provider, client_id, access_token, refresh_token, expires_at, updated_at) VALUES ('higgsfield','MARKER_CLIENT','MARKER_ACCESS','MARKER_REFRESH','x','x')").run();
   process.env.BRIDGE_API_KEY = 'MARKER_ENV_BRIDGE_KEY';
   const [, , , , salt, key] = kvGet(db, 'admin_password')!.split('$');
-  for (const path of ['/overview', '/settings', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/activity', '/history', '/login']) {
+  for (const path of ['/overview', '/settings', '/posts', '/music', '/models', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/activity', '/history', '/login']) {
     const r = await req('GET', path, { cookie });
     for (const m of ['MARKER_', salt, key, 'scrypt$']) assert.ok(!r.text.includes(m), `${path} shows ${m}`);
   }

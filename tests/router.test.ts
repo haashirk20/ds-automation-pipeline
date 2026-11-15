@@ -335,3 +335,67 @@ test('chooseTier: a slot with a paid job keeps its tier at the cap and without a
   const c0 = cfg({ t0: 1, t1: 0, t2: 0 }); // the mix changed since the job was made
   assert.equal(await chooseTier(db, c0, reg, 'sub#1', NOW), 't1');
 });
+
+test('ledger: the reserved row holds usdPerClip, then the live quote times usdPerCredit and the credits are recorded', async () => {
+  const db = fresh();
+  const { p, reg } = mkProvider();
+  const orig = p.submit;
+  const during: any[] = [];
+  p.submit = async (j) => { during.push(rows(db)[0]); return { ...(await orig(j)), credits: 40 }; };
+  await generateClip(db, T1, reg, job(db), NOW);
+  assert.deepEqual([during[0].state, during[0].quoted_usd, during[0].credits], ['reserved', T1.tiers.t1.usdPerClip, null]);
+  const r = rows(db)[0];
+  assert.equal(r.credits, 40);
+  assert.equal(r.quoted_usd, 40 * T1.tiers.usdPerCredit);
+  assert.equal(r.job_id, 'job-1');
+  assert.equal(r.state, 'succeeded');
+});
+
+test('ledger: a provider that gives no credits keeps the reserved price', async () => {
+  const db = fresh();
+  const { reg } = mkProvider();
+  await generateClip(db, T1, reg, job(db), NOW);
+  assert.deepEqual([rows(db)[0].credits, rows(db)[0].quoted_usd], [null, T1.tiers.t1.usdPerClip]);
+});
+
+test('chooseTier: force t2 wins over mix.t0 = 1, but the cap and an unconfigured provider still send it to t0', async () => {
+  const db = fresh();
+  const c = cfg({ t0: 1, t1: 0, t2: 0 });
+  const { reg: configured } = mkProvider();
+  const ok = { higgsfield: configured.fal, ...configured };
+  const t2 = { ...c, tiers: { ...c.tiers, t2: { ...c.tiers.t2, provider: 'fal' } } };
+  assert.equal(await chooseTier(db, t2, ok, 's#1', NOW), 't0');
+  assert.equal(await chooseTier(db, t2, ok, 's#1', NOW, 't2'), 't2');
+  assert.equal(await chooseTier(db, t2, { fal: { ...configured.fal, configured: () => false } }, 's#1', NOW, 't2'), 't0');
+  db.prepare("INSERT INTO spend (slot_id, tier, provider, model, state, quoted_usd, created_at, updated_at) VALUES ('x','t2','fal','m','succeeded',?,?,?)").run(c.tiers.capsUsd.t2, NOW.toISOString(), NOW.toISOString());
+  assert.equal(await chooseTier(db, t2, ok, 's#1', NOW, 't2'), 't0');
+});
+
+test('ledger: the cap check and the reserved row use the larger of usdPerClip and maxCredits x usdPerCredit', async () => {
+  const db = fresh();
+  const { reg } = mkProvider();
+  const c = cfg({ t0: 0, t1: 1, t2: 0 }, { t1: { ...raw.tiers.t1, usdPerClip: 0.1, maxCredits: 40 } });
+  const bound = 40 * c.tiers.usdPerCredit;
+  assert.ok(bound > 0.1);
+  const seen: number[] = [];
+  reg.fal.submit = async () => { seen.push(rows(db)[0].quoted_usd); return { jobId: 'j' }; };
+  await generateClip(db, c, reg, job(db), NOW);
+  assert.equal(seen[0], bound);
+  // Room for usdPerClip but not for the bound: no job.
+  const tight = cfg({ t0: 0, t1: 1, t2: 0 }, { t1: { ...raw.tiers.t1, usdPerClip: 0.1, maxCredits: 40 }, capsUsd: { ...raw.tiers.capsUsd, t1: bound - 0.01 } });
+  assert.equal(await generateClip(fresh(), tight, reg, job(db, 's#2'), NOW), false);
+});
+
+test('the fake clip provider returns credits, so a stub run writes the live-quote ledger row', async () => {
+  const db = fresh();
+  const stub = join(mkdtempSync(join(tmpdir(), 'stub-')), 'clip.mp4');
+  writeFileSync(stub, 'video');
+  process.env.CLIP_STUB_FILE = stub;
+  try {
+    const c = cfg({ t0: 0, t1: 1, t2: 0 }, { t1: { ...raw.tiers.t1, provider: 'fake' } });
+    assert.equal(await generateClip(db, c, clipProviders(db, c, () => NOW), job(db), NOW), true);
+    const r = rows(db)[0];
+    assert.equal(r.credits, 26.25);
+    assert.equal(r.quoted_usd, 26.25 * c.tiers.usdPerCredit);
+  } finally { delete process.env.CLIP_STUB_FILE; }
+});

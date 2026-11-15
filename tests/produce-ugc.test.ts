@@ -9,6 +9,7 @@ import { aboutConcept, aboutScript, copyProblems, fallbackCopy, writeCopy } from
 import { produceSlot, type ProduceDeps } from '../src/render/produce.ts';
 import { pickStoredClip } from '../src/render/produce-ugc.ts';
 import { planDay } from '../src/scheduler/planner.ts';
+import { planManual } from '../src/scheduler/holds.ts';
 import type { ClipProvider } from '../src/router/index.ts';
 import { config, fresh } from './helpers.ts';
 
@@ -58,6 +59,7 @@ function rig(over: { concepts?: UgcConcept[]; checks?: boolean[]; providers?: Re
     concept: async (_db, _c, _b, recent) => { seen.recent.push(recent); const c = concepts.shift(); if (!c) throw new Error('no concept'); return c; },
     prepareImage: async (_s, _c, out) => writeFileSync(out, 'jpg'),
     probeClip: async () => ({ width: 720, height: 1280, seconds: 15 }),
+    clipSound: async () => true,
     checkClip: async () => { const pass = checks.shift() ?? true; return { pass, problems: pass ? [] : ['the product does not match the reference'], verdict: {} as any }; },
     renderUgc: async (o) => { seen.rendered.push(o.caption); writeFileSync(o.outFile, 'video:' + o.caption); },
     qa: async () => ({ pass: true, checks: [] }),
@@ -434,4 +436,163 @@ test('a wait alert does not hide the later alert that a stored clip is posted ag
   await produceSlot(db, config, ID, T, rig({ deps: { concept: async () => down() } }).deps);
   assert.equal(slot(db).status, 'ready', slot(db).error);
   assert.equal(events(db, 'degraded').length, 2);
+});
+
+// ---- Phase 6c: manual slots, held clips, video models, music ----
+
+const manual = (db: ReturnType<typeof fresh>, model: string | null = null) => (planManual(db, config, T, model) as { slotId: string }).slotId;
+const row = (db: ReturnType<typeof fresh>, id: string) => db.prepare('SELECT * FROM slots WHERE id = ?').get(id) as any;
+
+test('a manual slot commits ready with hold waiting and held_at; a planned slot has no hold', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const id = manual(db);
+  const { deps } = rig({ deps: { clock: () => new Date('2026-11-12T02:40:00Z') } });
+  await produceSlot(db, config, id, T, deps);
+  const s = row(db, id);
+  assert.equal(s.status, 'ready', s.error);
+  assert.deepEqual([s.hold, s.held_at], ['waiting', '2026-11-12T02:40:00.000Z']);
+  assert.equal(s.tier, 't2');
+  await produceSlot(db, config, ID, T, rig().deps);
+  assert.deepEqual([slot(db).status, slot(db).hold], ['ready', null]);
+});
+
+test('a manual slot with no clip fails and never reuses a stored clip', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  stored(db, '2026-10-01#1', '2026-10-01', concept('an old caption'), clipFile('old'));
+  const id = manual(db);
+  const { deps } = rig({ checks: [false, false] });
+  await produceSlot(db, config, id, T, deps);
+  const s = row(db, id);
+  assert.equal(s.status, 'failed');
+  assert.match(s.error, /no new clip/);
+  assert.equal(events(db, 'degraded').length, 0);
+});
+
+test('a manual slot with the clip provider signed out says why', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const id = manual(db);
+  const p = provider().providers.higgsfield;
+  const { deps } = rig({ providers: { higgsfield: { ...p, configured: () => false } } });
+  await produceSlot(db, config, id, T, deps);
+  assert.match(row(db, id).error, /signed out or the monthly clip cap/);
+});
+
+test('a manual slot with the concept writer down defers instead of failing', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const id = manual(db);
+  const { deps } = rig({ deps: { concept: async () => { throw new RetryableLlmError('model down'); } } });
+  await produceSlot(db, config, id, T, deps);
+  const s = row(db, id);
+  assert.equal(s.status, 'planned');
+  assert.match(s.error, /model is unavailable/);
+});
+
+test('pickStoredClip ignores discarded and expired slots, keeps approved ones', () => {
+  const db = setup();
+  const c = concept('c');
+  for (const [i, h] of [[1, 'discarded'], [2, 'expired'], [3, 'approved']] as const) {
+    stored(db, `2026-10-0${i}#1`, `2026-10-0${i}`, c, clipFile('c' + i));
+    db.prepare('UPDATE slots SET hold = ? WHERE id = ?').run(h, `2026-10-0${i}#1`);
+  }
+  const hit = pickStoredClip(db, config, brief, T, '2026-11-12');
+  assert.equal(hit!.slotId, '2026-10-03#1');
+  db.prepare("UPDATE slots SET hold = 'expired' WHERE id = '2026-10-03#1'").run();
+  assert.equal(pickStoredClip(db, config, brief, T, '2026-11-12'), null);
+});
+
+test('video_model swaps the model the ledger and provider config see; a removed or malformed one fails only that slot', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const a = manual(db, 'seedance_2_0_std_720p');
+  await produceSlot(db, config, a, T, rig().deps);
+  assert.equal(row(db, a).status, 'ready', row(db, a).error);
+  assert.equal(spend(db)[0].model, 'seedance_2_0');
+  await produceSlot(db, config, ID, T, rig().deps);
+  assert.equal(spend(db)[1].model, config.tiers.t2.model);
+  // custom model, then removed: the slot fails with a clear error
+  db.prepare("INSERT INTO video_models (id, name, model, params_json, max_credits, keep_credits, created_at) VALUES (1,'m','wan3_0','{\"resolution\":\"720p\"}',50,350,'t')").run();
+  db.prepare("UPDATE slots SET status = 'ready' WHERE kind = 'manual'").run();
+  const b = manual(db, 'custom:1');
+  db.prepare("UPDATE video_models SET removed_at = 't' WHERE id = 1").run();
+  await produceSlot(db, config, b, T, rig().deps);
+  assert.equal(row(db, b).status, 'failed');
+  assert.match(row(db, b).error, /unknown video model/);
+  // a row written straight into the database with a blocked parameter
+  db.prepare("INSERT INTO video_models (id, name, model, params_json, max_credits, keep_credits, created_at) VALUES (2,'bad','wan3_0','{\"prompt\":\"x\"}',50,350,'t')").run();
+  db.prepare("UPDATE slots SET status = 'ready' WHERE kind = 'manual'").run();
+  const c = manual(db);
+  db.prepare("UPDATE slots SET video_model = 'custom:2' WHERE id = ?").run(c);
+  await produceSlot(db, config, c, T, rig().deps);
+  assert.equal(row(db, c).status, 'failed');
+  assert.match(row(db, c).error, /custom model 2/);
+  // a planned slot is unaffected by the bad row
+  db.prepare("UPDATE slots SET status = 'planned', error = NULL, hold = NULL WHERE id = ?").run(ID);
+  await produceSlot(db, config, ID, T, rig().deps);
+  assert.equal(slot(db).status, 'ready');
+});
+
+function track(db: ReturnType<typeof fresh>, n: number, o: { file?: boolean } = {}) {
+  const sha = String(n).repeat(64).slice(0, 64);
+  const rel = `music/${sha}.m4a`;
+  if (o.file !== false) { mkdirSync(resolve(process.env.DATA_DIR!, 'music'), { recursive: true }); writeFileSync(resolve(process.env.DATA_DIR!, rel), 'm' + n); }
+  db.prepare("INSERT INTO music_tracks (sha256, name, file, seconds, lufs, selected, created_at) VALUES (?,?,?,30,-20,1,?)").run(sha, 'track' + n, rel, `2026-11-0${n}T00:00:00Z`);
+  return sha;
+}
+
+test('a picked track reaches renderUgc with its gain and duck; rotation alternates over two slots', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const a = track(db, 1);
+  const b = track(db, 2);
+  const seen: any[] = [];
+  const deps = () => rig({ deps: { renderUgc: async (o) => { seen.push(o.music); writeFileSync(o.outFile, 'v'); } } }).deps;
+  await produceSlot(db, config, ID, T, deps());
+  assert.equal(slot(db).status, 'ready', slot(db).error);
+  await produceSlot(db, config, '2026-11-12#2', T, deps());
+  assert.deepEqual(seen.map((m) => m.file.split('/').pop()), [`${a}.m4a`, `${b}.m4a`]);
+  assert.equal(seen[0].gainDb, -14 + 20 + config.ugc.music.volumeDb);
+  assert.equal(seen[0].duckDb, config.ugc.music.duckDb);
+  assert.equal(seen[0].duckUntilMs, good.shots[0].seconds * 1000 + 250);
+  assert.equal(JSON.parse(slot(db).master_json).music.sha256, a);
+  assert.ok((db.prepare('SELECT last_used_at FROM music_tracks WHERE sha256 = ?').get(a) as any).last_used_at);
+});
+
+test('a track whose file vanished renders without music and costs no attempt; no tick, no music', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const sha = track(db, 1);
+  rmSync(resolve(process.env.DATA_DIR!, `music/${sha}.m4a`));
+  const seen: any[] = [];
+  await produceSlot(db, config, ID, T, rig({ deps: { renderUgc: async (o) => { seen.push(o.music); writeFileSync(o.outFile, 'v'); } } }).deps);
+  assert.deepEqual(seen, [null]); // pickTrack skips a missing file: no music
+  assert.equal(slot(db).status, 'ready');
+  assert.equal(slot(db).attempt, 1);
+});
+
+test('a clip with no sound is rejected and a second job is submitted', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const p = provider();
+  let n = 0;
+  const base = rig({ providers: p.providers });
+  await produceSlot(db, config, ID, T, { ...base.deps, clipSound: async () => n++ > 0 });
+  assert.equal(slot(db).status, 'ready', slot(db).error);
+  assert.equal(p.calls.submit, 2);
+  assert.deepEqual(spend(db).map((r) => r.state), ['rejected', 'succeeded']);
+});
+
+test('a track that vanishes between the pick and the render is not recorded as used; a planned slot has no held_at', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const sha = track(db, 1);
+  const base = rig({ deps: { renderUgc: async (o) => writeFileSync(o.outFile, 'v') } }).deps;
+  await produceSlot(db, config, ID, T, { ...base, prepareImage: async (_s, _c, out) => { rmSync(resolve(process.env.DATA_DIR!, `music/${sha}.m4a`), { force: true }); writeFileSync(out, 'jpg'); } });
+  assert.equal(slot(db).status, 'ready', slot(db).error);
+  assert.equal(JSON.parse(slot(db).master_json).music, null);
+  assert.equal((db.prepare('SELECT last_used_at FROM music_tracks WHERE sha256 = ?').get(sha) as any).last_used_at, null);
+  assert.equal(slot(db).held_at, null);
 });

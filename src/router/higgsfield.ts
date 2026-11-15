@@ -104,11 +104,12 @@ export function higgsfieldProvider(db: Db, config: Config, deps: HiggsDeps): Cli
       }
       await c.call('media_confirm', { type: 'image', media_ids: up.uploads.map((u) => u.media_id) });
       const exact = params(job, { medias: up.uploads.map((u) => ({ role: 'image_references', value: u.media_id })) });
-      limits(credits, priced((await c.call('generate_video', { params: { ...exact, get_cost: true } })) as Gen)); // the request as it is sent, images included
+      const quote = priced((await c.call('generate_video', { params: { ...exact, get_cost: true } })) as Gen);
+      limits(credits, quote); // the request as it is sent, images included
       const g = (await c.call('generate_video', { params: exact }, true)) as Gen;
       const id = g.results?.[0]?.id;
       if (!id || typeof id !== 'string') throw new Error('generate_video did not return a job: ' + JSON.stringify(g).slice(0, 200));
-      return { jobId: id };
+      return { jobId: id, credits: quote };
     },
 
     async fetch(jobId, outFile, signal) {

@@ -156,13 +156,20 @@ export function ugcDurationMs(v: { width: number; height: number; seconds: numbe
 }
 
 // One AI clip with its own sound and a single caption at the top.
-export async function renderUgc(opts: { clip: string; caption: string; config: Config; outFile: string; signal?: AbortSignal }): Promise<void> {
+export async function renderUgc(opts: { clip: string; caption: string; config: Config; outFile: string; music?: { file: string; gainDb: number; duckDb: number; duckUntilMs: number } | null; signal?: AbortSignal }): Promise<void> {
   const outFile = assertInside(opts.outFile, env.outDir());
   const durationMs = ugcDurationMs(await probeVideo(opts.clip));
   const id = randomBytes(6).toString('hex');
   const to = `s/${id}/clip${path.extname(opts.clip).toLowerCase() || '.mp4'}`;
-  const inputProps = { clipSrc: to, caption: opts.caption, top: ugcTop(opts.config), fontPx: opts.config.ugc.captionPx, durationMs };
-  await renderStaged({ composition: 'Ugc', id, files: [{ from: opts.clip, to }], inputProps, outFile, signal: opts.signal });
+  const files = [{ from: opts.clip, to }];
+  let music = null;
+  if (opts.music) {
+    const { file, ...mix } = opts.music;
+    files.push({ from: file, to: `s/${id}/music.m4a` });
+    music = { src: `s/${id}/music.m4a`, ...mix };
+  }
+  const inputProps = { clipSrc: to, caption: opts.caption, top: ugcTop(opts.config), fontPx: opts.config.ugc.captionPx, durationMs, music };
+  await renderStaged({ composition: 'Ugc', id, files, inputProps, outFile, signal: opts.signal });
 }
 
 // Lays out already-extracted 270x480 PNGs 4x2 in one 1080x960 PNG using the "Sheet" composition.

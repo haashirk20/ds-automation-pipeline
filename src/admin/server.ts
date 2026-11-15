@@ -1,11 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { audit } from '../config/overrides.ts';
 import { kvGet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { clearCookie, clearLockout, cookieOf, COOKIE, createSession, destroySession, getSession, hostAllowed, isLocked, loginFailed, safeEqual, sessionCookie, verifyPassword } from './auth.ts';
+import * as media from './media.ts';
+import * as models from './models.ts';
+import * as music from './music.ts';
 import * as pages from './pages.ts';
+import * as posts from './posts.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
 
@@ -14,7 +19,7 @@ const MAX_PASSWORD = 1024;
 
 // Fixed on every response. There is no CORS.
 const HEADERS: Record<string, string> = {
-  'content-security-policy': "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  'content-security-policy': "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   'x-content-type-options': 'nosniff',
   // Not no-referrer: under that policy browsers send 'Origin: null' on form POSTs and the Origin check refuses every login.
   'referrer-policy': 'same-origin',
@@ -30,6 +35,19 @@ const ROUTES: Record<string, Route> = {
   'GET /settings': { auth: true, h: pages.settingsPage },
   'POST /settings/preview': { auth: true, h: pages.settingsPreview },
   'POST /settings/save': { auth: true, h: pages.settingsSave },
+  'GET /posts': { auth: true, h: posts.postsPage },
+  'POST /posts/new': { auth: true, h: posts.postNew },
+  'POST /posts/approve': { auth: true, h: posts.postApprove },
+  'POST /posts/discard': { auth: true, h: posts.postDiscard },
+  'GET /media/render': { auth: true, h: media.mediaRender },
+  'GET /media/music': { auth: true, h: media.mediaMusic },
+  'GET /music': { auth: true, h: (c) => music.musicPage(c) },
+  'POST /music/upload': { auth: true, h: () => pages.notFound(null) }, // handled before the body is read
+  'POST /music/select': { auth: true, h: music.musicSelect },
+  'POST /music/delete': { auth: true, h: music.musicDelete },
+  'GET /models': { auth: true, h: (c) => models.modelsPage(c) },
+  'POST /models/add': { auth: true, h: models.modelAdd },
+  'POST /models/remove': { auth: true, h: models.modelRemove },
   'GET /prompts': { auth: true, h: pages.promptsPage },
   'GET /prompts/view': { auth: true, h: pages.promptView },
   'GET /prompts/edit': { auth: true, h: (c) => pages.promptEdit(c) },
@@ -86,15 +104,29 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   const route = ROUTES[`${method} ${path}`];
   if (!route && !(isLogin && (method === 'GET' || method === 'POST')) && !isLogout) return pages.notFound(null);
 
+  const sameOrigin = (): boolean => {
+    if (req.headers.origin !== `http://${host}` && req.headers.origin !== `https://${host}`) return false;
+    const sfs = req.headers['sec-fetch-site'];
+    return sfs === undefined || sfs === 'same-origin';
+  };
+
+  // The one multipart route. The session is checked before any body is read; the csrf field is checked after parsing.
+  if (method === 'POST' && path === '/music/upload') {
+    const s = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
+    const close = (r: Res): Res => ({ ...r, headers: { ...r.headers, connection: 'close' } }); // the body is not read, so the connection must not be reused
+    if (!s) return close(pages.redirect('/login'));
+    if (!sameOrigin()) return close(plain(403, 'Forbidden'));
+    const r = await music.uploadMusic({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
+    return r.status === 303 || r.status === 403 ? close(r) : r;
+  }
+
   let form = new URLSearchParams();
   if (method === 'POST') {
     const ct = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
     if (ct !== 'application/x-www-form-urlencoded') return plain(415, 'Unsupported media type');
     if (Number(req.headers['content-length'] ?? 0) > MAX_BODY) return plain(413, 'Request too large');
     // CSRF: same-origin only. The session cookie is SameSite=Strict as well.
-    if (req.headers.origin !== `http://${host}` && req.headers.origin !== `https://${host}`) return plain(403, 'Forbidden');
-    const sfs = req.headers['sec-fetch-site'];
-    if (sfs !== undefined && sfs !== 'same-origin') return plain(403, 'Forbidden');
+    if (!sameOrigin()) return plain(403, 'Forbidden');
     const body = await readBody(req);
     if (body === null) return plain(413, 'Request too large');
     form = new URLSearchParams(body);
@@ -112,7 +144,7 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
       return { status: 303, headers: { location: '/login', 'set-cookie': clearCookie() } };
     }
   }
-  return route!.h({ db, now, method, path, query: url.searchParams, form, csrf: session.csrf });
+  return route!.h({ db, now, method, path, query: url.searchParams, form, csrf: session.csrf, range: (req.headers.range as string | undefined) ?? null });
 }
 
 // secure: the login came with an https Origin (Tailscale serve); the Origin header is the only signal trusted.
@@ -141,6 +173,13 @@ async function login(db: Db, form: URLSearchParams, now: Date, secure: boolean):
 
 function send(res: ServerResponse, r: Res): void {
   const headers: Record<string, string | string[]> = { ...HEADERS, 'content-type': r.type ?? 'text/html; charset=utf-8', ...r.headers };
+  if (r.file) {
+    headers['content-type'] = r.file.type;
+    headers['content-length'] = String(r.file.end - r.file.start + 1);
+    res.writeHead(r.status, headers);
+    createReadStream(r.file.path, { start: r.file.start, end: r.file.end }).on('error', () => res.destroy()).pipe(res);
+    return;
+  }
   res.writeHead(r.status, headers);
   res.end(r.body === undefined ? '' : String(r.body));
 }
@@ -154,13 +193,13 @@ export function makeServer(db: Db, opts: AdminOpts): Server {
         return plain(500, 'Internal error');
       })
       .then((r) => {
-        send(res, r);
+        try { send(res, r); } catch (e) { log.error('admin response failed', { error: e instanceof Error ? e.name : 'error' }); res.destroy(); }
         // Method, path without the query, status and duration. Never cookies, bodies or texts.
         log.info('admin request', { method: req.method, path: (req.url ?? '').split('?')[0], status: r.status, ms: Math.round(performance.now() - t0) });
       });
   });
   server.maxConnections = 64;
-  server.requestTimeout = 30_000;
+  server.requestTimeout = 180_000; // a 40 MB upload on a slow tunnel
   server.headersTimeout = 15_000;
   return server;
 }

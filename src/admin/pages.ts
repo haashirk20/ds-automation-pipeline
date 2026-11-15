@@ -1,7 +1,8 @@
 import raw from '../../config/pipeline.config.ts';
-import type { Config } from '../config/index.ts';
+import { parseConfig, type Config } from '../config/index.ts';
 import { activateConfig, effectiveConfig, limits, loadEffectiveConfig, saveConfig } from '../config/overrides.ts';
 import { kvGet, migrate, type Db } from '../db/index.ts';
+import { loadCustomModels, type TierDef } from '../config/models.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { activateText, EDITABLE_TEXT, fileText as promptFile, isEditable, loadPrompts, saveText, systemPrompt, usePrompts } from '../llm/prompts.ts';
 import { PRICES, monthSpend } from '../llm/client.ts';
@@ -21,8 +22,9 @@ export type Ctx = {
   query: URLSearchParams;
   form: URLSearchParams;
   csrf: string | null; // null when not signed in
+  range?: string | null; // the Range header of a media request
 };
-export type Res = { status: number; body?: Raw | string; type?: string; headers?: Record<string, string | string[]> };
+export type Res = { status: number; body?: Raw | string; type?: string; headers?: Record<string, string | string[]>; file?: { path: string; start: number; end: number; size: number; type: string } };
 
 const ok = (body: Raw): Res => ({ status: 200, body });
 export const redirect = (to: string): Res => ({ status: 303, headers: { location: to } });
@@ -30,17 +32,17 @@ const fileRaw = raw as unknown as Record<string, any>;
 
 // ---------- layout ----------
 
-const NAV: [string, string][] = [['/overview', 'Overview'], ['/settings', 'Settings'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
+const NAV: [string, string][] = [['/overview', 'Overview'], ['/settings', 'Settings'], ['/posts', 'Posts'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
 
-export function layout(ctx: Ctx | null, title: string, active: string, body: Raw): Res {
+export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
   const nav = ctx?.csrf
     ? html`<header class="top"><nav aria-label="Main">${NAV.map(([h, t]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`)}<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
     : '';
-  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css"></head><body>${nav}<main><h1>${title}</h1>${body}</main></body></html>`);
+  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css">${head}</head><body>${nav}<main><h1>${title}</h1>${body}</main></body></html>`);
 }
 
-const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
-const fmtTs = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '');
+export const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
+export const fmtTs = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '');
 const json = (v: unknown) => (v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
 
 // ---------- login ----------
@@ -102,7 +104,7 @@ type Kind = 'text' | 'int' | 'num' | 'bool' | 'select' | 'times';
 type Field = { path: string; label: string; stage: string; kind: Kind; hint?: string };
 const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
 const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
-const S = ['Schedule and timing', 'Platforms', 'Concept writing', 'Claim checks', 'Video generation', 'Frame check', 'Budget', 'Ops'] as const;
+const S = ['Schedule and timing', 'Platforms', 'Concept writing', 'Claim checks', 'Video generation', 'Music', 'Frame check', 'Budget', 'Ops'] as const;
 
 const FIELDS: Field[] = [
   { path: 'produceAt', label: 'Produce tomorrow\'s slots at (HH:MM local)', stage: S[0], kind: 'text' },
@@ -124,10 +126,13 @@ const FIELDS: Field[] = [
   { path: 'tiers.capsUsd.t2', label: 'Monthly clip cap (USD)', stage: S[4], kind: 'num' },
   { path: 'tiers.mix.t0', label: 'Share of slots that reuse a stored clip (0 to 1)', stage: S[4], kind: 'num', hint: 'The rest make a new clip (t2). t1 stays 0.' },
   { path: 'tiers.maxJobsPerSlot', label: 'Most paid jobs per slot', stage: S[4], kind: 'int' },
-  { path: 'llm.models.qa', label: 'Frame check model', stage: S[5], kind: 'select', hint: 'Calibrated on claude-haiku-5-5 at low effort (D-28); other models are unchecked.' },
-  { path: 'llm.monthlyCapUsd', label: 'Monthly model-call cap (USD)', stage: S[6], kind: 'num' },
-  { path: 'ops.keepDays', label: 'Keep renders and failed attempts (days)', stage: S[7], kind: 'int' },
-  { path: 'ops.diskAlertPercent', label: 'Alert when a disk is fuller than (%)', stage: S[7], kind: 'int' },
+  { path: 'ugc.music.volumeDb', label: 'Music level (dB, relative to the -14 LUFS mix)', stage: S[5], kind: 'num', hint: 'Music is mixed in from the Music page; with no track ticked there is none.' },
+  { path: 'ugc.music.duckDb', label: 'Music dip while the spoken line plays (dB)', stage: S[5], kind: 'num' },
+  { path: 'llm.models.qa', label: 'Frame check model', stage: S[6], kind: 'select', hint: 'Calibrated on claude-haiku-5-5 at low effort (D-28); other models are unchecked.' },
+  { path: 'approval.manualPerDay', label: 'Most Post-button videos a day (0 turns it off)', stage: S[7], kind: 'int', hint: 'More posts a day raise the repetitive-content risk on every platform.' },
+  { path: 'llm.monthlyCapUsd', label: 'Monthly model-call cap (USD)', stage: S[7], kind: 'num' },
+  { path: 'ops.keepDays', label: 'Keep renders and failed attempts (days)', stage: S[8], kind: 'int' },
+  { path: 'ops.diskAlertPercent', label: 'Alert when a disk is fuller than (%)', stage: S[8], kind: 'int' },
 ];
 
 const LOCKED: { stage: string; label: string; value: (c: Config, dry: boolean) => unknown; reason: string }[] = [
@@ -142,9 +147,10 @@ const LOCKED: { stage: string; label: string; value: (c: Config, dry: boolean) =
   { stage: S[4], label: 'Clip length (seconds)', value: (c) => c.tiers.clipSeconds, reason: 'Tied to the 14 to 16 second rule; edit the file.' },
   { stage: S[4], label: 'Clip model parameters', value: (c) => c.tiers.t2.params, reason: 'Free-form values the clip service interprets; pick a preset instead.' },
   { stage: S[4], label: 'Tier 1 (open-weight clips)', value: (c) => `share ${c.tiers.mix.t1}, cap $${c.tiers.capsUsd.t1}`, reason: 'No provider exists for it yet.' },
-  { stage: S[5], label: 'Frame check effort and photo tags', value: () => 'low; config/photo-tags.json', reason: 'Calibrated together with the model; edit the file.' },
-  { stage: S[7], label: 'Render timeouts and attempts', value: (c) => c.render, reason: 'Tied to maxJobsPerSlot and the clip timeout; edit the file.' },
-  { stage: S[7], label: 'Watchdog (minutes)', value: (c) => c.watchdogMinutes, reason: 'Edit the file.' },
+  { stage: S[6], label: 'Frame check effort and photo tags', value: () => 'low; config/photo-tags.json', reason: 'Calibrated together with the model; edit the file.' },
+  { stage: S[7], label: 'Hold expiry, credit price, custom model ceiling', value: (c) => `${c.approval.expireHours} h, ${c.tiers.usdPerCredit.toFixed(4)} USD per credit, ${c.tiers.customMaxCredits} credits`, reason: 'They guard spend and stale posts; edit the file.' },
+  { stage: S[8], label: 'Render timeouts and attempts', value: (c) => c.render, reason: 'Tied to maxJobsPerSlot and the clip timeout; edit the file.' },
+  { stage: S[8], label: 'Watchdog (minutes)', value: (c) => c.watchdogMinutes, reason: 'Edit the file.' },
 ];
 
 function limitText(l: { min?: number; max?: number; choices?: string[]; reason?: string } | undefined): string {
@@ -158,11 +164,14 @@ function limitText(l: { min?: number; max?: number; choices?: string[]; reason?:
   return p.join('; ');
 }
 
-const t2PresetKeys = (): string[] => Object.keys(fileRaw.tiers?.t2Presets ?? {});
-function fileDefault(f: Field, preset?: string): unknown {
+type Customs = Record<string, TierDef>;
+const customsOf = (db: Db): Customs => loadCustomModels(db, parseConfig(fileRaw), { approvedOnly: true });
+const t2PresetKeys = (customs: Customs = {}): string[] => [...Object.keys(fileRaw.tiers?.t2Presets ?? {}), ...Object.keys(customs)];
+function fileDefault(f: Field, preset?: string, customs: Customs = {}): unknown {
   const t2 = fileRaw.tiers?.t2;
   if (f.path === 'tiers.t2Preset') return t2PresetKeys().find((k) => fileRaw.tiers.t2Presets[k].model === t2?.model && same(fileRaw.tiers.t2Presets[k].params, t2?.params)) ?? t2PresetKeys()[0];
   // The preset in use supplies the file values of the tiers.t2 fields.
+  if (f.path.startsWith('tiers.t2.') && preset && customs[preset]) return getPath(customs[preset], f.path.slice('tiers.t2.'.length));
   if (f.path.startsWith('tiers.t2.') && preset && fileRaw.tiers.t2Presets?.[preset]) return getPath(fileRaw.tiers.t2Presets[preset], f.path.slice('tiers.t2.'.length));
   return getPath(fileRaw, f.path);
 }
@@ -172,8 +181,8 @@ function currentValue(f: Field, cfg: Config, o: Record<string, unknown>): unknow
   return getPath(cfg, f.path);
 }
 
-function choicesOf(f: Field, lim: Record<string, any>): string[] {
-  if (f.path === 'tiers.t2Preset') return t2PresetKeys();
+function choicesOf(f: Field, lim: Record<string, any>, customs: Customs): string[] {
+  if (f.path === 'tiers.t2Preset') return t2PresetKeys(customs);
   if (f.path.endsWith('.visibility')) return ['public', 'private'];
   if (f.path.startsWith('llm.models.')) return lim[f.path]?.choices ?? Object.keys(PRICES);
   return lim[f.path]?.choices ?? [];
@@ -183,7 +192,10 @@ const show = (v: unknown) => (Array.isArray(v) ? v.join(', ') : typeof v === 'bo
 
 function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeId: number | null, submitted: URLSearchParams | null, errs: Map<string, string[]>, other: string[]): Raw {
   const preset = String(o['tiers.t2Preset'] ?? fileDefault(FIELDS.find((x) => x.path === 'tiers.t2Preset')!));
-  const lim = limits(fileRaw, preset) as Record<string, any>;
+  const customs = customsOf(ctx.db);
+  const lim = limits(fileRaw, preset, customs) as Record<string, any>;
+  // Custom presets show their name; the value stays 'custom:<id>'.
+  const names = new Map((ctx.db.prepare('SELECT id, name FROM video_models').all() as { id: number; name: string }[]).map((r) => [`custom:${r.id}`, `${r.name} (custom)`]));
   const dry = (() => { try { return !!JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } })();
   const stages = S.map((st) => {
     const rows = FIELDS.filter((f) => f.stage === st).map((f) => {
@@ -196,9 +208,9 @@ function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeI
         f.kind === 'bool'
           ? html`<input id="${id}" type="checkbox" name="${f.path}" value="1"${checked ? rawHtml(' checked') : ''}${e ? rawHtml(' aria-invalid="true"') : ''}>`
           : f.kind === 'select'
-            ? html`<select id="${id}" name="${f.path}"${e ? rawHtml(' aria-invalid="true"') : ''}>${choicesOf(f, lim).map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${c}</option>`)}</select>`
+            ? html`<select id="${id}" name="${f.path}"${e ? rawHtml(' aria-invalid="true"') : ''}>${choicesOf(f, lim, customs).map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${names.get(c) ?? c}</option>`)}</select>`
             : html`<input id="${id}" type="text" name="${f.path}" value="${val}" inputmode="${f.kind === 'int' || f.kind === 'num' ? 'decimal' : 'text'}"${e ? rawHtml(' aria-invalid="true"') : ''}>`;
-      const fd = fileDefault(f, submitted ? (submitted.get('tiers.t2Preset') ?? preset) : preset);
+      const fd = fileDefault(f, submitted ? (submitted.get('tiers.t2Preset') ?? preset) : preset, customs);
       const lt = limitText(lim[f.path]);
       return html`<div class="field${e ? ' has-error' : ''}"><label for="${id}">${f.label}</label><div>${input}
 <span class="hint">Current: ${show(cur)}. File default: ${show(fd)}.${lt ? ` Limit: ${lt}.` : ''}${f.hint ? ' ' + f.hint : ''}</span>${(e ?? []).map((m) => html`<span class="err" role="alert">${m}</span>`)}</div></div>`;
@@ -213,7 +225,7 @@ function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeI
 
 // First local date whose slots are not planned yet.
 function firstUnplanned(db: Db, now: Date, tz: string): string {
-  const last = (db.prepare('SELECT MAX(local_date) AS d FROM slots').get() as { d: string | null }).d;
+  const last = (db.prepare("SELECT MAX(local_date) AS d FROM slots WHERE kind = 'planned'").get() as { d: string | null }).d;
   const today = localDateOf(now, tz);
   return last && last >= today ? addDays(last, 1) : today;
 }
@@ -253,7 +265,7 @@ function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>
   }
 }
 
-function draftFrom(form: URLSearchParams, active: Record<string, unknown>, errs: Map<string, string[]>): Record<string, unknown> {
+function draftFrom(form: URLSearchParams, active: Record<string, unknown>, errs: Map<string, string[]>, customs: Customs): Record<string, unknown> {
   const draft = { ...active };
   const preset = form.get('tiers.t2Preset') ?? undefined;
   // The form shows the old preset's caps. Switching preset must not carry them over as overrides of the new one.
@@ -261,7 +273,7 @@ function draftFrom(form: URLSearchParams, active: Record<string, unknown>, errs:
   for (const f of FIELDS) {
     delete draft[f.path];
     const v = parseField(f, form, errs);
-    if (v !== undefined && !same(v, fileDefault(f, preset)) && !(f.path.startsWith('tiers.t2.') && preset !== oldPreset && same(v, fileDefault(f, oldPreset)))) draft[f.path] = v;
+    if (v !== undefined && !same(v, fileDefault(f, preset, customs)) && !(f.path.startsWith('tiers.t2.') && preset !== oldPreset && same(v, fileDefault(f, oldPreset, customs)))) draft[f.path] = v;
   }
   return draft;
 }
@@ -282,11 +294,12 @@ export async function settingsPreview(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const { id, o } = activeOverrides(ctx.db);
   const errs = new Map<string, string[]>();
-  const draft = draftFrom(ctx.form, o, errs);
+  const customs = customsOf(ctx.db);
+  const draft = draftFrom(ctx.form, o, errs, customs);
   let other: string[] = [];
   let next: Config | null = null;
   if (!errs.size) {
-    const r = effectiveConfig(fileRaw, draft);
+    const r = effectiveConfig(fileRaw, draft, customs);
     if ('errors' in r) other = matchErrors(r.errors, errs);
     else next = r.config;
   }
@@ -297,7 +310,7 @@ export async function settingsPreview(ctx: Ctx): Promise<Res> {
   const pub = newlyPublic(cfg, next);
   return layout(ctx, 'Review changes', '/settings', html`<p>These values change. Nothing is saved until you press the button.</p>
 <div class="scroll"><table><thead><tr><th>Setting</th><th>File default</th><th>Now</th><th>New</th></tr></thead><tbody>
-${paths.map((p) => html`<tr><td><code>${p}</code></td><td>${show(fileDefault(FIELDS.find((f) => f.path === p)!, String(draft['tiers.t2Preset'] ?? '') || undefined))}</td><td>${p in o ? show(o[p]) : 'file'}</td><td>${p in draft ? show(draft[p]) : 'file'}</td></tr>`)}
+${paths.map((p) => html`<tr><td><code>${p}</code></td><td>${show(fileDefault(FIELDS.find((f) => f.path === p)!, String(draft['tiers.t2Preset'] ?? '') || undefined, customs))}</td><td>${p in o ? show(o[p]) : 'file'}</td><td>${p in draft ? show(draft[p]) : 'file'}</td></tr>`)}
 </tbody></table></div>
 <form method="post" action="/settings/save">${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
 ${pub.length ? html`<div class="field"><label for="cp">Confirm public posting</label><div><input id="cp" type="checkbox" name="confirm_public" value="1"> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</div></div>` : ''}
@@ -318,7 +331,7 @@ export async function settingsSave(ctx: Ctx): Promise<Res> {
     return fail(['The draft was not understood. Start again from Settings.']);
   }
   if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return fail(['The draft was not understood. Start again from Settings.']);
-  const r = effectiveConfig(fileRaw, draft as Record<string, unknown>);
+  const r = effectiveConfig(fileRaw, draft as Record<string, unknown>, customsOf(ctx.db));
   if ('errors' in r) return fail(r.errors);
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const pub = newlyPublic(cfg, r.config);
@@ -482,7 +495,8 @@ ${audits.slice(0, 50).map((a) => html`<tr><td>${fmtTs(a.ts)}</td><td>${a.actor}<
 export function historyActivate(ctx: Ctx): Res {
   const id = idOrNull(ctx.form.get('id'));
   if (id !== null && !ctx.db.prepare('SELECT 1 FROM config_versions WHERE id = ?').get(id)) return notFound(ctx);
-  activateConfig(ctx.db, id, ctx.now);
+  const r = activateConfig(ctx.db, id, ctx.now);
+  if (r) return { ...layout(ctx, 'Not activated', '/history', html`<div class="error-box" role="alert"><ul>${r.errors.map((x) => html`<li>${x}</li>`)}</ul></div><p><a href="/history">Back to history</a></p>`), status: 422 };
   return redirect(id === null ? '/history?ok=file' : `/history?active=${id}`);
 }
 

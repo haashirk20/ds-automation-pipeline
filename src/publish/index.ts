@@ -118,7 +118,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
   // Skip overdue rows and rows of failed slots, one alert per slot.
   const doomed = db.prepare(`SELECT p.slot_id, p.platform, p.handle_json, CASE WHEN s.status = 'failed' THEN 'slot failed' ELSE 'too late' END AS why
     FROM publications p LEFT JOIN slots s ON s.id = p.slot_id
-    WHERE p.state = 'pending' AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; handle_json: string | null; why: string }[];
+    WHERE p.state = 'pending' AND COALESCE(s.hold, '') != 'waiting' AND NOT (s.kind = 'manual' AND s.status IN ('planned','producing')) AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; handle_json: string | null; why: string }[];
   for (const d of doomed) {
     const state = d.handle_json ? 'needs_attention' : 'skipped';
     const why = d.handle_json ? `${d.why}, a post request may have been sent` : d.why;
@@ -128,7 +128,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     else await alert(db, 'publish_skipped', d.slot_id, `${d.slot_id} skipped: ${d.why}`, now);
   }
 
-  const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];
+  const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND COALESCE(s.hold, 'none') IN ('none', 'approved') AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];
   for (const p of due) {
     // Switched off after planning: nothing was sent for this row, so it is skipped. A row with a handle resumes.
     if (!platformCfg(p).enabled && !p.handle_json) {

@@ -11,6 +11,7 @@ import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
+import { pickTrack, musicGainDb } from '../music/tracks.ts';
 import { chooseTier, generateClip, rejectClip } from '../router/index.ts';
 import { ClipPendingError } from '../router/errors.ts';
 import { ClaimLostError, DeferSlotError, before, commitSlot, ensureIngest, getCopy, holdOf, pickBrief, yearsOf, type ProduceDeps, type Slot } from './produce.ts';
@@ -32,7 +33,7 @@ const storedConcept = (json: string | null): UgcConcept | null => {
 // The oldest last use wins, then the path. `localDate` is the day of the slot being produced.
 // A stored concept must still pass every check against the current brief: its spoken line is in the clip and cannot change.
 export function pickStoredClip(db: Db, config: Config, brief: Brief, now: Date, localDate = localDateOf(now, config.timezone)): { clipFile: string; concept: UgcConcept; slotId: string } | null {
-  const rows = db.prepare("SELECT id, local_date, master_json FROM slots WHERE status IN ('ready','done') AND product_handle = ? AND master_json IS NOT NULL ORDER BY local_date, idx").all(brief.product.handle) as { id: string; local_date: string; master_json: string }[];
+  const rows = db.prepare("SELECT id, local_date, master_json FROM slots WHERE status IN ('ready','done') AND (hold IS NULL OR hold = 'approved') AND product_handle = ? AND master_json IS NOT NULL ORDER BY local_date, idx").all(brief.product.handle) as { id: string; local_date: string; master_json: string }[];
   const dataDir = path.resolve(env.dataDir());
   const years = yearsOf(config, now);
   const byFile = new Map<string, { lastUse: string; concept: UgcConcept; slotId: string }>();
@@ -65,14 +66,21 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
   const ugcOut = path.join(attemptDir, 'ugc.mp4');
   hold();
 
+  // One pick per run: the least recently used ticked track.
+  const track = pickTrack(db);
   // Render and check one clip; null when QA fails.
-  const render = async (clip: string, caption: string) => {
-    await d.renderUgc({ clip, caption, config, outFile: ugcOut, signal: d.signal });
+  let mixed = false; // the last render is the one committed
+  const render = async (clip: string, caption: string, line: string, firstShotSeconds: number) => {
+    let music = null;
+    mixed = false;
+    if (track && existsSync(track.file)) music = { file: track.file, gainDb: musicGainDb(track, config.ugc.music.volumeDb), duckDb: config.ugc.music.duckDb, duckUntilMs: line.trim() ? firstShotSeconds * 1000 + 250 : 0 }, mixed = true;
+    else if (track) log.warn('music file is gone, rendering without music', { slot: slot.id, track: track.sha256 }); // a deleted track never uses up an attempt
+    await d.renderUgc({ clip, caption, config, outFile: ugcOut, music, signal: d.signal });
     const qa = await d.qa(ugcOut);
     return qa.pass ? qa : null;
   };
 
-  const tier = await chooseTier(db, config, d.providers, slot.id, now);
+  const tier = await chooseTier(db, config, d.providers, slot.id, now, slot.kind === 'manual' ? 't2' : undefined);
   hold();
   let made: Rendered | null = null;
   let why = 'tier 0 was chosen'; // why no new clip was made, for the owner
@@ -137,6 +145,11 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         reject('clip failed the size or length check');
         continue;
       }
+      // The spoken line needs the clip's own sound, and the music is mixed under it: a silent clip would carry bare music.
+      if (!(await d.clipSound(clipFile, info.seconds).catch(() => false))) {
+        reject('clip has no sound');
+        continue;
+      }
       let check;
       try {
         check = await d.checkClip(db, config, { clipFile, refImages: images.slice(0, refShots.length), brief, concept }, now, slot.id);
@@ -151,7 +164,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         log.warn('clip failed the frame check, trying again', { slot: slot.id, problems: check.problems });
         continue;
       }
-      const qa = await render(clipFile, concept.caption);
+      const qa = await render(clipFile, concept.caption, concept.line, concept.shots[0].seconds);
       hold();
       if (!qa) {
         reject('the rendered video failed QA');
@@ -163,6 +176,14 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
 
   // No new clip: post a stored one again.
   let reusedFrom: string | null = null;
+  if (!made && slot.kind === 'manual') {
+    // A post the owner asked for is never a repeat of an old clip.
+    const msg = 'no new clip: ' + (tier === 't0' ? 'the clip provider is signed out or the monthly clip cap is reached' : why);
+    if (!outage) throw new Error(msg);
+    const e = new DeferSlotError(`${msg}: the model is unavailable`);
+    e.counted = ((db.prepare('SELECT error FROM slots WHERE id = ?').get(slot.id) as { error: string | null }).error ?? '').includes(e.message);
+    throw e;
+  }
   if (!made) {
     const old = pickStoredClip(db, config, brief, now, slot.local_date);
     if (!old) {
@@ -174,7 +195,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
       throw e;
     }
     await alert(db, 'degraded', slot.id, `${slot.id} posts the clip of ${old.slotId} again: ${why}`, now);
-    const qa = await render(old.clipFile, old.concept.caption);
+    const qa = await render(old.clipFile, old.concept.caption, old.concept.line, old.concept.shots[0].seconds);
     if (!qa) throw new Error(`QA failed on the reused clip from ${old.slotId}`);
     made = { concept: old.concept, clipFile: old.clipFile, file: ugcOut, qa };
     reusedFrom = old.slotId;
@@ -186,8 +207,9 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
   const platforms = enabledPlatforms(config) as PlatformName[];
   for (const p of platforms) copyFileSync(made.file, path.join(attemptDir, `${p}.mp4`));
   commitSlot(db, slot, dir, attemptDir, token, {
-    handle, hookId: null, tier: reusedFrom ? 't0' : tier, master: JSON.stringify({ mode: 'ugc', concept: made.concept, clipFile: path.relative(path.resolve(env.dataDir()), made.clipFile), reusedFrom }),
+    handle, hookId: null, tier: reusedFrom ? 't0' : tier, master: JSON.stringify({ mode: 'ugc', concept: made.concept, clipFile: path.relative(path.resolve(env.dataDir()), made.clipFile), reusedFrom, music: mixed && track ? { sha256: track.sha256, name: track.name } : null }),
     platforms, qaOf: Object.fromEntries(platforms.map((p) => [p, made.qa])), ai: { visuals: true, voice: true, music: false }, copy,
+    hold: slot.kind === 'manual' ? 'waiting' : null, heldAt: slot.kind === 'manual' ? (d.clock?.() ?? now).toISOString() : null, musicSha: mixed ? track?.sha256 ?? null : null,
   });
   log.info('slot produced', { slot: slot.id, seconds: Math.round((Date.now() - t0) / 100) / 10, reusedFrom });
 }

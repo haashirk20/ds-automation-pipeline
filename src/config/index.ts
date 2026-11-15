@@ -5,11 +5,11 @@ import raw from '../../config/pipeline.config.ts';
 import { SafeZone } from '../contracts.ts';
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM');
-const base = { handle: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1), cta: z.string().min(1), safe: SafeZone };
+const base = { handle: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['public', 'private']), slots: z.array(hhmm).min(1).max(20), cta: z.string().min(1), safe: SafeZone };
 
 // The request sets these itself; a preset may not.
-const FIXED_PARAMS = ['model', 'prompt', 'aspect_ratio', 'duration', 'use_unlim', 'get_cost', 'medias'];
-const tierSchema = z.object({
+export const FIXED_PARAMS = ['model', 'prompt', 'aspect_ratio', 'duration', 'use_unlim', 'get_cost', 'medias'];
+export const tierSchema = z.object({
   provider: z.string().min(1), model: z.string().min(1), usdPerClip: z.number().positive(),
   params: z.record(z.string(), z.unknown()).refine((p) => !FIXED_PARAMS.some((k) => Object.hasOwn(p, k)), `must not set ${FIXED_PARAMS.join(', ')}`).default({}), maxCredits: z.number().positive().optional(), keepCredits: z.number().min(0).optional(),
 });
@@ -39,7 +39,8 @@ const schema = z
     }),
     brand: z.object({ name: z.string().min(1).nullable(), logo: z.string().min(1).nullable() }),
     creative: z.object({ mode: z.enum(['ugc', 'ad']), voices: z.array(z.string()).min(1), music: z.object({ enabled: z.boolean(), gainDb: z.number().max(0) }) }),
-    ugc: z.object({ reuseAfterDays: z.number().int().min(1), captionPx: z.number().min(56).max(110) }),
+    ugc: z.object({ reuseAfterDays: z.number().int().min(1), captionPx: z.number().min(56).max(110), music: z.object({ volumeDb: z.number().min(-40).max(0), duckDb: z.number().min(-30).max(0) }) }),
+    approval: z.object({ manualPerDay: z.number().int().min(0).max(10), expireHours: z.number().min(1).max(168) }),
     llm: z.object({
       models: z.object({ script: z.string(), copy: z.string(), qa: z.string(), escalation: z.string() }),
       monthlyCapUsd: z.number().positive(),
@@ -55,6 +56,8 @@ const schema = z
       maxJobsPerSlot: z.number().int().min(1),
       t1: tierSchema,
       t2: tierSchema,
+      usdPerCredit: z.number().positive(),
+      customMaxCredits: z.number().positive(),
       t2Presets: z.record(z.string(), tierSchema).default({}),
     }),
     ops: z.object({ summaryAt: hhmm, snapshotAt: hhmm, keepDays: z.number().int().min(1), diskAlertPercent: z.number().min(1).max(100) }),

@@ -178,7 +178,10 @@ content" label). Branded content cannot be private, so the `SELF_ONLY` test post
 `brand_content_toggle` off.
 
 **Music.** Business use is limited to TikTok's Commercial Music Library or audio we hold rights to
-(unverified against TikTok's own page). The pipeline only ships audio it owns or CC0 tracks.
+(unverified against TikTok's own page). The pipeline adds no music of its own in `ugc` mode. It mixes
+only tracks the owner uploads and confirms the rights to (D-34): a match can mute or block a post,
+pass its earnings to the rights holder, or strike the account. In `ad` mode the bed is synthesized
+and owned (D-16).
 
 **Canada.** No developer or API restriction found.
 

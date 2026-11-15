@@ -39,6 +39,10 @@ sources are in `PLATFORMS.md` and `COSTS.md`. Dates are when the decision was ma
 | D-30 | Video generation | Higgsfield's MCP server, on the owner's subscription credits |
 | D-31 | Retry rules for a slot | Outages wait without using an attempt; other errors after a paid clip retry once |
 | D-32 | Admin GUI | A loopback web service over the shared database |
+| D-33 | Posts on demand | Made now, held until the owner presses Post |
+| D-34 | Owner music | Uploaded on the admin page, mixed under the clip's sound |
+| D-35 | Video models | Added on the admin page, approved by one held test post; ledger records the live quote |
+| D-36 | Overview diagram | ASCII, not Mermaid |
 
 ---
 
@@ -298,8 +302,9 @@ claim it, every slot gets a different bed, and it is not AI-generated, so it doe
 AI-music disclosure. It costs nothing and adds no asset to store.
 
 **Cost of the choice.** It is a simple bed, not a produced track. It plays quietly under the voice.
-The owner can drop licensed tracks into `assets/music/` with a manifest entry and they take
-priority. `music.enabled: false` turns music off.
+`music.enabled: false` turns music off. (An earlier draft said the owner could drop licensed tracks
+into `assets/music/` with a manifest entry. That was never built. Owner tracks are D-34, `ugc` mode
+only, uploaded on the admin page.)
 
 **Revisit when.** The owner supplies tracks, or the bed is judged too plain. ACE-Step run once on a
 rented GPU is the next step up, and its output would count as AI music for disclosure.
@@ -440,7 +445,8 @@ caption and one spoken line ("It's freezing in here").
 **What follows from it.**
 - The voice comes from the video model, in the scene. D-05 (Kokoro), D-06 (caption timing) and D-16
   (music beds) apply to `ad` mode only. Reference 1 carries a commercial song; the pipeline adds no
-  music, because it has no licence to any.
+  music of its own. Since 2026-11-14 the owner may upload tracks they hold the rights to, and `ugc`
+  mode mixes them under the clip (D-34).
 - One render serves every platform (D-17 applies to `ad` mode only): the caption sits below the
   largest top safe zone, and nothing else is drawn.
 - Every video is AI-generated, so the AI disclosure flag is always on (D-20).
@@ -570,9 +576,10 @@ closely and kept the logo right. Seedance 2.0 fast looked most like phone footag
 out glossy and lit the button blue. Seedance 2.0 Mini misspelled the logo and duplicated the
 product. All four spoke the line correctly. **Default: Wan 3.0 at 720p**, 60 clips for about
 1,575 credits. Seedance 2.0 fast is the alternative at about 2,250.
+Four more presets and the admin page's custom models are in D-35.
 
 **Budget rules.** The ledger stays in dollars: `usdPerClip` is the quoted credits times what a
-credit costs on the plan ($65 for 3,000). Before each job the provider reads the live balance and
+credit costs on the plan ($65 for 3,000). Since D-35 the row records the live quote times that rate. Before each job the provider reads the live balance and
 the server's quote. A quote above `maxCredits` stops the job, and so does a job that would leave
 fewer than `keepCredits`. `keepCredits` is set above Higgsfield's auto-refill threshold (300), so
 the pipeline cannot cause an automatic purchase if the owner turns auto-refill on.
@@ -582,8 +589,8 @@ the pipeline cannot cause an automatic purchase if the owner turns auto-refill o
 - A fetch that fails for any reason other than the job having ended keeps the ledger row
   `submitted`. The slot waits and resumes the same job. Only a job the server reports as ended is
   marked `failed`.
-- Known gap: the ledger records the configured `usdPerClip`, not the live quote. The architect's
-  finding 8; not fixed.
+- The architect's finding 8, that the ledger recorded the configured `usdPerClip` and not the live
+  quote, is closed by D-35.
 
 **Risks.**
 - `generate_video` has no idempotency key. A call whose outcome is unknown is never repeated, so a
@@ -680,6 +687,94 @@ the OAuth tokens; its code never queries them (a test checks this).
 owner wants to try a prompt from the page.
 
 **Later hardening.** Move `oauth_tokens` to a separate database file on a volume the admin does not mount.
+
+**Residual risk (6c review).** The Music page parses untrusted media with FFmpeg inside this container, which can read the OAuth tokens in the database. A parser bug that gave code execution there could read them. What limits it: the demuxer is forced from the first 12 bytes (`-f`), `-format_whitelist mov,wav,mp3` and `-codec_whitelist aac,mp3,mp3float,pcm_s16le,pcm_s24le,h264,mjpeg,png` (the video codecs are there only because a picture or video stream in an mp4 is opened while probing), `-protocol_whitelist file`, `cap_drop: [ALL]`, `no-new-privileges`, a read-only root, `pids_limit: 64`, `mem_limit: 640m`, one upload at a time and a 40 MB cap. Longer-term fix: parse uploads in a separate container with no database volume (only the music volume), and have the admin move the result into place.
+
+
+## D-33 Posts on demand: made now, held until the owner presses Post (2026-11-14)
+
+**Chosen.** The Posts page has a "Make a new post" button.
+- It inserts a manual slot (`slots.kind = 'manual'`, id `<date>#101` and up) with one pending publication per enabled platform, scheduled at the request time. The tick produces it before planned slots, through the normal producer, so the same price, cap and ledger rules apply.
+- A manual slot always makes a new clip: it never reuses a stored one, and with no new clip it fails and shows why.
+- On commit it is `ready` with `hold = 'waiting'`. `publishDue` does not claim its rows while it waits, and the lateness rule does not skip them.
+- Post moves the rows to `MAX(scheduled_at, now)` and sets `hold = 'approved'`. Discard, or no answer within `approval.expireHours` (24), skips the rows and sets `discarded` or `expired`. Each is one compare-and-set transaction on `hold = 'waiting'`.
+- At most one manual slot is in production at a time. That makes a double click or a second tab harmless. At most `approval.manualPerDay` (3) are made a day.
+- Discarded and expired clips are never reused, and housekeeping deletes them after `keepDays`.
+
+**Alternatives.**
+- A new slot or publication state: SQLite cannot alter a CHECK constraint, so this needs a table rebuild under live foreign keys.
+- Creating the publications only on Post: the slot would turn `done` at once, and the "too late" rule would fail it.
+- The admin asking the pipeline through a request table: one more minute of delay and more code, for no safety gain, since every transition is one guarded statement.
+- Holding planned slots: a missed approval would cost a scheduled post.
+
+**Why.** The owner asked on 2026-11-14 for a button that makes a video now and posts only after review. Held rows are never claimed, so they never carry a handle. Skipping them can never hide a sent post.
+
+**Tests.** The hold, approve, discard and expiry tests are in `tests/holds.test.ts`.
+
+**Revisit when.** The owner wants to edit the caption before posting, or wants planned slots reviewed too.
+
+## D-34 Owner music: uploaded on the admin page, mixed under the clip's sound (2026-11-14)
+
+**Chosen.**
+- **Upload.** The owner uploads mp3, m4a, mp4 or wav files (at most 40 MB, 5 to 600 s, at most 50 tracks) on the Music page and ticks the tracks to use. The admin container, which holds no API keys, chooses the demuxer from the file's first bytes, never from its name. It probes the file and transcodes it to AAC at `data/music/<sha256 of the upload>.m4a`, with metadata stripped, and measures its loudness.
+- **Rotation.** Each `ugc` render takes the ticked track used least recently.
+- **Mix.** Remotion's `<Audio loop>` plays the track under the clip's own sound, at `ugc.music.volumeDb` (−18) relative to −14 LUFS. During the first shot, where the prompt places the spoken line, it dips by a further `ugc.music.duckDb` (−10 dB) with 150 ms ramps, and it fades in and out. The existing loudness pass brings the mix to −14 LUFS.
+- A track shorter than the video loops. With no track ticked there is no music. A deleted track never breaks a render or a held post.
+
+**Alternatives.**
+- An FFmpeg sidechain compressor after the render: the FFmpeg that Remotion ships has no `sidechaincompress`, `acompressor`, `afade` or `aloop`.
+- Ducking on measured speech: the clip's room sound has no silences to find.
+- Probing uploads in the pipeline container: that is the process that holds the keys.
+- The synthesized bed (D-16) when nothing is ticked: kept as a later option.
+- Probing with an `ipod` muxer or `lavfi` video sources in tests: Remotion's FFmpeg has neither, so the tests build their media with the muxers and sources it does have (`mp4`, `mp3`, `wav`, `sine`, `anullsrc`).
+
+**Why.** The owner asked for it on 2026-11-14. The spoken line sits in shot 1 by construction (`buildClipPrompt`), so the duck window comes from the concept with no extra analysis.
+
+**Where the code lives.** The admin has its own `musicRoot` and `inside()` path check in `src/admin/media.ts`, so it never loads Remotion. The pipeline side is `src/music/tracks.ts`, `templates/music-volume.ts` and `templates/Ugc.tsx`.
+
+**Residual risk.** Untrusted media is parsed in the admin container, which can read the OAuth tokens (D-32 lists the limits and the fix: a parsing container with no database volume). **Risk.** Copyright: the page says that a matched track can mute or block a post or strike the account, and requires a rights confirmation for each upload. If the model speaks outside shot 1, the music does not dip there. Music files are not in the backups.
+
+**Revisit when.** A post is muted or claimed, or a spoken line is heard over undipped music.
+
+## D-35 Video models from the admin page; the ledger records the live quote (2026-11-14)
+
+**Chosen.**
+- **Adding a model.** The Models page adds a Higgsfield model: id, options, the most credits for one clip, and credits to keep. Rows are immutable.
+- **Guardrails, applied by the page and again by the loader:**
+  - id pattern `^[a-z][a-z0-9_]{1,63}$`;
+  - options from a fixed list only (`resolution`, `mode`, `generate_audio`, `sound`, `bitrate_mode`, `genre`, `enable_thinking`), as primitive values, at most 6 keys;
+  - resolution 480p, 720p or 1080p, no `video_edit` or `video_extension`, sound never off;
+  - `maxCredits` at most `tiers.customMaxCredits` (120); `keepCredits` at least the file's 350.
+- **Price.** A custom model's price for the cap checks is `maxCredits × tiers.usdPerCredit`. The provider's existing quote check refuses its first job if the live quote is above the limit.
+- **Approval.** A new model can be used only in a manual post (D-33). Pressing Post on one marks it approved, and only approved models can be chosen in Settings.
+- **Presets.** Four file presets were added, quoted live on 2026-11-14 with `get_cost` for 15 s, 9:16 and no reference images (the pipeline quotes again with images before every paid call):
+
+  | Preset | Credits | `usdPerClip` | `maxCredits` |
+  |---|---|---|---|
+  | `seedance_2_0_std_720p` | 67.5 | $1.47 | 75 |
+  | `seedance_2_5_flash_720p` | 75 | $1.63 | 83 |
+  | `seedance_2_5_720p` | 105 | $2.28 | 116 |
+  | `kling_o3_std` | 18.75 | $0.41 | 21 |
+
+  The two Seedance 2.5 presets use `mode: omni_reference`, which reference images need. At $2.28 a clip the $52 monthly cap allows about 22 clips, so the cap stops `seedance_2_5_720p` mid-month.
+- **Ledger.** It now records the exact quote the paid call was sent with, times `tiers.usdPerCredit` ($65 / 3,000), and stores the credits. The reserved row keeps the upper bound (the larger of `usdPerClip` and `maxCredits` x `usdPerCredit`, also used by the cap check) until then.
+
+**Alternatives.**
+- A pipeline job that quotes a new model before its trial: a second process calling Higgsfield could use a rotated refresh token twice and revoke the sign-in (`higgsfield-auth.ts`, the refresh shortcut).
+- Free-form JSON options: the catalogue has options that bill differently or reach other features (`video_edit`, `draft_job_id`, `avatar_ids`).
+- Holding the first planned slot of a new model: a missed approval costs a scheduled post.
+
+**Why.** The owner asked to try other models without editing files. Catalogue facts were read with `models_explore` on 2026-11-14. `kling3_0` takes no reference images and is not offered.
+
+**Revisit when.** Higgsfield changes its tools or prices, or a model needs an option outside the list.
+
+## D-36 Overview diagram: ASCII, not Mermaid (2026-11-14)
+
+**Chosen.** The end-to-end diagram in ARCHITECTURE.md is plain text in a `text` fence, at most 98 columns. A table lists every prompt and where it is used.
+
+**Alternatives.** Mermaid, which renders only on GitHub and is hard to read as source. An image, which cannot be diffed.
+
+**Why.** The owner and the build agents read these documents in a terminal.
 
 
 ## Open questions for the owner

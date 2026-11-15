@@ -44,13 +44,13 @@ export function buildSummary(db: Db, config: Config, now: Date): string {
   for (const p of pubs) L.push(`  #${p.idx} ${p.platform}: ${p.state}${p.post_url ? ' ' + p.post_url : ''}`);
 
   L.push(`Today (${today}):`);
-  const slots = db.prepare('SELECT idx, status, error, master_json FROM slots WHERE local_date = ? ORDER BY idx').all(today) as { idx: number; status: string; error: string | null; master_json: string | null }[];
+  const slots = db.prepare('SELECT idx, status, error, master_json, kind, hold FROM slots WHERE local_date = ? ORDER BY idx').all(today) as { idx: number; status: string; error: string | null; master_json: string | null; kind: string; hold: string | null }[];
   if (!slots.length) L.push('  no slots');
   for (const s of slots) {
     let reused: string | null = null;
     try { reused = JSON.parse(s.master_json ?? 'null')?.reusedFrom ?? null; } catch { /* no master */ }
     const note = reused ? `, reused from ${reused}` : s.status === 'failed' && s.error ? `: ${s.error}` : '';
-    L.push(`  #${s.idx} ${s.status}${note}`);
+    L.push(`  #${s.idx}${s.kind === 'manual' ? ' manual' : ''} ${s.status}${s.hold === 'waiting' ? ', waiting for approval' : ''}${note}`);
   }
 
   const spendLine = (label: string, d: Date, caps: boolean) => {
@@ -59,6 +59,9 @@ export function buildSummary(db: Db, config: Config, now: Date): string {
   };
   L.push(spendLine('Spend this month', now, true));
   if (today.endsWith('-01')) L.push(spendLine('Spend last month', new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15)), false));
+
+  const held = db.prepare("SELECT COUNT(*) AS n, MIN(held_at) AS oldest FROM slots WHERE status = 'ready' AND hold = 'waiting'").get() as { n: number; oldest: string | null };
+  if (held.n) L.push(`Waiting for approval: ${held.n} (oldest expires ${new Date(Date.parse(held.oldest!) + config.approval.expireHours * 3600_000).toISOString()})`);
 
   const attention = (db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const since = new Date(now.getTime() - 86400000).toISOString();

@@ -6,6 +6,7 @@ import { parseConfig } from '../src/config/index.ts';
 import { activateConfig, effectiveConfig, limits, loadEffectiveConfig, resolveConfig, saveConfig } from '../src/config/overrides.ts';
 import { migrate } from '../src/db/index.ts';
 import { makeProducer, run } from '../src/scheduler/loop.ts';
+import { loadCustomModels } from '../src/config/models.ts';
 import { fresh } from './helpers.ts';
 
 const NOW = new Date('2026-11-12T17:20:00Z');
@@ -139,8 +140,54 @@ test('the next tick picks up a new version; a snapshot taken earlier keeps the o
 
 test('migrate re-reads the version inside the transaction', () => {
   const log: string[] = [];
-  const versions = [7, 7, 7, 7, 7, 7, 7, 7, 8]; // another process applies 008 between the first read and BEGIN IMMEDIATE
-  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? 8 }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
+  const versions = [8, 8, 8, 8, 8, 8, 8, 8, 8, 9]; // another process applies 009 between the first read and BEGIN IMMEDIATE
+  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? 9 }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
   migrate(fake as unknown as DatabaseSync);
   assert.deepEqual(log, ['BEGIN IMMEDIATE', 'ROLLBACK']);
+});
+
+function edgeCheck(p: string, ok: unknown, over: unknown) {
+  good({ [p]: ok });
+  bad({ [p]: over }, new RegExp(p.replaceAll('.', '\\.')));
+}
+
+test('new editable fields respect their limits', () => {
+  edgeCheck('ugc.music.volumeDb', -6, -5.9);
+  edgeCheck('ugc.music.volumeDb', -30, -30.1);
+  edgeCheck('ugc.music.duckDb', 0, 0.1);
+  edgeCheck('ugc.music.duckDb', -20, -20.1);
+  edgeCheck('approval.manualPerDay', 3, 4);
+  assert.equal(good({ 'approval.manualPerDay': 0 }).approval.manualPerDay, 0);
+  bad({ 'approval.expireHours': 5 }, /cannot be changed/);
+  bad({ 'tiers.usdPerCredit': 1 }, /cannot be changed/);
+  bad({ 'tiers.customMaxCredits': 1 }, /cannot be changed/);
+});
+
+test('custom:<id> is accepted only when the approved custom is passed', () => {
+  const db = fresh();
+  const add = (approved: boolean) => Number(db.prepare('INSERT INTO video_models (name, model, params_json, max_credits, keep_credits, created_at, approved_at) VALUES (?,?,?,?,?,?,?)').run('m', 'wan3_0', '{"resolution":"720p"}', 40, 350, 't', approved ? 't' : null).lastInsertRowid);
+  const a = add(true), b = add(false);
+  const customs = loadCustomModels(db, parseConfig(raw), { approvedOnly: true });
+  const r = effectiveConfig(raw, { 'tiers.t2Preset': `custom:${a}` }, customs);
+  assert.ok('config' in r);
+  assert.equal(r.config.tiers.t2.maxCredits, 40);
+  assert.ok('errors' in effectiveConfig(raw, { 'tiers.t2Preset': `custom:${a}` }));
+  assert.ok('errors' in effectiveConfig(raw, { 'tiers.t2Preset': `custom:${b}` }, customs));
+  assert.ok('errors' in effectiveConfig(raw, { 'tiers.t2Preset': `custom:${a}`, 'tiers.t2.maxCredits': 41 }, customs));
+  assert.equal(limits(raw, `custom:${a}`, customs)['tiers.t2.maxCredits'].max, 40);
+  assert.ok('id' in saveConfig(db, { 'tiers.t2Preset': `custom:${a}` }, null, '', NOW));
+  assert.ok('errors' in saveConfig(db, { 'tiers.t2Preset': `custom:${b}` }, 1, '', NOW));
+});
+
+test('resolveConfig refuses a version that names an unapproved custom and sends config_invalid', async () => {
+  const db = fresh();
+  const id = Number(db.prepare("INSERT INTO video_models (name, model, params_json, max_credits, keep_credits, created_at) VALUES ('m','wan3_0','{}',40,350,'t')").run().lastInsertRowid);
+  db.prepare("INSERT INTO config_versions (id, created_at, overrides_json) VALUES (1,'t',?)").run(JSON.stringify({ 'tiers.t2Preset': `custom:${id}` }));
+  db.prepare("INSERT INTO kv (key, value) VALUES ('config_active','1')").run();
+  const r = await resolveConfig(db, NOW);
+  assert.match(String(r.version), /^refused: .*unknown preset/);
+  assert.equal(r.config.tiers.t2.model, 'wan3_0');
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'config_invalid'").get() as any).n, 1);
+  db.prepare('UPDATE video_models SET approved_at = ?').run('t');
+  assert.equal((await resolveConfig(db, NOW)).version, 1);
 });

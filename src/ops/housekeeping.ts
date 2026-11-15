@@ -3,6 +3,7 @@ import path from 'node:path';
 import { env, type Config } from '../config/index.ts';
 import { kvGet, kvSet, type Db } from '../db/index.ts';
 import { addDays, localDateOf, localHHMM } from '../scheduler/time.ts';
+import { sweepMusic } from '../music/tracks.ts';
 import { alert } from './alert.ts';
 import { log } from './log.ts';
 
@@ -30,7 +31,7 @@ const slotDir = (outDir: string, date: string, id: string) => {
 };
 const entries = (dir: string) => { try { return readdirSync(dir); } catch { return []; } };
 
-type SlotRow = { id: string; local_date: string; status: string; updated_at: string; master_json: string | null };
+type SlotRow = { id: string; local_date: string; status: string; updated_at: string; master_json: string | null; hold: string | null };
 
 export function housekeeping(db: Db, config: Config, now: Date): { attempts: number; renders: number; clips: number; errors: string[] } {
   const dataDir = path.resolve(env.dataDir());
@@ -41,7 +42,7 @@ export function housekeeping(db: Db, config: Config, now: Date): { attempts: num
   const cutoffMs = now.getTime() - keep * 86400000;
   const staleClaimMs = now.getTime() - config.render.produceTimeoutMinutes * 60000;
   const out = { attempts: 0, renders: 0, clips: 0, errors: [] as string[] };
-  const slots = db.prepare('SELECT id, local_date, status, updated_at, master_json FROM slots').all() as SlotRow[];
+  const slots = db.prepare('SELECT id, local_date, status, updated_at, master_json, hold FROM slots').all() as SlotRow[];
   // One bad entry must not stop the rest.
   const tryEach = (what: string, f: () => void) => { try { f(); } catch (e) { out.errors.push(`${what}: ${e}`); } };
 
@@ -70,6 +71,7 @@ export function housekeeping(db: Db, config: Config, now: Date): { attempts: num
   const hold = (f: unknown) => { if (typeof f === 'string' && f) keepClips.add(path.resolve(dataDir, f)); }; // old rows hold absolute paths
   for (const s of slots) {
     if (s.status !== 'ready' && s.status !== 'done') continue;
+    if (s.hold === 'discarded' || s.hold === 'expired') continue; // never posted: its clip goes after keepDays
     try { hold(JSON.parse(s.master_json ?? 'null')?.clipFile); } catch { /* unreadable master: nothing to hold */ }
   }
   // A paid clip of a slot still being made is not in a master yet.
@@ -82,6 +84,7 @@ export function housekeeping(db: Db, config: Config, now: Date): { attempts: num
       if (safeRemove(f, clipsDir)) out.clips++;
     });
   }
+  tryEach('music', () => { out.errors.push(...sweepMusic(db, now).errors); });
   return out;
 }
 

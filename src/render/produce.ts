@@ -15,12 +15,13 @@ import { LlmCapError, LlmRefusalError, RetryableLlmError } from '../llm/client.t
 import { makeBed } from '../music/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
-import { captionStyleOk, runQa } from '../qa/index.ts';
+import { captionStyleOk, clipHasSound, runQa } from '../qa/index.ts';
 import { checkClip } from '../qa/vision.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { listBriefs, runIngest } from '../shopify/index.ts';
 import { synthesize } from '../tts/index.ts';
+import { slotTierDef } from '../config/models.ts';
 import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
 import { ClipPendingError } from '../router/errors.ts';
 import { ff } from './ffmpeg.ts';
@@ -84,6 +85,7 @@ export type ProduceDeps = {
   checkClip: typeof checkClip;
   renderUgc: typeof renderUgc;
   probeClip: (file: string) => Promise<{ width: number; height: number; seconds: number } | null>;
+  clipSound: (file: string, seconds: number) => Promise<boolean>;
   clock?: () => Date; // the time the producer ends; the retry gap counts from it (default: `now`)
   signal?: AbortSignal; // SIGTERM from the parent: stop rendering and leave the slot for stale recovery
   ingestDeadlineMs: number;
@@ -99,7 +101,7 @@ const MOTION_PROMPT = 'Slow, gentle camera push-in. Keep the person, the garment
 
 const SPEEDS = [1.0, 1.06, 1.12];
 export const DAY_MS = 24 * 3600 * 1000;
-export type Slot = { id: string; local_date: string; idx: number };
+export type Slot = { id: string; local_date: string; idx: number; kind: 'planned' | 'manual'; video_model: string | null };
 export const before = 'local_date < ? OR (local_date = ? AND idx < ?)'; // slots ahead of this one, in order
 
 // The store could not be read and there is no stored brief: the slot goes back to 'planned'.
@@ -177,15 +179,15 @@ const isOutage = (e: unknown, refusal = false) => e instanceof LlmCapError || e 
 // Fenced by the claim time. `<platform>.mp4` must already exist in attemptDir.
 export function commitSlot(
   db: Db, slot: Slot, dir: string, attemptDir: string, token: string,
-  f: { handle: string; hookId: number | null; tier: string; master: string; platforms: PlatformName[]; qaOf: Record<string, unknown>; ai: unknown; copy: Record<Platform, PlatformCopy> },
+  f: { handle: string; hookId: number | null; tier: string; master: string; platforms: PlatformName[]; qaOf: Record<string, unknown>; ai: unknown; copy: Record<Platform, PlatformCopy>; hold: 'waiting' | null; heldAt: string | null; musicSha: string | null },
 ): void {
   db.exec('BEGIN IMMEDIATE');
   try {
     const r = db.prepare(
-      `UPDATE slots SET product_handle = ?, hook_id = ?, tier = ?, master_json = ?, status = 'ready', error = NULL, updated_at = ?,
+      `UPDATE slots SET product_handle = ?, hook_id = ?, tier = ?, master_json = ?, status = 'ready', error = NULL, updated_at = ?, hold = ?, held_at = ?,
          cost_usd = (SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE slot_id = ?) + (SELECT COALESCE(SUM(quoted_usd), 0) FROM spend WHERE slot_id = ?)
        WHERE id = ? AND status = 'producing' AND claimed_at = ?`,
-    ).run(f.handle, f.hookId, f.tier, f.master, token, slot.id, slot.id, slot.id, token);
+    ).run(f.handle, f.hookId, f.tier, f.master, token, f.hold, f.heldAt, slot.id, slot.id, slot.id, token);
     if (r.changes !== 1) throw new ClaimLostError(`claim on ${slot.id} lost`);
     for (const platform of f.platforms) {
       const tmp = path.join(attemptDir, `${platform}.mp4`);
@@ -195,6 +197,7 @@ export function commitSlot(
       db.prepare('INSERT OR REPLACE INTO renders (slot_id, platform, file_path, sha256, qa_pass, qa_json, ai_json, title, caption, created_at) VALUES (?,?,?,?,1,?,?,?,?,?)')
         .run(slot.id, platform, final, sha, JSON.stringify(f.qaOf[platform]), JSON.stringify(f.ai), f.copy[platform].title, f.copy[platform].text, token);
     }
+    if (f.musicSha) db.prepare('UPDATE music_tracks SET last_used_at = ? WHERE sha256 = ?').run(token, f.musicSha);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -336,7 +339,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   hold();
 
   // Claim confirmed and everything passed: move the files into place and flip the slot, in one transaction.
-  commitSlot(db, slot, dir, attemptDir, token, { handle, hookId, tier: clip ? tier : 't0', master: JSON.stringify({ script, edl, variant: variantUsed }), platforms, qaOf, ai: edl.ai, copy });
+  commitSlot(db, slot, dir, attemptDir, token, { handle, hookId, tier: clip ? tier : 't0', master: JSON.stringify({ script, edl, variant: variantUsed }), platforms, qaOf, ai: edl.ai, copy, hold: null, heldAt: null, musicSha: null });
   log.info('slot produced', { slot: slot.id, seconds: Math.round((Date.now() - t0) / 100) / 10, degraded });
 }
 
@@ -348,10 +351,14 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
   // `at` is the time written to updated_at: the claim time, or for a wait the end of the attempt.
   const fenced = (status: string, error: string | null, attempt = 0, at = ts) =>
     db.prepare("UPDATE slots SET status = ?, error = ?, attempt = attempt + ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(status, error, attempt, at, slotId, ts).changes === 1;
-  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, concept: writeConcept, checkClip, renderUgc, ingestDeadlineMs: 5 * 60000, providers: clipProviders(db, config, () => now), prepareImage: cropToJpeg, probeClip: probeVideo, ...deps };
+  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, concept: writeConcept, checkClip, renderUgc, ingestDeadlineMs: 5 * 60000, providers: clipProviders(db, config, () => now), prepareImage: cropToJpeg, probeClip: probeVideo, clipSound: clipHasSound, ...deps };
   try {
-    const slot = db.prepare('SELECT id, local_date, idx FROM slots WHERE id = ?').get(slotId) as Slot;
-    await produce(db, config, slot, safeDir(env.outDir(), slot.local_date, slotId), ts, now, d);
+    const slot = db.prepare('SELECT id, local_date, idx, kind, video_model FROM slots WHERE id = ?').get(slotId) as Slot;
+    // The slot's own video model replaces tier 2 for this run. An unknown, removed or malformed one fails only this slot.
+    const def = slotTierDef(db, config, slot.video_model);
+    const cfg = def ? { ...config, tiers: { ...config.tiers, t2: def } } : config;
+    if (def && !deps.providers) d.providers = clipProviders(db, cfg, () => now);
+    await produce(db, cfg, slot, safeDir(env.outDir(), slot.local_date, slotId), ts, now, d);
   } catch (e) {
     if (d.signal?.aborted) throw e; // cancelled: the slot stays 'producing' and stale recovery takes it
     if (e instanceof ClaimLostError) return log.warn('claim lost, producer stopped', { slot: slotId });

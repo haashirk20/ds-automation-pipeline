@@ -102,7 +102,7 @@ Set `visibility: 'public'` per platform when you are happy with what you see.
 ## 5. Backups (Cloudflare R2)
 
 The `backup` service copies the nightly database snapshot and `data/clips` to R2, encrypted with
-restic. It idles until `.env.backup` names a repository. Its secrets stay out of `.env`.
+restic. It does not copy `data/music`: keep the original music files yourself. It idles until `.env.backup` names a repository. Its secrets stay out of `.env`.
 
 1. In Cloudflare, create an R2 bucket (for example `giftwell-backup`). R2 gives 10 GB free.
 2. Create an R2 API token with Object Read & Write, scoped to that bucket only. Copy the access key
@@ -178,12 +178,40 @@ monthly model cap, the models for the concept writer, the claim judge and the fr
 and disk settings. A file value is a ceiling: the page can lower a cap, never raise it above
 `config/pipeline.config.ts`.
 
+**Posts.** The Posts page makes one video now. Pick a clip model (the current setting, a preset, or a
+model you added) and press Make a new post. The tick makes a new paid clip, about $0.41 to $2.28 and up to
+twice that if the frame check rejects the first, inside the monthly cap. When it is ready, the page
+plays it and Discord or Telegram gets an alert. Nothing is posted until you press Post. Discard, or
+no answer in 24 hours (`approval.expireHours`), drops it and it is never reused. Post sends it to
+every enabled platform at the next tick. At most 3 posts a day (`approval.manualPerDay`) and one at a
+time. More posts a day raise the repetitive-content risk on every platform. With `DRY_RUN=1` the clip is
+still made and paid for, and Post sends nothing.
+
+**Music.** The Music page takes mp3, m4a, mp4 (the picture is dropped) and wav files, up to 40 MB, 5 to
+600 seconds, at most 50 tracks. Tick the ones to use. Each `ugc` video takes the ticked track used
+least recently and mixes it under the clip's sound, quieter while the spoken line plays. With none
+ticked there is no music. Preview and Delete are on the page. **Copyright:** only upload music you
+hold the rights to use in ads. YouTube, Facebook, Instagram and TikTok scan uploads, and a match can
+mute or block the post, hand its earnings to the rights holder, or strike the account. The upload form
+asks you to confirm the rights for each file. **`data/music` is not backed up.** Keep the original
+files.
+
+**Models.** Four more presets appear in Settings, quoted on 2026-11-14 for a 15 s clip with no
+reference images: `seedance_2_0_std_720p` 67.5 credits ($1.47), `seedance_2_5_flash_720p` 75 ($1.63),
+`seedance_2_5_720p` 105 ($2.28) and `kling_o3_std` 18.75 ($0.41). At $2.28 a clip the $52 monthly cap
+allows about 22 clips. The Models page adds another Higgsfield model: its id, a few options
+(`resolution`, `mode`, `generate_audio`, `sound`, `bitrate_mode`, `genre`, `enable_thinking`), the
+most credits one clip may cost (at most 120) and the credits to keep (at least 350). It is untested
+until you use it in a Posts test post and press Post on the result. Then it can be chosen in
+Settings. The live quote is checked before its first job, and a quote above your limit is refused.
+
 **What is locked, and why.** Read-only on the page, edit the file instead:
 - `claims`, `copycheck` and `vision` prompts and the frame-check effort: they are the guard against
   false claims and bad clips (D-21, D-28).
 - Publish and disclosure settings, account handles, `DRY_RUN`, `timezone`: a wrong value posts to the
   wrong place, at the wrong time, or without disclosure.
-- `render.*`, `watchdogMinutes`, `creative.mode`, `tiers.clipSeconds`, free-form `t2.params`, tier 1,
+- `render.*`, `watchdogMinutes`, `creative.mode`, `tiers.clipSeconds`, free-form `t2.params`
+  (the Models page allows a short list of options), tier 1,
   `brand.*` and `photo-tags.json`: they tie to the renderer, the budget maths and the brand.
 - Secrets and tokens are never shown.
 
@@ -192,6 +220,8 @@ reads it at the start of the next tick, within a minute, and Overview then says 
 A slot already in production finishes on the old version. New slot times apply from the first day not
 yet planned (the page shows the date). Slots already planned or ready keep their times, copy and
 render. Visibility and enabled are read when posting.
+
+**Before rolling the software back to an image older than 6c:** discard every waiting post on the Posts page first. Older images ignore holds, so a waiting post would be published on the next tick.
 
 **Roll back.** History, then Activate on an older version. "Use file" on the History page resets all
 settings to the file; for one prompt it resets that prompt; a single setting goes back by entering the file

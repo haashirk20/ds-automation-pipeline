@@ -10,7 +10,7 @@ confirmed against the code or a live run.
   TikTok (Facebook and Instagram are switched off in `config/pipeline.config.ts`).
 - `pipeline` does the work: it plans slots, writes the concept, makes the clip on your Higgsfield
   credits, checks it and posts through the Zernio bridge. It runs a tick once a minute.
-- `admin` is a small web page for changing settings and prompts. It holds no API keys in its environment, but it can read the database file that holds the OAuth tokens.
+- `admin` is a small web page for changing settings and prompts, making posts on demand and managing music and video models. It holds no API keys in its environment, but it can read the database file that holds the OAuth tokens.
 - `backup` copies an encrypted nightly snapshot to Cloudflare R2. It idles until `.env.backup` names a repository.
 - Data lives in Docker named volumes: `pipeline-data` (database, tokens, stored clips),
   `pipeline-out` (renders) and `backup-status`.
@@ -101,7 +101,21 @@ Open http://localhost:8080 (or your `ADMIN_PORT`) and log in as `admin`. Session
 minutes or 12 hours.
 
 Pages: **Overview** (state, "version N in use", items needing attention), **Activity** (slots and
-publications), **Settings**, **Prompts** and **History** (versions and audit log).
+publications), **Settings**, **Prompts**, **Posts**, **Music**, **Models** and **History** (versions
+and audit log).
+
+**Posts.** Pick a clip model and press Make a new post. A new paid clip is made (about $0.41 to $2.28),
+and the page plays it when it is ready. Nothing posts until you press Post. Discard, or 24 hours
+without an answer, drops it for good. At most 3 a day and one at a time.
+
+**Music.** Upload mp3, m4a, mp4 or wav files (40 MB, 5 to 600 s, 50 tracks) and tick the ones to
+use. Each video gets the ticked track used least recently, quieter while the line is spoken. Upload
+only music you hold the rights to use in ads: a copyright match can mute or block a post or strike
+the account. `data/music` is not backed up, so keep the original files.
+
+**Models.** Settings offers four more presets: `seedance_2_0_std_720p` ($1.47 a clip),
+`seedance_2_5_flash_720p` ($1.63), `seedance_2_5_720p` ($2.28) and `kling_o3_std` ($0.41). The Models
+page adds your own; test it with a Posts post and press Post before Settings will offer it.
 
 **Editable:** slot times and count, which platforms are on (all off pauses the pipeline),
 visibility, the video preset and lower caps, the model cap, the models for the concept writer and

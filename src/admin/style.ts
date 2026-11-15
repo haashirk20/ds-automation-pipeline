@@ -35,6 +35,8 @@ legend{font-weight:700;padding:0 .5rem;font-size:1.05rem}
 input[type=text],input[type=number],input[type=password],select,textarea{width:100%;max-width:32rem;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--muted);border-radius:6px;padding:.5rem .6rem;min-height:44px}
 input[readonly]{color:var(--muted)}
 textarea{max-width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9rem;min-height:18rem}
+textarea.short{min-height:0}
+td code{overflow-wrap:anywhere}
 input[type=checkbox]{width:1.5rem;height:1.5rem;vertical-align:middle}
 button{font:inherit;min-height:44px;padding:.5rem 1rem;border-radius:6px;border:1px solid var(--muted);background:var(--panel);color:var(--text);cursor:pointer}
 button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
@@ -44,6 +46,7 @@ button:hover{text-decoration:underline}
 .actions form{margin:0}
 table{border-collapse:collapse;width:100%;background:var(--panel)}
 th,td{text-align:left;vertical-align:top;padding:.45rem .6rem;border-bottom:1px solid var(--line);overflow-wrap:break-word}
+.nw{white-space:nowrap}
 th{font-size:.875rem;color:var(--muted);font-weight:600}
 .scroll{margin-bottom:1rem;overflow-x:auto;border:1px solid var(--line);border-radius:8px}
 code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.875rem}
@@ -55,6 +58,10 @@ pre{background:var(--panel);border:1px solid var(--line);border-radius:6px;paddi
 .tag{display:inline-block;padding:0 .5rem;border-radius:999px;border:1px solid var(--line);font-size:.8rem}
 .tag.bad{color:var(--bad);border-color:var(--bad);font-weight:600}
 .tag.ok{color:var(--ok);border-color:var(--ok)}
+video,audio{display:block;max-width:100%}
+video{width:100%;max-width:16rem;border-radius:6px;background:#000}
+.card{display:grid;grid-template-columns:minmax(0,16rem) minmax(0,1fr);gap:1rem}
+input[type=file]{font:inherit;max-width:100%}
 .login{max-width:26rem;margin:3rem auto}
-@media (max-width:40rem){.field{grid-template-columns:1fr}main{padding:.75rem}nav form{margin:0}}
+@media (max-width:40rem){.field,.card{grid-template-columns:1fr}main{padding:.75rem}nav form{margin:0}}
 `;
