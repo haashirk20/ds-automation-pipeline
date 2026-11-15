@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400" role="img"><title>Never double-post: the publisher reads its stored handle before every request</title><defs><marker id="ah-mute" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#59636E"/></marker><marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#D4471F"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1A7F37"/></marker><marker id="ah-paid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9A6700"/></marker></defs><rect x=".5" y=".5" width="879" height="399" rx="8" fill="#FFFFFF" stroke="#D1D9E0"/>
+<text x="40" y="44" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#D4471F" fill-opacity="1" text-anchor="start">NEVER DOUBLE-POST</text>
+<text x="40" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">Every publish attempt starts by reading what it stored last time.</text>
+<rect x="40.5" y="168.5" width="150" height="64" rx="6" fill="#F6F8FA" stroke="#D4471F" stroke-width="1.5"/>
+<text x="115" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="middle">Stored handle?</text>
+<text x="115" y="215" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="middle">read first, every call</text>
+<path d="M192 200 L232 200 L232 134 L318 134" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<text x="244" y="126" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="start">none</text>
+<rect x="320.5" y="100.5" width="284" height="76" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="336" y="124" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1F2328" fill-opacity="1" text-anchor="start">find account, upload video</text>
+<text x="336" y="143" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">saveHandle({ mediaUrl, at })</text>
+<text x="336" y="162" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">POST /posts + Idempotency-Key</text>
+<path d="M606 138 L650 138" fill="none" stroke="#1A7F37" stroke-width="1.5" marker-end="url(#ah-ok)"/>
+<rect x="652.5" y="118.5" width="188" height="40" rx="6" fill="#F6F8FA" stroke="#1A7F37" stroke-width="1.5"/>
+<text x="746" y="143" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="middle">store postId</text>
+<path d="M192 200 L232 200 L232 234 L318 234" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<text x="244" y="226" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="start">no postId</text>
+<rect x="320.5" y="200.5" width="284" height="76" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="336" y="224" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1F2328" fill-opacity="1" text-anchor="start">create may have been sent</text>
+<text x="336" y="243" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">under 23 h: resend, same key</text>
+<text x="336" y="262" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">older: key may be forgotten</text>
+<path d="M606 238 L650 238" fill="none" stroke="#9A6700" stroke-width="1.5" marker-end="url(#ah-paid)"/>
+<rect x="652.5" y="218.5" width="188" height="40" rx="6" fill="#F6F8FA" stroke="#9A6700" stroke-width="1.5"/>
+<text x="746" y="243" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="middle">needs_attention</text>
+<path d="M192 200 L232 200 L232 334 L318 334" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<text x="244" y="326" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="start">postId</text>
+<rect x="320.5" y="300.5" width="284" height="76" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="336" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#1F2328" fill-opacity="1" text-anchor="start">GET /posts/{id} only</text>
+<text x="336" y="343" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">poll every 10 s, up to 9 times</text>
+<text x="336" y="362" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">never a second create</text>
+<path d="M606 338 L650 338" fill="none" stroke="#1A7F37" stroke-width="1.5" marker-end="url(#ah-ok)"/>
+<rect x="652.5" y="318.5" width="188" height="40" rx="6" fill="#F6F8FA" stroke="#1A7F37" stroke-width="1.5"/>
+<text x="746" y="343" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="middle">published | failed</text>
+<text x="40" y="300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">A missed post is</text>
+<text x="40" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">acceptable.</text>
+<text x="40" y="340" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#D4471F" fill-opacity="1" text-anchor="start">A double post is not.</text>
+</svg>

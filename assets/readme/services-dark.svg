@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" width="880" height="420" role="img"><title>Three compose services share one SQLite database; the pipeline calls Shopify, Anthropic, Higgsfield and the Zernio bridge</title><defs><marker id="ah-mute" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8B949E"/></marker><marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#FF7A59"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#3FB950"/></marker><marker id="ah-paid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#E3B341"/></marker></defs><rect x=".5" y=".5" width="879" height="419" rx="8" fill="#0D1117" stroke="#30363D"/>
+<text x="40" y="44" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#FF7A59" fill-opacity="1" text-anchor="start">THREE CONTAINERS, ONE DATABASE</text>
+<rect x="40.5" y="90.5" width="140" height="70" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+<text x="54" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">Owner</text>
+<text x="54" y="136" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">browser over SSH</text>
+<text x="54" y="153" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">tunnel or Tailscale</text>
+<path d="M182 125 L218 125" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="220.5" y="80.5" width="190" height="90" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+<text x="234" y="106" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">admin</text>
+<text x="234" y="126" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">127.0.0.1:8080 only</text>
+<text x="234" y="143" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">no API keys</text>
+<text x="234" y="160" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">settings, prompts, posts</text>
+<path d="M315 172 L315 206" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<path d="M315 206 L315 172" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="220.5" y="208.5" width="190" height="70" rx="6" fill="#161B22" stroke="#FF7A59" stroke-width="1.5"/>
+<text x="234" y="234" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">SQLite (WAL)</text>
+<text x="234" y="254" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">data/pipeline.db</text>
+<path d="M412 243 L468 243" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<path d="M468 243 L412 243" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="470.5" y="198.5" width="170" height="90" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+<text x="484" y="224" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">pipeline</text>
+<text x="484" y="244" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">tick every 60 s</text>
+<text x="484" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">one producer child</text>
+<text x="484" y="278" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">per slot</text>
+<path d="M315 280 L315 316" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="220.5" y="318.5" width="190" height="70" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+<text x="234" y="344" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">backup</text>
+<text x="234" y="364" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">restic, nightly</text>
+<text x="234" y="381" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">→ Cloudflare R2</text>
+<rect x="690.5" y="80.5" width="150" height="58" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="704" y="104" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">Shopify</text>
+<text x="704" y="122" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">product + photos</text>
+<path d="M642 243 L688 109" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="690.5" y="154.5" width="150" height="58" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="704" y="178" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">Anthropic API</text>
+<text x="704" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">5 structured calls</text>
+<path d="M642 243 L688 183" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="690.5" y="228.5" width="150" height="58" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="704" y="252" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">Higgsfield MCP</text>
+<text x="704" y="270" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">AI video clip</text>
+<path d="M642 243 L688 257" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="690.5" y="302.5" width="150" height="58" rx="6" fill="#161B22" stroke="#30363D" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="704" y="326" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#E6EDF3" fill-opacity="1" text-anchor="start">Zernio bridge</text>
+<text x="704" y="344" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">→ 4 platforms</text>
+<path d="M642 243 L688 331" fill="none" stroke="#8B949E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<text x="470" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">alerts → Discord or Telegram</text>
+<text x="470" y="338" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">heartbeat → healthchecks.io</text>
+<text x="40" y="398" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8B949E" fill-opacity="1" text-anchor="start">dashed: hosted services</text>
+</svg>

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 460" width="880" height="460" role="img"><title>One slot: ingest, concept, claim judge, paid clip, frame check, render and QA, copy, publish</title><defs><marker id="ah-mute" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#59636E"/></marker><marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#D4471F"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1A7F37"/></marker><marker id="ah-paid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9A6700"/></marker></defs><rect x=".5" y=".5" width="879" height="459" rx="8" fill="#FFFFFF" stroke="#D1D9E0"/>
+<text x="40" y="44" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#D4471F" fill-opacity="1" text-anchor="start">ONE SLOT, START TO FINISH</text>
+<text x="40" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">A tick runs every 60 s. Each step writes to SQLite, fenced by the slot's claim time.</text>
+<rect x="40.5" y="96.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="56" y="126" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">1</text>
+<text x="76" y="126" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Ingest</text>
+<text x="56" y="158" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">Shopify Admin API</text>
+<text x="56" y="176" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">brief: facts + sources</text>
+<rect x="56" y="186" width="40" height="18" rx="9" fill="none" stroke="#59636E" stroke-width="1"/>
+<text x="76.0" y="199" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="middle">CODE</text>
+<path d="M224 155.0 L240 155.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="242.5" y="96.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D4471F" stroke-width="1.5"/>
+<text x="258" y="126" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">2</text>
+<text x="278" y="126" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Concept</text>
+<text x="258" y="158" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">setting, caption, line,</text>
+<text x="258" y="176" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">3 to 5 shots as JSON</text>
+<rect x="258" y="186" width="47" height="18" rx="9" fill="none" stroke="#D4471F" stroke-width="1"/>
+<text x="281.5" y="199" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#D4471F" fill-opacity="1" text-anchor="middle">MODEL</text>
+<path d="M426 155.0 L442 155.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="444.5" y="96.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D4471F" stroke-width="1.5"/>
+<text x="460" y="126" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">3</text>
+<text x="480" y="126" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Claim judge</text>
+<text x="460" y="158" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">locked prompt: every</text>
+<text x="460" y="176" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">claim is in the brief</text>
+<rect x="460" y="186" width="47" height="18" rx="9" fill="none" stroke="#D4471F" stroke-width="1"/>
+<text x="483.5" y="199" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#D4471F" fill-opacity="1" text-anchor="middle">MODEL</text>
+<path d="M628 155.0 L644 155.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="646.5" y="96.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#9A6700" stroke-width="1.5"/>
+<text x="662" y="126" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">4</text>
+<text x="682" y="126" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Clip</text>
+<text x="662" y="158" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">quote, budget, ledger</text>
+<text x="662" y="176" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">row, one Higgsfield job</text>
+<rect x="662" y="186" width="40" height="18" rx="9" fill="none" stroke="#9A6700" stroke-width="1"/>
+<text x="682.0" y="199" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#9A6700" fill-opacity="1" text-anchor="middle">PAID</text>
+<rect x="40.5" y="268.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D4471F" stroke-width="1.5"/>
+<text x="56" y="298" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">5</text>
+<text x="76" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Frame check</text>
+<text x="56" y="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">8 frames vs reference</text>
+<text x="56" y="348" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">photos + product note</text>
+<rect x="56" y="358" width="47" height="18" rx="9" fill="none" stroke="#D4471F" stroke-width="1"/>
+<text x="79.5" y="371" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#D4471F" fill-opacity="1" text-anchor="middle">MODEL</text>
+<path d="M224 327.0 L240 327.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="242.5" y="268.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="258" y="298" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">6</text>
+<text x="278" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Render + QA</text>
+<text x="258" y="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">Remotion caption, music,</text>
+<text x="258" y="348" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">-14 LUFS, 10 checks</text>
+<rect x="258" y="358" width="40" height="18" rx="9" fill="none" stroke="#59636E" stroke-width="1"/>
+<text x="278.0" y="371" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="middle">CODE</text>
+<path d="M426 327.0 L442 327.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="444.5" y="268.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D4471F" stroke-width="1.5"/>
+<text x="460" y="298" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">7</text>
+<text x="480" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Copy</text>
+<text x="460" y="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">titles and captions,</text>
+<text x="460" y="348" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">then a locked judge</text>
+<rect x="460" y="358" width="47" height="18" rx="9" fill="none" stroke="#D4471F" stroke-width="1"/>
+<text x="483.5" y="371" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#D4471F" fill-opacity="1" text-anchor="middle">MODEL</text>
+<path d="M628 327.0 L644 327.0" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="646.5" y="268.5" width="182" height="118" rx="6" fill="#F6F8FA" stroke="#D1D9E0" stroke-width="1"/>
+<text x="662" y="298" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#59636E" fill-opacity="1" text-anchor="start">8</text>
+<text x="682" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1F2328" fill-opacity="1" text-anchor="start">Publish</text>
+<text x="662" y="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">Zernio bridge, saved</text>
+<text x="662" y="348" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">handle, idempotency key</text>
+<rect x="662" y="358" width="40" height="18" rx="9" fill="none" stroke="#59636E" stroke-width="1"/>
+<text x="682.0" y="371" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="middle">CODE</text>
+<path d="M737.0 216 L737.0 241 L131.0 241 L131.0 266" fill="none" stroke="#59636E" stroke-width="1.5" marker-end="url(#ah-mute)"/>
+<rect x="40" y="419" width="47" height="18" rx="9" fill="none" stroke="#D4471F" stroke-width="1"/>
+<text x="63.5" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#D4471F" fill-opacity="1" text-anchor="middle">MODEL</text>
+<text x="97" y="433" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">one structured model call</text>
+<rect x="310" y="419" width="40" height="18" rx="9" fill="none" stroke="#9A6700" stroke-width="1"/>
+<text x="330.0" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#9A6700" fill-opacity="1" text-anchor="middle">PAID</text>
+<text x="360" y="433" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">checks price + budget first</text>
+<rect x="580" y="419" width="40" height="18" rx="9" fill="none" stroke="#59636E" stroke-width="1"/>
+<text x="600.0" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#59636E" fill-opacity="1" text-anchor="middle">CODE</text>
+<text x="630" y="433" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#59636E" fill-opacity="1" text-anchor="start">deterministic code</text>
+</svg>
