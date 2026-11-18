@@ -777,6 +777,17 @@ owner wants to try a prompt from the page.
 **Why.** The owner and the build agents read these documents in a terminal.
 
 
+## D-37 Factory page: the one admin page with a script (2026-11-17, branch `dev`)
+
+**Chosen.** `/factory` draws the pipeline as a factory floor: eight stations (loading dock, concept studio, clip foundry, inspection, caption shop, label press, approval gate, shipping docks) on one conveyor belt, a scrap bin, and one crate per slot. The station is read from what the producer already writes (`slots.status` and `hold`, `master_json`, the spend ledger, and the `llm_calls` purposes logged since the claim), so the pipeline is unchanged. Machinery is inline SVG animated by `/factory.css`. One same-origin script, `/factory.js`, polls `/factory.json` every 4 s and slides crates between stations. `?demo=1` runs a made-up shift in the browser and reads nothing.
+
+**Security.** Only this page's CSP adds `script-src 'self'; connect-src 'self'`; every other page keeps the no-script policy. The script builds nodes with `createElement` and `textContent` only, and fetches only `/factory.json`; a test checks both. The JSON is read-only, behind the session, and carries what Activity already shows. Polling keeps the session alive while the tab is open, up to the absolute session limit.
+
+**Alternatives.** CSS only with a meta refresh: no script, but each refresh restarts every animation and crates jump instead of moving. A canvas or a front-end framework: a build step or a dependency.
+
+**Cost.** No dependency. Stage inference is approximate within `producing`: a reused clip (tier 0) shows at the foundry until the copy step, and `ad` mode shows at the concept studio until it is ready.
+
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

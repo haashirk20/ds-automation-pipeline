@@ -6,6 +6,7 @@ import { kvGet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { clearCookie, clearLockout, cookieOf, COOKIE, createSession, destroySession, getSession, hostAllowed, isLocked, loginFailed, safeEqual, sessionCookie, verifyPassword } from './auth.ts';
+import * as factory from './factory.ts';
 import * as media from './media.ts';
 import * as models from './models.ts';
 import * as music from './music.ts';
@@ -32,6 +33,8 @@ type Route = { auth: boolean; h: (c: Ctx) => Res | Promise<Res> };
 const ROUTES: Record<string, Route> = {
   'GET /': { auth: true, h: pages.overviewPage },
   'GET /overview': { auth: true, h: pages.overviewPage },
+  'GET /factory': { auth: true, h: factory.factoryPage },
+  'GET /factory.json': { auth: true, h: factory.factoryJson },
   'GET /settings': { auth: true, h: pages.settingsPage },
   'POST /settings/preview': { auth: true, h: pages.settingsPreview },
   'POST /settings/save': { auth: true, h: pages.settingsSave },
@@ -91,6 +94,8 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   const now = opts.now();
 
   if (method === 'GET' && path === '/style.css') return { status: 200, body: CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/factory.css') return { status: 200, body: factory.FACTORY_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();

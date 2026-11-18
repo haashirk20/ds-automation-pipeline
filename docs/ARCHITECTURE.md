@@ -40,7 +40,7 @@ The whole flow, top to bottom. Text boxes name the config key of the model that 
    |
    v
  admin container -- no API keys, read-only root, own network, 127.0.0.1:8080 only
-   pages: Overview  Settings  Prompts  Posts  Music  Models  Activity  History
+   pages: Overview  Factory  Settings  Prompts  Posts  Music  Models  Activity  History
    writes: config_versions, text_versions (house video ugc copy hooks script note:*),
            manual slots and hold decisions, music_tracks + data/music/*.m4a, video_models
    reads:  out/ renders (read-only) for the preview player; runs ffmpeg on uploads
@@ -326,7 +326,8 @@ loudness is measured. The upload needs a rights confirmation.
 stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
 per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB (the music upload is the one
 exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
-database value. The code never queries `oauth_tokens` (a test checks this).
+database value. The one exception is the read-only Factory page (D-37), whose CSP allows its own
+`/factory.js` and fetches to the same origin. The code never queries `oauth_tokens` (a test checks this).
 
 ## Slot and publication states
 

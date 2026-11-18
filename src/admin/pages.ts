@@ -32,7 +32,7 @@ const fileRaw = raw as unknown as Record<string, any>;
 
 // ---------- layout ----------
 
-const NAV: [string, string][] = [['/overview', 'Overview'], ['/settings', 'Settings'], ['/posts', 'Posts'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
+const NAV: [string, string][] = [['/overview', 'Overview'], ['/factory', 'Factory'],['/settings', 'Settings'], ['/posts', 'Posts'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
 
 export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
   const nav = ctx?.csrf
