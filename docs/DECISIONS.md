@@ -851,6 +851,34 @@ have nothing to check against.
 **Cost.** No dependency. Facts for an added product are only as true as the owner's lines; the form
 says so.
 
+## D-40 Home as a town square, and one slim header (2026-11-18, branch `dev`)
+
+**Chosen.** The owner asked for a game-like home page, like the central town of an MMO, and fewer tabs.
+`/` and `/overview` draw a pixel-art town on one canvas (`/town.js`). Each page is a building:
+Factory, Market (Products), Post office (Posts), Town hall (Settings), Music hall, Wizard tower (Models),
+Library (Prompts), Notice board (Activity) and Archive (History). The owner's character walks with the
+arrow keys or WASD; at a door, E or Enter (or walking up into it) goes in. Clicking a building walks
+there along the streets and goes in; clicking the ground walks there. Buildings carry a quest marker when
+they need the owner (a video waiting, a stuck post, no products, refused settings, a quiet pipeline).
+Around the canvas a game HUD shows the same state: the factory and budget as bars, gold spent this month,
+a quest log of what to do next, today's counts, and a town chat of recent posts, finished videos, scraps
+and alerts. Villagers wander, the fountain runs, the clock shows the viewer's time and the town darkens
+at night. `/town.json` refreshes the HUD every 15 s. The old dashboard's technical table moved to the
+Notice board (Activity).
+
+The ten tabs are gone. Every page's header shows the brand (back to the town), "Town", where you are,
+a Map menu (`<details>`, so it works without a script) listing every building and its page, and Log out.
+
+**Security.** Like D-37: only this page's CSP adds `script-src 'self'; connect-src 'self'`. The script
+builds nodes with `createElement` and `textContent` only, fetches only `/town.json` (behind the session,
+read-only), and a test checks both. The page also lists every building as plain links.
+
+**Alternatives.** A grid of building cards in CSS: no walking and no game feel. A game engine: a
+dependency and a build step. Sharing one drawing module with the Factory page: a second script on both
+pages; the helpers are copied instead and can be shared later.
+
+**Cost.** No dependency. About 600 lines of client script.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

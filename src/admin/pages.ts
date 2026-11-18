@@ -33,11 +33,12 @@ const fileRaw = raw as unknown as Record<string, any>;
 
 // ---------- layout ----------
 
-const NAV: [string, string][] = [['/overview', 'Home'], ['/factory', 'Factory'], ['/products', 'Products'], ['/posts', 'Posts'], ['/settings', 'Settings'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
+// Every page is a place in the town. The header names where you are, links back to the town square and
+// opens a map of the rest: one bar instead of a row of tabs.
+const NAV: [string, string, string][] = [['/factory', 'Factory', 'Factory'], ['/products', 'Market', 'Products'], ['/posts', 'Post office', 'Posts'], ['/settings', 'Town hall', 'Settings'], ['/music', 'Music hall', 'Music'], ['/models', 'Wizard tower', 'Models'], ['/prompts', 'Library', 'Prompts'], ['/activity', 'Notice board', 'Activity'], ['/history', 'Archive', 'History']];
 
 // One plain sentence under each page title: what the page is for.
 const HELP: Record<string, string> = {
-  '/overview': 'How the factory is doing, and the shortcuts you need most.',
   '/factory': 'Watch every video move down the line, live.',
   '/products': 'Choose which products get videos, add your own, and set the logo.',
   '/posts': 'Make a video right now and decide whether it goes out.',
@@ -51,7 +52,10 @@ const HELP: Record<string, string> = {
 
 export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
   const nav = ctx?.csrf
-    ? html`<header class="top"><nav aria-label="Main"><a class="brand" href="/overview" aria-label="Home">Ad factory</a>${NAV.map(([h, t]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`)}<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
+    ? html`<header class="top"><nav aria-label="Main"><a class="brand" href="/overview">Ad factory</a>
+${active === '/overview' ? html`<span class="here">Town square</span>` : html`<a class="back" href="/overview">Town</a>${NAV.find((n) => n[0] === active) ? html`<span class="here">${NAV.find((n) => n[0] === active)![1]}</span>` : ''}`}
+<details class="map"><summary>Map</summary><ul>${NAV.map(([h, place, page]) => html`<li><a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}><b>${place}</b> <span>${page}</span></a></li>`)}</ul></details>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
     : '';
   const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|History of)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
   return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css">${head}</head><body>${nav}<main><h1>${title}</h1>${help}${body}</main></body></html>`);
@@ -527,7 +531,8 @@ export function historyActivate(ctx: Ctx): Res {
 
 // ---------- overview ----------
 
-export async function overviewPage(ctx: Ctx): Promise<Res> {
+// The pipeline's technical state, shown folded on the notice board (Activity).
+async function techDetails(ctx: Ctx): Promise<Raw> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   let st: { dryRun?: boolean; configVersion?: number | string; promptVersions?: Record<string, number>; tickAt?: string } = {};
   try { st = JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}'); } catch { /* none */ }
@@ -537,35 +542,8 @@ export async function overviewPage(ctx: Ctx): Promise<Res> {
   const attention = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const cv = st.configVersion;
   const refused = typeof cv === 'string' && cv.startsWith('refused');
-  const products = ctx.db.prepare('SELECT handle FROM briefs').all() as { handle: string }[];
-  const act = activeHandles(ctx.db);
-  const inTurn = act ? products.filter((p) => act.includes(p.handle)).length || products.length : products.length;
-  const today = localDateOf(ctx.now, cfg.timezone);
-  const made = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')").get(today) as { n: number }).n;
-  const posted = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'published' AND published_at >= ?").get(new Date(ctx.now.getTime() - 86_400_000).toISOString()) as { n: number }).n;
-  const waiting = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'").get() as { n: number }).n;
-  const llm = monthSpend(ctx.db, ctx.now);
-  const clips = monthSpendUsd(ctx.db, 't2', ctx.now);
-  const alive = age !== null && age <= 300;
-  const tile = (cls: string, label: string, value: string | Raw, sub: string | Raw, href: string) => html`<a class="tile ${cls}" href="${href}"><span class="tile-l">${label}</span><span class="tile-v">${value}</span><span class="tile-s">${sub}</span></a>`;
-  return layout(ctx, 'Home', '/overview', html`${st.dryRun ? html`<p class="banner">Practice mode (DRY_RUN) is on: videos are made, nothing is published.</p>` : ''}
+  return html`${st.dryRun ? html`<p class="banner">Practice mode (DRY_RUN) is on: videos are made, nothing is published.</p>` : ''}
 ${refused ? html`<p class="error-box" role="alert">The stored settings were refused and the file is in use: ${cv}</p>` : ''}
-<div class="tiles">
-${tile(alive ? 'good' : 'bad', 'Factory', age === null ? 'Not started' : alive ? 'Running' : 'Stopped', age === null ? 'The pipeline has never checked in.' : `Last check-in ${age} s ago`, '/factory')}
-${tile(attention ? 'bad' : waiting ? 'warn' : 'good', 'Needs you', attention || waiting ? String(attention + waiting) : 'Nothing', attention ? `${attention} post(s) need attention` : waiting ? `${waiting} video(s) wait for Post or Discard` : 'All clear', attention ? '/activity' : '/posts')}
-${tile('', 'Next post', next ? fmtTs(next.scheduled_at).slice(11, 16) + 'Z' : 'None', next ? `${PNAME[next.platform] ?? next.platform}, ${fmtTs(next.scheduled_at).slice(0, 10)}` : 'Nothing is scheduled', '/activity')}
-${tile('', 'Last 24 hours', `${made} made · ${posted} posted`, 'Videos finished today, posts sent', '/activity')}
-${tile(inTurn ? '' : 'bad', 'Products', `${inTurn} in turn`, `of ${products.length} product(s)`, '/products')}
-${tile('', 'Spent this month', `$${(llm + clips).toFixed(2)}`, `Writers $${llm.toFixed(2)} of $${cfg.llm.monthlyCapUsd} · clips $${clips.toFixed(2)} of $${cfg.tiers.capsUsd.t2}`, '/activity')}
-</div>
-<h2>What do you want to do?</h2>
-<div class="quick">
-<a class="qa" href="/posts"><b>Make a video now</b><span>Made right away; you press Post when you like it.</span></a>
-<a class="qa" href="/products"><b>Choose products</b><span>Pick what gets videos, add your own, set the logo.</span></a>
-<a class="qa" href="/settings"><b>Change settings</b><span>Times, platforms and budget, as blocks on a line.</span></a>
-<a class="qa" href="/factory"><b>Watch the factory</b><span>See each video move from station to station.</span></a>
-<a class="qa" href="/music"><b>Add music</b><span>Upload tracks the videos may use.</span></a>
-</div>
 <details class="panel tech"><summary>Technical details</summary><table><tbody>
 <tr><th scope="row">Pipeline heartbeat</th><td>${age === null ? 'never' : html`${age} s ago ${age > 300 ? html`<span class="tag bad">stale</span>` : html`<span class="tag ok">alive</span>`}`}</td></tr>
 <tr><th scope="row">Settings in use</th><td>${cv === undefined ? 'unknown (no tick since the admin was installed)' : typeof cv === 'number' ? `version ${cv} since ${fmtTs(st.tickAt)}` : cv === 'file' ? `the file${st.tickAt ? ` since ${fmtTs(st.tickAt)}` : ''}` : 'the file (stored settings refused)'}</td></tr>
@@ -573,7 +551,7 @@ ${tile('', 'Spent this month', `$${(llm + clips).toFixed(2)}`, `Writers $${llm.t
 <tr><th scope="row">Next publication</th><td>${next ? `${fmtTs(next.scheduled_at)} (${next.platform}, ${next.slot_id})` : 'none planned'}</td></tr>
 <tr><th scope="row">Needs attention</th><td>${attention ? html`<span class="tag bad">${attention}</span> <a href="/activity">See Activity</a>` : '0'}</td></tr>
 <tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
-</tbody></table></details>`);
+</tbody></table></details>`;
 }
 
 // ---------- activity ----------
@@ -590,7 +568,7 @@ export async function activityPage(ctx: Ctx): Promise<Res> {
   const pubs = ctx.db.prepare("SELECT slot_id, platform, state, scheduled_at, post_url, error FROM publications ORDER BY (state = 'needs_attention') DESC, scheduled_at DESC LIMIT 60").all() as { slot_id: string; platform: string; state: string; scheduled_at: string; post_url: string | null; error: string | null }[];
   const events = ctx.db.prepare('SELECT ts, kind, key, message, delivered FROM events ORDER BY id DESC LIMIT 50').all() as { ts: string; kind: string; key: string; message: string; delivered: number }[];
   const t2n = (ctx.db.prepare("SELECT COUNT(*) AS n FROM spend WHERE tier = 't2' AND state != 'rejected' AND created_at >= ?").get(new Date(Date.UTC(ctx.now.getUTCFullYear(), ctx.now.getUTCMonth(), 1)).toISOString()) as { n: number }).n;
-  return layout(ctx, 'Activity', '/activity', html`
+  return layout(ctx, 'Activity', '/activity', html`${await techDetails(ctx)}
 <h2>Slots</h2><div class="scroll"><table><thead><tr><th>Slot</th><th>Status</th><th>Tier</th><th>Attempt</th><th>Error</th><th>Caption</th></tr></thead><tbody>${slots.map((s) => html`<tr><td>${s.id}</td><td>${s.status}</td><td>${s.tier}</td><td>${s.attempt}</td><td>${s.error}</td><td>${caption(s.master_json)}</td></tr>`)}</tbody></table></div>
 <h2>Publications</h2><div class="scroll"><table><thead><tr><th>Slot</th><th>Platform</th><th>State</th><th>Scheduled</th><th>Post</th><th>Error</th></tr></thead><tbody>${pubs.map((p) => html`<tr><td>${p.slot_id}</td><td>${p.platform}</td><td>${p.state === 'needs_attention' ? html`<span class="tag bad">needs attention</span>` : p.state}</td><td>${fmtTs(p.scheduled_at)}</td><td>${link(p.post_url)}</td><td>${p.error}</td></tr>`)}</tbody></table></div>
 <h2>Spend this month</h2><div class="scroll"><table><tbody>

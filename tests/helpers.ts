@@ -9,6 +9,10 @@ import { makeProducer } from '../src/scheduler/loop.ts';
 import { Brief } from '../src/contracts.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
+// Tests never spend: whatever the developer's shell holds, no real model, bridge or Shopify credential
+// reaches the code under test. A test that needs a key sets a fake one itself.
+for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'BRIDGE_API_KEY', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET']) delete process.env[k];
+
 // Facebook and Instagram are off in the shipped config; the suite exercises all four.
 export const config = parseConfig({ ...raw, platforms: { ...raw.platforms, facebook: { ...raw.platforms.facebook, enabled: true }, instagram: { ...raw.platforms.instagram, enabled: true, visibility: 'public' } } });
 

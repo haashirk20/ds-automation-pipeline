@@ -149,7 +149,12 @@ test('every response carries the security headers and no page has a script tag',
   assert.equal(s.headers['content-security-policy'], "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   assert.deepEqual([...s.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/settings.js" defer>']);
   assert.ok(!/ style="|<style/i.test(s.text));
-  for (const path of ['/login', '/overview', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
+  // The town square (home) loads its own /town.js and may fetch this origin, like the Factory page (D-40).
+  const t = await req('GET', '/overview', { cookie });
+  assert.equal(t.headers['content-security-policy'], "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  assert.deepEqual([...t.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/town.js" defer>']);
+  assert.ok(!/ style="|<style/i.test(t.text));
+  for (const path of ['/login', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
     const r = await req('GET', path, { cookie });
     assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
     assert.equal(r.headers['x-content-type-options'], 'nosniff');

@@ -1,0 +1,55 @@
+/* The town square (home). The canvas is drawn by /town.js; this file styles the game HUD around it. */
+main:has(.town){max-width:84rem}
+main:has(.town)>h1{display:none}
+.town{display:grid;grid-template-columns:minmax(0,1fr) 19rem;gap:1rem;align-items:start;margin:0 0 1.25rem}
+.town-stage{position:relative;border:4px solid var(--ink);background:var(--ink);box-shadow:6px 6px 0 rgba(27,28,36,.6)}
+.tw{display:block;width:100%;height:auto;aspect-ratio:544/320;image-rendering:crisp-edges;image-rendering:pixelated;background:#5c9c3e}
+.tw.pointer{cursor:pointer}
+.tw:focus-visible{outline:3px solid var(--amber);outline-offset:3px}
+.town-hint{margin:0;padding:.35rem .6rem;background:var(--ink);color:#f1e6cf;font:700 .75rem var(--mono);text-transform:uppercase;letter-spacing:.03em}
+
+/* the strip above the canvas: the player frame, practice mode and the gold purse */
+.hud-strip{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.4rem;background:var(--ink);border-bottom:3px solid #4b5260}
+.hud{color:#f4efe4;background:#2a2d35;border:3px solid var(--ink);box-shadow:inset 0 0 0 2px #4b5260}
+.hud-me{display:flex;gap:.5rem;align-items:center;padding:.35rem .5rem;min-width:13rem}
+.hud-me b{display:block;font:800 .72rem var(--mono);text-transform:uppercase;margin-bottom:.15rem}
+.me-face{flex:none;width:34px;height:34px;border:3px solid var(--ink);
+  background:linear-gradient(#2fb36a 0 9px,transparent 9px),linear-gradient(90deg,transparent 9px,#1b1c24 9px 12px,transparent 12px 19px,#1b1c24 19px 22px,transparent 22px) 0 14px/100% 3px no-repeat,linear-gradient(#f0c39a 0 20px,#f5a524 20px)}
+.bar{display:grid;grid-template-columns:3.6rem 6rem auto;align-items:center;gap:.35rem;font:700 .62rem var(--mono);text-transform:uppercase}
+.bar-t{position:relative;height:9px;border:2px solid var(--ink);background:#3e444e}
+.bar-t meter{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.bar-fill{position:absolute;inset:0 auto 0 0;width:100%;transition:width .6s}
+.bar.hp .bar-fill{background:linear-gradient(#7ef0a8 0 2px,#2fb36a 2px)}
+.bar.mp .bar-fill{background:linear-gradient(#9fd0ff 0 2px,#2f6fd6 2px)}
+.bar-v{opacity:.85;white-space:nowrap}
+.hud-gold{margin-left:auto;display:flex;align-items:center;gap:.4rem;padding:.35rem .6rem;font:800 .85rem var(--mono)}
+.hud-gold small{font-weight:600;opacity:.8}
+.coin{width:16px;height:16px;border:2px solid var(--ink);background:radial-gradient(circle,#fff3a8 0 2px,#ffd84a 2px 5px,#c99a1a 5px)}
+.hud-mode{padding:.3rem .6rem;font:800 .68rem var(--mono);text-transform:uppercase;color:var(--ink);background:#f2c230}
+
+/* the side panels: quest log, today, chat */
+.town-side{display:flex;flex-direction:column;gap:.9rem}
+.hud-panel{background:#2a2620;color:#f1e6cf;border:3px solid var(--ink);box-shadow:4px 4px 0 var(--ink),inset 0 0 0 2px #5a4e3e;padding:.6rem .75rem .7rem}
+.hud-panel h2{margin:0 0 .5rem;padding:0 0 .35rem;font-size:.8rem;color:var(--amber);background:repeating-linear-gradient(-45deg,#e7b52c 0 4px,var(--ink) 4px 8px) left bottom/100% 3px no-repeat}
+.quests ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.4rem}
+.quests li{position:relative;padding-left:1.4rem;font-size:.88rem;line-height:1.35}
+.quests li::before{content:"";position:absolute;left:0;top:.15rem;width:12px;height:14px;background:linear-gradient(90deg,transparent 4px,var(--ink) 4px 7px,transparent 7px) 0 2px/100% 7px no-repeat,linear-gradient(90deg,transparent 4px,var(--ink) 4px 7px,transparent 7px) 0 11px/100% 2px no-repeat,#9aa0a8;border:2px solid var(--ink)}
+.quests li.urgent::before{background-color:#ffd84a}
+.quests a{color:#fff4dc;text-decoration:none}
+.quests a:hover{color:var(--amber);text-decoration:underline}
+.today dl{display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;margin:0;font-size:.85rem}
+.today dt{color:#c2b39a}
+.today dd{margin:0;font:700 .85rem var(--mono);text-align:right}
+.chat ol{list-style:none;margin:0;padding:0;max-height:15rem;overflow-y:auto;font:500 .78rem/1.4 var(--mono);display:flex;flex-direction:column;gap:.25rem}
+.chat time{color:#8f8573}
+.chat .c-post b{color:#7ed36b}.chat .c-make b{color:#9fd0ff}.chat .c-scrap b{color:#ff9a8f}.chat .c-alert b{color:var(--amber)}
+
+/* the plain list of buildings: the same places in text */
+.town-dir ul{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.6rem;margin:0;padding:0}
+.town-dir a{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .5rem;padding:.55rem .7rem;background:var(--panel);border:3px solid var(--ink);box-shadow:3px 3px 0 var(--ink);color:var(--text);text-decoration:none}
+.town-dir a:hover{filter:brightness(1.05)}
+.town-dir b{font:800 .85rem var(--mono);text-transform:uppercase}
+.town-dir small{flex-basis:100%;color:var(--muted);font-size:.8rem}
+
+@media (max-width:62rem){.town{grid-template-columns:1fr}.town-side{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))}}
+@media (max-width:40rem){.hud-me{min-width:0;flex:1 1 100%}.hud-me>div{flex:1;min-width:0}.bar{grid-template-columns:3.4rem minmax(3rem,1fr) auto}.hud-gold{margin-left:0;flex:1}.hud-mode{flex:1 1 100%;text-align:center}}

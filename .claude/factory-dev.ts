@@ -4,6 +4,11 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// The preview never spends: no model, bridge or Shopify admin credential, practice mode, model stubs.
+// It runs the admin only (no producer), on a throwaway database with no Higgsfield sign-in.
+for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'BRIDGE_API_KEY', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET']) delete process.env[k];
+process.env.DRY_RUN = '1';
+process.env.LLM_STUB = '1';
 const dir = mkdtempSync(join(tmpdir(), 'factory-dev-'));
 process.env.DATA_DIR = join(dir, 'data');
 process.env.OUT_DIR = join(dir, 'out');
@@ -20,8 +25,8 @@ const day = ts.slice(0, 10);
 const claim = new Date(t.getTime() - 5 * 60_000).toISOString();
 const master = (caption: string) => JSON.stringify({ mode: 'ugc', concept: { caption } });
 const slot = (idx: number, status: string, o: { master?: string; hold?: string; kind?: string } = {}) =>
-  db.prepare('INSERT INTO slots (id, local_date, idx, status, created_at, updated_at, claimed_at, master_json, hold, kind, tier, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,1)')
-    .run(`${day}#${idx}`, day, idx, status, ts, ts, status === 'producing' ? claim : null, o.master ?? null, o.hold ?? null, o.kind ?? 'planned', 't2');
+  db.prepare('INSERT INTO slots (id, local_date, idx, status, created_at, updated_at, claimed_at, master_json, hold, held_at, kind, tier, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)')
+    .run(`${day}#${idx}`, day, idx, status, ts, ts, status === 'producing' ? claim : null, o.master ?? null, o.hold ?? null, o.hold === 'waiting' ? ts : null, o.kind ?? 'planned', 't2');
 const pubs = (idx: number, states: string[]) => ['youtube', 'facebook', 'instagram', 'tiktok'].forEach((p, i) =>
   db.prepare('INSERT INTO publications (slot_id, platform, scheduled_at, state, published_at, dry_run) VALUES (?,?,?,?,?,1)').run(`${day}#${idx}`, p, ts, states[i], states[i] === 'published' ? ts : null));
 const llm = (idx: number, purpose: string) => db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd, slot_id) VALUES (?,?,'claude-haiku-5-5',0,0,0,0,0,?)").run(ts, purpose, `${day}#${idx}`);

@@ -329,8 +329,9 @@ loudness is measured. The upload needs a rights confirmation.
 stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
 per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB (the music upload is the one
 exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
-database value. Two pages are exceptions: the read-only Factory page (D-37), whose CSP allows its own
-`/factory.js` and fetches to the same origin, and the Settings pages (D-38), whose CSP allows
+database value. Three pages are exceptions: the town square at `/` (D-40) and the read-only Factory
+page (D-37), whose CSPs allow their own `/town.js` or `/factory.js` and fetches to the same origin, and
+the Settings pages (D-38), whose CSP allows
 `/settings.js` only (no fetch); it lays the same form out as blocks and works without the script.
 Product photos and the logo are image uploads with the same handling as music: PNG or JPEG sniffed
 from the first bytes, ffmpeg with the image demuxer, a forced decoder and a file-only whitelist, and a

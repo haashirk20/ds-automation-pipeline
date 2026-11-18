@@ -24,7 +24,22 @@ nav{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;max-width:70rem;ma
 nav a,nav button.link{padding:.4rem .7rem;min-height:44px;display:inline-flex;align-items:center;border:3px solid transparent;color:#f4efe4;text-decoration:none;font:700 .85rem/1 var(--mono);text-transform:uppercase;letter-spacing:.04em}
 nav a:hover,nav button.link:hover{background:var(--steelL);border-color:var(--ink);text-decoration:none}
 nav a[aria-current=page]{background:var(--amber);color:var(--ink);border-color:var(--ink);box-shadow:inset -3px -3px 0 rgba(0,0,0,.22),inset 3px 3px 0 rgba(255,255,255,.45)}
-nav form{margin:0 0 0 auto}
+nav form{margin:0}
+/* one slim bar: brand, back to town, where you are, the map, log out */
+nav a.back::before{content:"";display:inline-block;width:0;height:0;margin-right:.45rem;border:5px solid transparent;border-right:7px solid currentColor;border-left-width:0}
+.here{display:inline-flex;align-items:center;gap:.4rem;min-height:44px;padding:0 .4rem;color:var(--amber);font:800 .9rem var(--mono);text-transform:uppercase;letter-spacing:.05em}
+.here::before{content:"";width:8px;height:8px;background:var(--amber);border:2px solid var(--ink);transform:rotate(45deg)}
+details.map{position:relative;margin-left:auto}
+details.map summary{list-style:none;display:inline-flex;align-items:center;gap:.45rem;min-height:44px;padding:.4rem .8rem;cursor:pointer;color:var(--ink);background:var(--amber);border:3px solid var(--ink);font:800 .85rem/1 var(--mono);text-transform:uppercase;box-shadow:inset -3px -3px 0 rgba(0,0,0,.22),inset 3px 3px 0 rgba(255,255,255,.45)}
+details.map summary::-webkit-details-marker{display:none}
+details.map summary::before{content:"";width:14px;height:12px;border:2px solid var(--ink);background:linear-gradient(90deg,#fff4dc 0 33%,#e8dcc0 33% 66%,#fff4dc 66%)}
+details.map[open] summary{background:#ffd36a}
+details.map ul{position:absolute;right:0;top:calc(100% + 6px);z-index:30;list-style:none;margin:0;padding:.4rem;width:17rem;background:var(--bg);border:3px solid var(--ink);box-shadow:5px 5px 0 rgba(0,0,0,.45)}
+details.map li a{display:flex;justify-content:space-between;gap:.5rem;min-height:40px;padding:.4rem .6rem;color:var(--text);border:2px solid transparent;font:700 .8rem var(--mono);text-transform:uppercase}
+details.map li a span{color:var(--muted);font-weight:600;text-transform:none}
+details.map li a:hover{background:var(--panel);border-color:var(--ink)}
+details.map li a[aria-current=page]{background:var(--amber);color:var(--ink);box-shadow:none}
+details.map li a[aria-current=page] span{color:var(--ink)}
 
 /* the factory floor every page sits on */
 main{max-width:70rem;margin:1.5rem auto 2.5rem;padding:1.25rem 1.5rem 1.5rem;background:var(--bg);border:4px solid var(--ink);box-shadow:8px 8px 0 rgba(27,28,36,.55),inset 0 4px 0 rgba(255,255,255,.35)}

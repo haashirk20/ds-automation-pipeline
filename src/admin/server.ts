@@ -13,6 +13,7 @@ import * as music from './music.ts';
 import * as pages from './pages.ts';
 import * as posts from './posts.ts';
 import * as products from './products.ts';
+import * as town from './town.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
 import { readFileSync } from 'node:fs';
@@ -37,8 +38,9 @@ const HEADERS: Record<string, string> = {
 
 type Route = { auth: boolean; h: (c: Ctx) => Res | Promise<Res> };
 const ROUTES: Record<string, Route> = {
-  'GET /': { auth: true, h: pages.overviewPage },
-  'GET /overview': { auth: true, h: pages.overviewPage },
+  'GET /': { auth: true, h: town.townPage },
+  'GET /overview': { auth: true, h: town.townPage },
+  'GET /town.json': { auth: true, h: town.townJson },
   'GET /factory': { auth: true, h: factory.factoryPage },
   'GET /factory.json': { auth: true, h: factory.factoryJson },
   'GET /settings': { auth: true, h: pages.settingsPage },
@@ -119,6 +121,8 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   if (method === 'GET' && path === '/style.css') return { status: 200, body: CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.css') return { status: 200, body: factory.FACTORY_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/town.js') return { status: 200, body: town.TOWN_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/town.css') return { status: 200, body: town.TOWN_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/settings.js') return { status: 200, body: SETTINGS_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/blocks.css') return { status: 200, body: BLOCKS_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
