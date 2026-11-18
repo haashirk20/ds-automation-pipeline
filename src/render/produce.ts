@@ -20,6 +20,7 @@ import { checkClip } from '../qa/vision.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { listBriefs, runIngest } from '../shopify/index.ts';
+import { activeHandles, selectBriefs } from '../shopify/catalog.ts';
 import { synthesize } from '../tts/index.ts';
 import { slotTierDef } from '../config/models.ts';
 import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
@@ -129,8 +130,9 @@ export async function ensureIngest(db: Db, now: Date, d: ProduceDeps): Promise<v
   }
 }
 
+// Products take turns by slot ordinal; only the ones ticked on the Products page, when any are ticked.
 export function pickBrief(db: Db, ordinal: number): Brief {
-  const briefs = listBriefs(db);
+  const briefs = selectBriefs(listBriefs(db), activeHandles(db));
   if (!briefs.length) throw new NoBriefError('no product brief and the store could not be read');
   return briefs[ordinal % briefs.length];
 }

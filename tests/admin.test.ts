@@ -144,7 +144,12 @@ test('other methods and unknown paths; nothing is served from disk', async () =>
 
 test('every response carries the security headers and no page has a script tag', async () => {
   const { cookie } = await login();
-  for (const path of ['/login', '/overview', '/settings', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
+  // The settings page is the one other page with a script: its own /settings.js and nothing else (D-38).
+  const s = await req('GET', '/settings', { cookie });
+  assert.equal(s.headers['content-security-policy'], "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  assert.deepEqual([...s.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/settings.js" defer>']);
+  assert.ok(!/ style="|<style/i.test(s.text));
+  for (const path of ['/login', '/overview', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
     const r = await req('GET', path, { cookie });
     assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
     assert.equal(r.headers['x-content-type-options'], 'nosniff');

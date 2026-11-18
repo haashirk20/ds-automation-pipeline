@@ -12,8 +12,14 @@ import * as models from './models.ts';
 import * as music from './music.ts';
 import * as pages from './pages.ts';
 import * as posts from './posts.ts';
+import * as products from './products.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
+import { readFileSync } from 'node:fs';
+
+// Static files of the settings block editor, read once. They hold no data.
+export const SETTINGS_JS = readFileSync(new URL('./settings.client.js', import.meta.url), 'utf8');
+export const BLOCKS_CSS = readFileSync(new URL('./blocks.css', import.meta.url), 'utf8');
 
 const MAX_BODY = 256 * 1024;
 const MAX_PASSWORD = 1024;
@@ -38,6 +44,16 @@ const ROUTES: Record<string, Route> = {
   'GET /settings': { auth: true, h: pages.settingsPage },
   'POST /settings/preview': { auth: true, h: pages.settingsPreview },
   'POST /settings/save': { auth: true, h: pages.settingsSave },
+  'GET /products': { auth: true, h: (c) => products.productsPage(c) },
+  'GET /products/new': { auth: true, h: (c) => products.productForm(c) },
+  'GET /products/edit': { auth: true, h: (c) => products.productForm(c) },
+  'POST /products/save': { auth: true, h: () => pages.notFound(null) }, // multipart, handled before the body is read
+  'POST /products/select': { auth: true, h: products.productsSelect },
+  'POST /products/delete': { auth: true, h: products.productsDelete },
+  'POST /brand/logo': { auth: true, h: () => pages.notFound(null) }, // multipart
+  'POST /brand/logo/reset': { auth: true, h: products.logoReset },
+  'GET /media/photo': { auth: true, h: products.mediaPhoto },
+  'GET /media/logo': { auth: true, h: (c) => products.mediaLogo(c) },
   'GET /posts': { auth: true, h: posts.postsPage },
   'POST /posts/new': { auth: true, h: posts.postNew },
   'POST /posts/approve': { auth: true, h: posts.postApprove },
@@ -61,6 +77,13 @@ const ROUTES: Record<string, Route> = {
   'GET /activity': { auth: true, h: pages.activityPage },
   'GET /history': { auth: true, h: pages.historyPage },
   'POST /history/activate': { auth: true, h: pages.historyActivate },
+};
+
+// Multipart routes, each with its own body limit.
+const MULTIPART: Record<string, { max: number; h: (c: Ctx, req: IncomingMessage) => Promise<Res> }> = {
+  '/music/upload': { max: music.MAX_BODY, h: music.uploadMusic },
+  '/products/save': { max: products.MAX_PRODUCT_BODY, h: products.productSave },
+  '/brand/logo': { max: products.MAX_LOGO_BODY, h: products.logoUpload },
 };
 
 export type AdminOpts = { now: () => Date; hosts: string[] };
@@ -96,6 +119,8 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   if (method === 'GET' && path === '/style.css') return { status: 200, body: CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.css') return { status: 200, body: factory.FACTORY_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/settings.js') return { status: 200, body: SETTINGS_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/blocks.css') return { status: 200, body: BLOCKS_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();
@@ -115,13 +140,19 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
     return sfs === undefined || sfs === 'same-origin';
   };
 
-  // The one multipart route. The session is checked before any body is read; the csrf field is checked after parsing.
-  if (method === 'POST' && path === '/music/upload') {
+  // The multipart routes. The session is checked before any body is read; the csrf field is checked after parsing.
+  const upload = method === 'POST' ? MULTIPART[path] : undefined;
+  if (upload) {
     const s = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
     const close = (r: Res): Res => ({ ...r, headers: { ...r.headers, connection: 'close' } }); // the body is not read, so the connection must not be reused
     if (!s) return close(pages.redirect('/login'));
     if (!sameOrigin()) return close(plain(403, 'Forbidden'));
-    const r = await music.uploadMusic({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
+    const ct = req.headers['content-type'] ?? '';
+    if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return close(plain(415, 'Unsupported media type'));
+    const len = req.headers['content-length'];
+    if (len === undefined || !/^\d+$/.test(len)) return close(plain(411, 'Length required'));
+    if (Number(len) > upload.max) return close(plain(413, 'Request too large'));
+    const r = await upload.h({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
     return r.status === 303 || r.status === 403 ? close(r) : r;
   }
 
@@ -204,7 +235,7 @@ export function makeServer(db: Db, opts: AdminOpts): Server {
       });
   });
   server.maxConnections = 64;
-  server.requestTimeout = 180_000; // a 40 MB upload on a slow tunnel
+  server.requestTimeout = 300_000; // a 64 MB photo upload on a slow tunnel
   server.headersTimeout = 15_000;
   return server;
 }

@@ -16,6 +16,7 @@ import { chooseTier, generateClip, rejectClip } from '../router/index.ts';
 import { ClipPendingError } from '../router/errors.ts';
 import { ClaimLostError, DeferSlotError, before, commitSlot, ensureIngest, getCopy, holdOf, pickBrief, yearsOf, type ProduceDeps, type Slot } from './produce.ts';
 import { assertInside } from './render.ts';
+import { brandLogoFile } from '../shopify/catalog.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const RECENT = 20;
@@ -126,7 +127,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
           await d.prepareImage(path.resolve(env.dataDir(), s.file), s.crop, jpg);
           images.push(jpg);
         }
-        const logoFile = config.brand.logo ? path.resolve(ROOT, config.brand.logo) : null;
+        const logoFile = brandLogoFile(db, config, ROOT);
         const logo = !!logoFile && existsSync(logoFile);
         if (logo) images.push(logoFile!);
         const { prompt, shots } = buildClipPrompt(brief, concept, refShots.map((s) => s.note), { look: productLook(handle), brand: brief.shop.name, logo });

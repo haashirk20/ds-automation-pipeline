@@ -12,6 +12,7 @@ import { monthSpendUsd } from '../router/index.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import type { Brief } from '../contracts.ts';
 import { foldDiff, lineDiff } from './diff.ts';
+import { activeHandles } from '../shopify/catalog.ts';
 import { html, raw as rawHtml, Raw } from './html.ts';
 
 export type Ctx = {
@@ -32,13 +33,28 @@ const fileRaw = raw as unknown as Record<string, any>;
 
 // ---------- layout ----------
 
-const NAV: [string, string][] = [['/overview', 'Overview'], ['/factory', 'Factory'],['/settings', 'Settings'], ['/posts', 'Posts'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
+const NAV: [string, string][] = [['/overview', 'Home'], ['/factory', 'Factory'], ['/products', 'Products'], ['/posts', 'Posts'], ['/settings', 'Settings'], ['/music', 'Music'], ['/models', 'Models'], ['/prompts', 'Prompts'], ['/activity', 'Activity'], ['/history', 'History']];
+
+// One plain sentence under each page title: what the page is for.
+const HELP: Record<string, string> = {
+  '/overview': 'How the factory is doing, and the shortcuts you need most.',
+  '/factory': 'Watch every video move down the line, live.',
+  '/products': 'Choose which products get videos, add your own, and set the logo.',
+  '/posts': 'Make a video right now and decide whether it goes out.',
+  '/settings': 'When videos are made and posted, where they go, and how much may be spent.',
+  '/music': 'Background music for the videos. Ticked tracks take turns.',
+  '/models': 'The video models the clip foundry may use.',
+  '/prompts': 'The instructions the writers follow, and what each product looks like.',
+  '/activity': 'Everything made, posted or gone wrong in the last week.',
+  '/history': 'Earlier settings you can go back to, and a log of every change.',
+};
 
 export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
   const nav = ctx?.csrf
-    ? html`<header class="top"><nav aria-label="Main">${NAV.map(([h, t]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`)}<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
+    ? html`<header class="top"><nav aria-label="Main"><a class="brand" href="/overview" aria-label="Home">Ad factory</a>${NAV.map(([h, t]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`)}<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
     : '';
-  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css">${head}</head><body>${nav}<main><h1>${title}</h1>${body}</main></body></html>`);
+  const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|History of)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
+  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css">${head}</head><body>${nav}<main><h1>${title}</h1>${help}${body}</main></body></html>`);
 }
 
 export const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
@@ -105,6 +121,14 @@ type Field = { path: string; label: string; stage: string; kind: Kind; hint?: st
 const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
 const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
 const S = ['Schedule and timing', 'Platforms', 'Concept writing', 'Claim checks', 'Video generation', 'Music', 'Frame check', 'Budget', 'Ops'] as const;
+// The block each group becomes in the settings editor (/settings.js).
+const BLOCK: Record<string, string> = { [S[0]]: 'schedule', [S[1]]: 'platforms', [S[2]]: 'concept', [S[3]]: 'claims', [S[4]]: 'clips', [S[5]]: 'music', [S[6]]: 'inspect', [S[7]]: 'budget', [S[8]]: 'ops' };
+
+// The settings pages load one same-origin script, /settings.js, that turns the form into blocks and plays the
+// shipping animation on save. Without it the plain form works the same. Every other page keeps the no-script CSP.
+export const SETTINGS_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+const BLOCKS_HEAD = html`<link rel="stylesheet" href="/blocks.css"><script src="/settings.js" defer></script>`;
+const withBlocks = (r: Res): Res => ({ ...r, headers: { ...r.headers, 'content-security-policy': SETTINGS_CSP } });
 
 const FIELDS: Field[] = [
   { path: 'produceAt', label: 'Produce tomorrow\'s slots at (HH:MM local)', stage: S[0], kind: 'text' },
@@ -216,10 +240,10 @@ function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeI
 <span class="hint">Current: ${show(cur)}. File default: ${show(fd)}.${lt ? ` Limit: ${lt}.` : ''}${f.hint ? ' ' + f.hint : ''}</span>${(e ?? []).map((m) => html`<span class="err" role="alert">${m}</span>`)}</div></div>`;
     });
     const locked = LOCKED.filter((l) => l.stage === st).map((l) => html`<div class="field"><span class="lbl">${l.label}</span><div><code>${show(l.value(cfg, dry))}</code><span class="hint">Read only. ${l.reason}</span></div></div>`);
-    return html`<fieldset><legend>${st}</legend>${rows}${locked}</fieldset>`;
+    return html`<fieldset data-block="${BLOCK[st]}"${FIELDS.some((f) => f.stage === st && errs.has(f.path)) ? rawHtml(' data-error="1"') : ''}><legend>${st}</legend>${rows}${locked}</fieldset>`;
   });
   return html`${other.length ? html`<div class="error-box" role="alert"><strong>Not saved.</strong><ul>${other.map((m) => html`<li>${m}</li>`)}</ul></div>` : ''}
-<form method="post" action="/settings/preview">${csrfField(ctx)}<input type="hidden" name="base_id" value="${activeId ?? ''}">${stages}
+<form method="post" action="/settings/preview" data-blocks>${csrfField(ctx)}<input type="hidden" name="base_id" value="${activeId ?? ''}">${stages}
 <div class="actions"><button class="primary" type="submit">Review changes</button></div></form>`;
 }
 
@@ -246,7 +270,7 @@ function flash(ctx: Ctx, cfg: Config): Raw | '' {
 export async function settingsPage(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const { id, o } = activeOverrides(ctx.db);
-  return layout(ctx, 'Settings', '/settings', html`${flash(ctx, cfg)}<p class="muted">Changes are saved as versions and take effect at the next tick. The file holds defaults and ceilings. Product notes and prompt texts are on the <a href="/prompts">Prompts</a> page.</p>${settingsForm(ctx, cfg, o, id, null, new Map(), [])}`);
+  return withBlocks(layout(ctx, 'Settings', '/settings', html`${flash(ctx, cfg)}<p class="muted bl-plain">Changes are saved as versions and take effect at the next tick (within a minute). The config file holds the defaults and the limits. Products and the logo are on <a href="/products">Products</a>; prompt texts on <a href="/prompts">Prompts</a>.</p>${settingsForm(ctx, cfg, o, id, null, new Map(), [])}`, BLOCKS_HEAD));
 }
 
 function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>): unknown {
@@ -303,19 +327,20 @@ export async function settingsPreview(ctx: Ctx): Promise<Res> {
     if ('errors' in r) other = matchErrors(r.errors, errs);
     else next = r.config;
   }
-  if (!next) return { ...layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, ctx.form, errs, other)), status: 422 };
+  if (!next) return { ...withBlocks(layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, ctx.form, errs, other), BLOCKS_HEAD)), status: 422 };
 
   const paths = [...new Set([...Object.keys(o), ...Object.keys(draft)])].filter((p) => !same(o[p], draft[p])).sort();
   if (!paths.length) return layout(ctx, 'Settings', '/settings', html`<p class="notice">No changes.</p><p><a href="/settings">Back to settings</a></p>`);
   const pub = newlyPublic(cfg, next);
-  return layout(ctx, 'Review changes', '/settings', html`<p>These values change. Nothing is saved until you press the button.</p>
-<div class="scroll"><table><thead><tr><th>Setting</th><th>File default</th><th>Now</th><th>New</th></tr></thead><tbody>
-${paths.map((p) => html`<tr><td><code>${p}</code></td><td>${show(fileDefault(FIELDS.find((f) => f.path === p)!, String(draft['tiers.t2Preset'] ?? '') || undefined, customs))}</td><td>${p in o ? show(o[p]) : 'file'}</td><td>${p in draft ? show(draft[p]) : 'file'}</td></tr>`)}
+  const label = (p: string) => FIELDS.find((f) => f.path === p)?.label ?? p;
+  return withBlocks(layout(ctx, 'Review changes', '/settings', html`<p>These values change. Nothing is saved until you press the button.</p>
+<div class="scroll"><table data-changes><thead><tr><th>Setting</th><th>File default</th><th>Now</th><th>New</th></tr></thead><tbody>
+${paths.map((p) => html`<tr data-label="${label(p)}"><td>${label(p)}<br><code>${p}</code></td><td>${show(fileDefault(FIELDS.find((f) => f.path === p)!, String(draft['tiers.t2Preset'] ?? '') || undefined, customs))}</td><td>${p in o ? show(o[p]) : 'file'}</td><td>${p in draft ? show(draft[p]) : 'file'}</td></tr>`)}
 </tbody></table></div>
-<form method="post" action="/settings/save">${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
+<form method="post" action="/settings/save" data-ship>${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
 ${pub.length ? html`<div class="field"><label for="cp">Confirm public posting</label><div><input id="cp" type="checkbox" name="confirm_public" value="1"> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</div></div>` : ''}
 <div class="field"><label for="note">Note (optional)</label><div><input id="note" type="text" name="note" maxlength="200"></div></div>
-<div class="actions"><button class="primary" type="submit">Save as version ${(db_nextId(ctx.db, 'config_versions'))}</button><a href="/settings">Cancel</a></div></form>`);
+<div class="actions"><button class="primary" type="submit" data-version="${db_nextId(ctx.db, 'config_versions')}">Pack and send to the factory (version ${db_nextId(ctx.db, 'config_versions')})</button><a href="/settings">Cancel</a></div></form>`, BLOCKS_HEAD));
 }
 
 const db_nextId = (db: Db, table: string): number => ((db.prepare(`SELECT COALESCE(MAX(id), 0) + 1 AS n FROM ${table}`).get() as { n: number }).n);
@@ -512,16 +537,43 @@ export async function overviewPage(ctx: Ctx): Promise<Res> {
   const attention = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const cv = st.configVersion;
   const refused = typeof cv === 'string' && cv.startsWith('refused');
-  return layout(ctx, 'Overview', '/overview', html`${st.dryRun ? html`<p class="banner">DRY_RUN is on: the pipeline publishes nothing.</p>` : ''}
+  const products = ctx.db.prepare('SELECT handle FROM briefs').all() as { handle: string }[];
+  const act = activeHandles(ctx.db);
+  const inTurn = act ? products.filter((p) => act.includes(p.handle)).length || products.length : products.length;
+  const today = localDateOf(ctx.now, cfg.timezone);
+  const made = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')").get(today) as { n: number }).n;
+  const posted = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'published' AND published_at >= ?").get(new Date(ctx.now.getTime() - 86_400_000).toISOString()) as { n: number }).n;
+  const waiting = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'").get() as { n: number }).n;
+  const llm = monthSpend(ctx.db, ctx.now);
+  const clips = monthSpendUsd(ctx.db, 't2', ctx.now);
+  const alive = age !== null && age <= 300;
+  const tile = (cls: string, label: string, value: string | Raw, sub: string | Raw, href: string) => html`<a class="tile ${cls}" href="${href}"><span class="tile-l">${label}</span><span class="tile-v">${value}</span><span class="tile-s">${sub}</span></a>`;
+  return layout(ctx, 'Home', '/overview', html`${st.dryRun ? html`<p class="banner">Practice mode (DRY_RUN) is on: videos are made, nothing is published.</p>` : ''}
 ${refused ? html`<p class="error-box" role="alert">The stored settings were refused and the file is in use: ${cv}</p>` : ''}
-<div class="panel"><table><tbody>
+<div class="tiles">
+${tile(alive ? 'good' : 'bad', 'Factory', age === null ? 'Not started' : alive ? 'Running' : 'Stopped', age === null ? 'The pipeline has never checked in.' : `Last check-in ${age} s ago`, '/factory')}
+${tile(attention ? 'bad' : waiting ? 'warn' : 'good', 'Needs you', attention || waiting ? String(attention + waiting) : 'Nothing', attention ? `${attention} post(s) need attention` : waiting ? `${waiting} video(s) wait for Post or Discard` : 'All clear', attention ? '/activity' : '/posts')}
+${tile('', 'Next post', next ? fmtTs(next.scheduled_at).slice(11, 16) + 'Z' : 'None', next ? `${PNAME[next.platform] ?? next.platform}, ${fmtTs(next.scheduled_at).slice(0, 10)}` : 'Nothing is scheduled', '/activity')}
+${tile('', 'Last 24 hours', `${made} made · ${posted} posted`, 'Videos finished today, posts sent', '/activity')}
+${tile(inTurn ? '' : 'bad', 'Products', `${inTurn} in turn`, `of ${products.length} product(s)`, '/products')}
+${tile('', 'Spent this month', `$${(llm + clips).toFixed(2)}`, `Writers $${llm.toFixed(2)} of $${cfg.llm.monthlyCapUsd} · clips $${clips.toFixed(2)} of $${cfg.tiers.capsUsd.t2}`, '/activity')}
+</div>
+<h2>What do you want to do?</h2>
+<div class="quick">
+<a class="qa" href="/posts"><b>Make a video now</b><span>Made right away; you press Post when you like it.</span></a>
+<a class="qa" href="/products"><b>Choose products</b><span>Pick what gets videos, add your own, set the logo.</span></a>
+<a class="qa" href="/settings"><b>Change settings</b><span>Times, platforms and budget, as blocks on a line.</span></a>
+<a class="qa" href="/factory"><b>Watch the factory</b><span>See each video move from station to station.</span></a>
+<a class="qa" href="/music"><b>Add music</b><span>Upload tracks the videos may use.</span></a>
+</div>
+<details class="panel tech"><summary>Technical details</summary><table><tbody>
 <tr><th scope="row">Pipeline heartbeat</th><td>${age === null ? 'never' : html`${age} s ago ${age > 300 ? html`<span class="tag bad">stale</span>` : html`<span class="tag ok">alive</span>`}`}</td></tr>
 <tr><th scope="row">Settings in use</th><td>${cv === undefined ? 'unknown (no tick since the admin was installed)' : typeof cv === 'number' ? `version ${cv} since ${fmtTs(st.tickAt)}` : cv === 'file' ? `the file${st.tickAt ? ` since ${fmtTs(st.tickAt)}` : ''}` : 'the file (stored settings refused)'}</td></tr>
 <tr><th scope="row">Prompt versions in use</th><td>${st.promptVersions && Object.keys(st.promptVersions).length ? Object.entries(st.promptVersions).map(([k, v]) => `${k}: v${v}`).join(', ') : 'files'}</td></tr>
 <tr><th scope="row">Next publication</th><td>${next ? `${fmtTs(next.scheduled_at)} (${next.platform}, ${next.slot_id})` : 'none planned'}</td></tr>
 <tr><th scope="row">Needs attention</th><td>${attention ? html`<span class="tag bad">${attention}</span> <a href="/activity">See Activity</a>` : '0'}</td></tr>
 <tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
-</tbody></table></div>`);
+</tbody></table></details>`);
 }
 
 // ---------- activity ----------

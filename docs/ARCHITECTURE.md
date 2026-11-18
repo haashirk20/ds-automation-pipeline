@@ -301,7 +301,10 @@ based on, and writes an `audit` row. Rollback activates an older version; "Use f
 pointer. Prompts: `claims`, `copycheck` and `vision` are locked; `house` is prepended to the writer
 prompts only; `video` is the Higgsfield style text and the speech sentence stays in code.
 
-Three pages write more than settings. **Posts** (D-33) makes a manual slot, plays the held render
+Four pages write more than settings. **Products** (D-39) ticks which products get videos, adds
+products by hand (form fields in `owner_products`, the brief in `briefs`, photos under
+`data/assets/own-*/`) and uploads the logo (`data/brand/logo-<sha256>.png`, named in `kv brand_logo`),
+which replaces the file logo as the video model's reference. **Posts** (D-33) makes a manual slot, plays the held render
 and records Post or Discard. **Music** (D-34) takes uploads and ticks tracks. **Models** (D-35) adds
 Higgsfield models, whose guardrails the page and the pipeline's loader (`src/config/models.ts`)
 both apply. A model added there appears in Settings only after one of its manual test posts has
@@ -326,8 +329,12 @@ loudness is measured. The upload needs a rights confirmation.
 stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
 per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB (the music upload is the one
 exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
-database value. The one exception is the read-only Factory page (D-37), whose CSP allows its own
-`/factory.js` and fetches to the same origin. The code never queries `oauth_tokens` (a test checks this).
+database value. Two pages are exceptions: the read-only Factory page (D-37), whose CSP allows its own
+`/factory.js` and fetches to the same origin, and the Settings pages (D-38), whose CSP allows
+`/settings.js` only (no fetch); it lays the same form out as blocks and works without the script.
+Product photos and the logo are image uploads with the same handling as music: PNG or JPEG sniffed
+from the first bytes, ffmpeg with the image demuxer, a forced decoder and a file-only whitelist, and a
+re-encode to PNG without metadata. The code never queries `oauth_tokens` (a test checks this).
 
 ## Slot and publication states
 
@@ -414,7 +421,10 @@ planned slot that has an error, and the "too late" rule ends the wait (D-31).
 
 ## Creative pipeline
 
-**Brief.** Built from Shopify data only. Each fact records its source field. Tags are used for
+**Brief.** Built from Shopify data, or for a product the owner adds on the Products page from the fact
+lines they type (source `owner`, D-39); such a brief has no tags and allows no discount or review
+claims. Products take turns by slot ordinal among the ones ticked on that page (`kv products_active`;
+none ticked or a stale tick means all). Each fact records its source field. Tags are used for
 angle selection and never as claims. Each photo's usable shots come from `config/photo-tags.json`,
 which the owner edits: a crop free of printed text, what it shows and the colour variant. A photo
 with no entry is used whole. Tagging photos with a vision model is planned and not built. Claims that

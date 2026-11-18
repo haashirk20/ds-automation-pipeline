@@ -35,6 +35,15 @@ slot(101, 'ready', { master: master('Sweater weather, but heated.'), hold: 'wait
 slot(5, 'ready', { master: master('Warm shoulders, no wall socket.') }); pubs(5, ['published', 'uploading', 'pending', 'published']);
 slot(6, 'failed', { master: master('Wrapped up and plugged in.') });
 kvSet(db, 'pipeline_state', JSON.stringify({ dryRun: true }));
+// Read the store's public product feed once, so the Products page shows real products.
+process.env.SHOPIFY_SHOP ??= 'shopgiftwell.myshopify.com';
+try {
+  const { runIngest } = await import('../src/shopify/index.ts');
+  const { loadConfig } = await import('../src/config/index.ts');
+  await runIngest(db, await loadConfig(), new Date(), { print: false });
+} catch (e) {
+  console.log(JSON.stringify({ msg: 'store read failed; Products starts empty', error: (e as Error).message }));
+}
 const beat = () => kvSet(db, 'heartbeat', new Date().toISOString());
 beat();
 setInterval(beat, 30_000);

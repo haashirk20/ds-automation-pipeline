@@ -1,0 +1,106 @@
+/* The settings block editor (/settings.js) and the shipping animation. Without the script none of this shows. */
+.bl-help{margin:0 0 1rem;padding:.7rem 1rem;background:var(--panel);border:2px dashed var(--line)}
+.bl h2{margin-top:1.25rem}
+
+/* the line: blocks joined by little conveyor belts */
+.bl-line{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;row-gap:1.25rem;margin:0 0 1rem}
+.bl-tile{position:relative;flex:0 1 11.5rem;display:flex;flex-direction:column;align-items:flex-start;gap:.2rem;min-height:12.5rem;padding:.7rem .75rem .8rem;text-align:left;text-transform:none;letter-spacing:0;
+  font:inherit;color:var(--text);background:var(--panel);border:3px solid var(--ink);border-top-width:12px;margin:0;
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.4),0 5px 0 var(--ink);cursor:pointer}
+.bl-tile:hover{filter:brightness(1.05);transform:translateY(-2px)}
+.bl-tile:active{top:0;transform:translateY(2px)}
+.bl-tile.edited{border-top-color:var(--amber)}
+.bl-tile.error{border-top-color:var(--bad)}
+.bl-num{position:absolute;top:-12px;left:6px;font:800 .7rem/12px var(--mono);color:#fff4dc}
+.bl-name{font:800 .9rem/1.2 var(--mono);text-transform:uppercase}
+.bl-what{font-size:.8rem;color:var(--muted);line-height:1.3}
+.bl-sum{display:flex;flex-direction:column;gap:.1rem;margin-top:auto;padding-top:.4rem;font:600 .78rem/1.35 var(--mono);color:var(--text)}
+.bl-sum span{overflow-wrap:anywhere}
+.bl-flag{position:absolute;top:.4rem;right:.4rem;font:800 .65rem var(--mono);text-transform:uppercase;padding:0 .3rem;background:var(--amber);border:2px solid var(--ink)}
+.bl-flag:empty{display:none}
+.bl-tile.error .bl-flag{background:var(--bad);color:#fff}
+.bl-belt{flex:0 0 1.6rem;align-self:center;height:14px;border:3px solid var(--ink);border-left:0;border-right:0;
+  background:repeating-linear-gradient(90deg,#3b3f48 0 5px,#5f6571 5px 7px);background-size:7px 100%;animation:bl-belt 1s linear infinite}
+.bl-office .bl-tile{flex-basis:14rem;min-height:9rem}
+.bl-platforms{flex-basis:15rem}
+
+/* icons: small machines drawn with gradients */
+.bl-icon{display:block;width:44px;height:44px;border:3px solid var(--ink);background-color:var(--steelL);box-shadow:inset 0 -6px 0 rgba(0,0,0,.25);margin-bottom:.2rem}
+.bl-i-schedule{background:linear-gradient(var(--ink),var(--ink)) 19px 9px/3px 12px no-repeat,linear-gradient(var(--ink),var(--ink)) 19px 19px/10px 3px no-repeat,radial-gradient(circle at 50% 50%,#fff4dc 0 13px,var(--ink) 13px 15px,transparent 15px),#b0473a}
+.bl-i-concept{background:linear-gradient(#8e98a6,#8e98a6) 15px 26px/10px 8px no-repeat,radial-gradient(circle at 50% 40%,#ffe27a 0 9px,var(--ink) 9px 11px,transparent 11px),#4b6b9a}
+.bl-i-claims{background:linear-gradient(45deg,transparent 45%,var(--ink) 45% 60%,transparent 60%) 8px 18px/12px 12px no-repeat,linear-gradient(-45deg,transparent 42%,var(--ink) 42% 56%,transparent 56%) 16px 9px/18px 20px no-repeat,#7ed36b}
+.bl-i-clips{background:repeating-linear-gradient(90deg,var(--ink) 0 3px,#ffb347 3px 7px) 4px 6px/30px 5px no-repeat,repeating-linear-gradient(90deg,var(--ink) 0 3px,#ffb347 3px 7px) 4px 27px/30px 5px no-repeat,linear-gradient(#ff7a2e,#ffcf5a) 4px 12px/30px 14px no-repeat,#3a3f49}
+.bl-i-inspect{background:radial-gradient(circle at 50% 50%,#4aa8ff 0 5px,#0b1a2a 5px 9px,var(--ink) 9px 11px,#c9cfd8 11px 15px,transparent 15px),#7a8696}
+.bl-i-music{background:linear-gradient(var(--ink),var(--ink)) 22px 8px/3px 20px no-repeat,linear-gradient(var(--ink),var(--ink)) 22px 8px/9px 3px no-repeat,radial-gradient(circle at 17px 28px,var(--ink) 0 5px,transparent 6px),#c2378a}
+.bl-i-platforms{background:linear-gradient(#e8eaee,#e8eaee) 24px 18px/10px 10px no-repeat,linear-gradient(#d6342c,#d6342c) 5px 12px/19px 16px no-repeat,radial-gradient(circle at 11px 31px,var(--ink) 0 3px,transparent 4px),radial-gradient(circle at 28px 31px,var(--ink) 0 3px,transparent 4px),#9a9c98}
+.bl-i-budget{background:radial-gradient(circle at 50% 50%,#ffe25a 0 9px,#c99a1a 9px 12px,var(--ink) 12px 14px,transparent 14px),#2e8b57}
+.bl-i-ops{background:linear-gradient(45deg,transparent 42%,var(--ink) 42% 58%,transparent 58%),radial-gradient(circle at 30% 30%,#c3cad3 0 7px,var(--ink) 7px 9px,transparent 9px),#5d6673}
+.bl-dh .bl-icon{margin:0}
+
+/* platform parts: trucks that plug into the docks */
+.bl-sockets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem;width:100%;margin-top:.5rem;padding:.35rem;min-height:4.5rem;background:repeating-linear-gradient(-45deg,rgba(231,181,44,.25) 0 6px,transparent 6px 12px);border:2px dashed var(--ink)}
+.bl-tile.over,.bl-tray.over{outline:4px dashed var(--go);outline-offset:3px}
+.bl-tray{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin:0 0 1rem;padding:.6rem .8rem;background:#6b4a2e;border:3px solid var(--ink);box-shadow:inset 0 4px 0 rgba(0,0,0,.25),4px 4px 0 var(--ink)}
+.bl-tray-h{font:800 .8rem var(--mono);text-transform:uppercase;color:#fff4dc}
+.bl-tray-parts{display:flex;flex-wrap:wrap;gap:.5rem;min-height:44px;align-items:center}
+.bl-tray-parts:empty::after{content:attr(data-empty);color:#f1e6cf;font-size:.85rem}
+.bl-part{display:inline-flex;align-items:center;gap:.4rem;min-height:40px;padding:.25rem .5rem;margin:0;font:700 .72rem var(--mono);background:var(--btn);cursor:grab;box-shadow:inset -2px -2px 0 rgba(0,0,0,.2),0 3px 0 var(--ink);border-width:2px}
+.bl-part.dragging{opacity:.4}
+.bl-part{touch-action:none}
+.bl-ghost{position:fixed;z-index:60;pointer-events:none;transform:rotate(-4deg);box-shadow:4px 6px 0 rgba(0,0,0,.4)}
+.bl-part.snap{animation:bl-snap .35s ease-out}
+.bl-truck{display:inline-grid;place-items:center;width:30px;height:20px;border:2px solid var(--ink);color:#fff;font:800 .65rem var(--mono);box-shadow:6px 0 0 -2px #e8eaee,6px 0 0 0 var(--ink)}
+.bl-p-youtube .bl-truck{background:#d6342c}.bl-p-facebook .bl-truck{background:#1f6fe0}.bl-p-instagram .bl-truck{background:#c2378a}.bl-p-tiktok .bl-truck{background:#24262c;color:#3fd4c9}
+.bl-sockets .bl-part{background:#d9f2c9}
+.bl-tray .bl-part{opacity:.85}
+
+/* the dialog a block opens */
+.bl-dialog{width:min(52rem,94vw);max-height:88vh;padding:0;border:4px solid var(--ink);background:var(--bg);color:var(--text);box-shadow:8px 8px 0 rgba(0,0,0,.55)}
+.bl-dialog::backdrop{background:rgba(20,22,28,.6)}
+.bl-dh{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:.8rem;padding:.7rem 1rem;background:var(--steel);color:#f4efe4;border-bottom:3px solid var(--ink)}
+.bl-dh div{display:flex;flex-direction:column;flex:1}
+.bl-dh strong{font:800 1rem var(--mono);text-transform:uppercase}
+.bl-dh span{font-size:.85rem;opacity:.85}
+.bl-dialog fieldset{margin:1rem;box-shadow:none}
+.bl-dialog legend{display:none}
+
+/* the sticky bar */
+.bl-bar{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin:1.25rem -1.5rem -1.5rem;padding:.75rem 1.5rem;background:var(--steel);border-top:4px solid var(--ink);color:#f4efe4}
+.bl-count{font:700 .9rem var(--mono);margin-right:auto}
+.bl-bar.ready .bl-count::before{content:"";display:inline-block;width:14px;height:12px;margin-right:.5rem;border:2px solid var(--ink);background:#d29a5a;vertical-align:-1px}
+.bl-bar button{margin-bottom:4px}
+.bl-bar button[disabled]{opacity:.5;cursor:not-allowed}
+
+/* the shipping animation */
+.ship{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;background:rgba(20,22,28,.78);opacity:0;transition:opacity .25s}
+.ship.on{opacity:1}
+.ship-scene{position:relative;width:min(560px,92vw);height:280px;overflow:hidden;border:4px solid var(--ink);box-shadow:8px 8px 0 rgba(0,0,0,.5);
+  background:linear-gradient(transparent 0 calc(100% - 64px),#5c9c3e calc(100% - 64px)),repeating-conic-gradient(#7cc4f0 0 25%,#86cbf3 0 50%) 0 0/16px 16px}
+.ship-belt{position:absolute;left:0;right:0;bottom:30px;height:18px;border:3px solid var(--ink);border-left:0;border-right:0;background:repeating-linear-gradient(90deg,#3b3f48 0 8px,#5f6571 8px 10px);background-size:10px 100%;animation:bl-belt .6s linear infinite}
+.ship-items{position:absolute;inset:0}
+.ship-item{position:absolute;left:calc(24% + var(--x) * 46px);top:-40px;max-width:150px;padding:.15rem .4rem;font:700 .65rem/1.2 var(--mono);text-transform:uppercase;color:var(--ink);background:#fff4dc;border:2px solid var(--ink);box-shadow:2px 2px 0 var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0}
+.ship.on .ship-item{animation:ship-drop .7s cubic-bezier(.5,0,.75,1) forwards;animation-delay:calc(var(--i) * 260ms + 250ms)}
+.ship-crate{position:absolute;left:calc(24% - 10px);bottom:48px;width:92px;height:70px;transition:transform 1.5s cubic-bezier(.45,0,.3,1),opacity .4s}
+.ship-box{position:absolute;inset:0;border:3px solid var(--ink);background:linear-gradient(90deg,transparent 42%,#efd9a6 42% 58%,transparent 58%),linear-gradient(#e8b97a 0 4px,#d29a5a 4px 62%,#9c6a36 62%)}
+.ship-lid{position:absolute;left:-3px;right:-3px;top:-12px;height:12px;border:3px solid var(--ink);background:#e8b97a;transform-origin:0 100%;transform:rotate(-115deg);transition:transform .4s cubic-bezier(.3,1.6,.5,1);z-index:2}
+.ship.closed .ship-lid{transform:rotate(0)}
+.ship-tag{position:absolute;right:-10px;bottom:10px;z-index:3;padding:0 .3rem;font:800 .7rem var(--mono);background:var(--amber);border:2px solid var(--ink);transform:scale(0);transition:transform .35s cubic-bezier(.3,1.8,.5,1) .15s}
+.ship.closed .ship-tag{transform:scale(1)}
+.ship.go .ship-crate{transform:translateX(calc(min(560px,92vw) * .5))}
+.ship.in .ship-crate{opacity:0}
+.ship-house{position:absolute;right:4%;bottom:48px;width:150px;height:118px;border:3px solid var(--ink);background:linear-gradient(#a39a8c,#8a8174)}
+.ship-roof{position:absolute;left:-10px;right:-10px;top:-26px;height:26px;border:3px solid var(--ink);background:repeating-linear-gradient(0deg,#c0393b 0 4px,#86252a 4px 6px)}
+.ship-chimney{position:absolute;right:18px;top:-62px;width:18px;height:40px;border:3px solid var(--ink);background:#7a4a3a}
+.ship-chimney::after{content:"";position:absolute;left:0;top:-14px;width:14px;height:14px;background:#d6d9de;border:2px solid #a9aeb6;animation:ship-smoke 1.6s ease-out infinite}
+.ship-door{position:absolute;left:30px;bottom:0;width:62px;height:72px;border:3px solid var(--ink);border-bottom:0;background:repeating-linear-gradient(0deg,#c3cad3 0 4px,#5d6673 4px 6px);transform-origin:50% 0;transition:transform .5s}
+.ship.go .ship-door{transform:scaleY(.08)}
+.ship.in .ship-door{transform:scaleY(1);transition-delay:.3s}
+.ship-sign{position:absolute;left:8px;right:8px;top:8px;text-align:center;font:800 .7rem var(--mono);color:#fff4dc;background:var(--ink);padding:.1rem 0}
+.ship-say{margin:0;font:800 1rem var(--mono);text-transform:uppercase;color:#fff4dc;text-align:center;padding:0 1rem}
+.ship > button{color:var(--text)}
+
+@keyframes bl-belt{to{background-position:14px 0}}
+@keyframes bl-snap{0%{transform:scale(.7)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+@keyframes ship-drop{0%{opacity:0;transform:translateY(0)}15%{opacity:1}80%{opacity:1;transform:translateY(185px) scale(.85)}100%{opacity:0;transform:translateY(200px) scale(.5)}}
+@keyframes ship-smoke{0%{transform:translate(0,0) scale(.6);opacity:.9}100%{transform:translate(14px,-34px) scale(1.6);opacity:0}}
+@media (max-width:40rem){.bl-tile{flex-basis:100%}.bl-belt{flex-basis:100%;height:10px;max-width:30px;margin:0 auto;transform:rotate(90deg)}.bl-bar{margin:1rem -.85rem -1rem;padding:.6rem .85rem}}

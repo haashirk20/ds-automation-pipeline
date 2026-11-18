@@ -790,6 +790,67 @@ owner wants to try a prompt from the page.
 **Cost.** No dependency. Stage inference is approximate within `producing`: a reused clip (tier 0) shows at the foundry until the copy step, and `ad` mode shows at the concept studio until it is ready.
 
 
+## D-38 Settings as blocks on a factory line, with a shipping animation (2026-11-17, branch `dev`)
+
+**Chosen.** The owner asked for settings that are easier to change: blocks that connect, and an
+animation that packs the settings into a box and sends it to the factory. `/settings` still renders
+the same form, grouped into fieldsets that each carry a block id. One same-origin script,
+`/settings.js`, lays the groups out as blocks in pipeline order: clock tower, concept studio, claim
+checker, clip foundry, inspection, music room and shipping docks, joined by belts, plus an office
+row for budget and maintenance. Each block shows a live summary and how many of its values changed.
+Clicking a block opens its fields in a dialog; the fields stay inside the same form, so what is sent
+is unchanged. A platform's on/off switch is a truck in a parts box: dragging it onto the shipping docks,
+or tapping it, switches the platform on, and dragging it back switches it off. Dragging uses pointer
+events, so a mouse, a finger or a pen all work. A sticky bar counts the changes and offers Undo all
+and Pack and review. On the review page, saving plays a three-second animation first: the changed
+settings drop into a crate, the lid closes, and the crate rides a belt into the factory. Then the
+form is submitted. A Skip button ends the animation at once.
+
+**Security.** Only the settings pages (`GET /settings`, `POST /settings/preview`) get `script-src 'self'`;
+there is no `connect-src`, so the script cannot fetch. It builds nodes with `createElement` and
+`textContent` only; a test checks for markup strings, eval and every request API. All validation stays
+on the server. Without the script the plain form and review page work as before.
+
+**Alternatives.** A free node canvas with wires: the pipeline order is fixed, so most wires would mean
+nothing. CSS-only blocks with `<details>`: no drag, no count of changes and no animation before submit.
+
+**Cost.** No dependency. The animation adds about three seconds to a save unless skipped.
+
+## D-39 Products added by hand, the product selection and an uploaded logo (2026-11-17, branch `dev`)
+
+**Chosen.** The owner asked to choose which products get videos, from Shopify and from products they
+add themselves, and to upload the logo. The rule that claims come from the Shopify brief only is
+widened at the owner's request: a product added on the Products page has a brief built from the fields
+they type (`src/shopify/catalog.ts`). Its facts are the title, type, price, colours and the "facts" lines,
+each with source `owner`. Disclosures are the owner's lines. It has no tags, and discount and review
+claims are off. The form refuses review, rating, sale and "best seller" words in the facts, and asks
+the owner to confirm that every fact is true and that the photos may be used. The claim judge and copy
+judge check against these facts exactly as for a Shopify product.
+Shopify products cannot be edited or removed there; their look is still edited on Prompts. `kv
+products_active` lists the ticked handles; `pickBrief` takes turns among them. None ticked, or a tick
+that matches no stored brief, means every product, so a product leaving the store cannot stop the line.
+Saving with none ticked is refused. The uploaded logo is stored at `data/brand/logo-<sha256>.png`,
+named in `kv brand_logo`, and replaces `config.brand.logo` where the logo is used today (a reference
+image for the video model). "Use the config file's logo" removes the key. The logo is not stamped on
+the videos.
+
+**Security.** `/products/save` (64 MB) and `/brand/logo` (15 MB) join `/music/upload` as multipart
+routes: the session, Origin and Sec-Fetch-Site are checked before the body is read, the length is
+checked against the route's limit, and the CSRF field is checked after parsing. Images are PNG or JPEG
+sniffed from the first bytes (the bundled ffmpeg has no WebP decoder). ffprobe and ffmpeg run with the
+image demuxer, a format and codec whitelist, a forced decoder and `-protocol_whitelist file`. The
+image is re-encoded to PNG without metadata, at most 1600 pixels for photos and 1024 for the logo.
+`/media/photo` serves only a stored brief's shot inside `data/assets`; `/media/logo` serves only the
+uploaded logo inside `data/brand` or the file logo inside `config`. `brandLogoFile` accepts only a key
+of the exact stored form, and only when the file is inside `DATA_DIR`.
+
+**Alternatives.** Choosing from Shopify only, with a product added in Shopify first: the owner wants
+products that are not in the store. Free-form product text with no fact lines: the claim judge would
+have nothing to check against.
+
+**Cost.** No dependency. Facts for an added product are only as true as the owner's lines; the form
+says so.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).
