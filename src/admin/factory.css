@@ -1,4 +1,4 @@
-/* The Factory page. The floor is an illustrated scene, so it keeps its own palette in light and dark mode. */
+/* The Factory page. The floor is a pixel-art canvas drawn by /factory.js; this file styles what sits around it. */
 .f-bar{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;margin:0 0 .75rem}
 .f-hb::before{content:"";display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin-right:.4rem;background:var(--muted);vertical-align:middle}
 .f-hb.ok::before{background:#3fd47a;animation:f-blink 1.6s ease-in-out infinite}
@@ -6,167 +6,30 @@
 .f-demo{margin-left:auto;display:inline-flex;align-items:center;min-height:44px;padding:.4rem .9rem;border:1px solid var(--muted);border-radius:6px;text-decoration:none;color:var(--text);background:var(--panel);font-weight:600}
 .f-demo.on{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .f-demo:hover{text-decoration:underline}
-.defs{position:absolute;width:0;height:0;overflow:hidden}
+.f-still{margin-left:auto}
+.f-still:not([hidden])+.f-demo{margin-left:0}
 
-.floor-wrap{overflow-x:auto;border-radius:10px;border:1px solid #2b3440;margin:0 0 1rem;background:#11161c}
-.floor-wrap:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-.floor{position:relative;min-width:1240px;padding:96px 14px 0;overflow:hidden;color:#e6e8eb;
-  background:linear-gradient(180deg,#18202a 0,#1d2631 60%,#202a36 100%);font:12px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+/* the floor: drawn at 544x320 and scaled up with hard pixel edges */
+.fx-wrap{margin:0 0 1rem;border:4px solid #1b1c24;border-radius:6px;background:#1b1c24;box-shadow:0 6px 0 #0e0f14}
+.fx{display:block;width:100%;height:auto;aspect-ratio:544/320;image-rendering:crisp-edges;image-rendering:pixelated;background:#5c9c3e}
+.fx.pointer{cursor:pointer}
+.fx:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 
-/* ---------- wall ---------- */
-.wall{position:absolute;inset:0 0 auto 0;height:92px;pointer-events:none}
-.windows{position:absolute;left:150px;right:150px;top:10px;height:36px;border-radius:4px;opacity:.55;
-  background:repeating-linear-gradient(90deg,#2b3a4c 0 46px,#141b23 46px 52px),linear-gradient(#3a5a7a,#1d2a38);background-blend-mode:screen;animation:f-lights 7s ease-in-out infinite}
-.pipes{position:absolute;left:0;top:50px;width:100%;height:40px}
-.pipe{stroke:#3a4553;stroke-width:9;fill:none}
-.pipe.thin{stroke-width:5}
-.flow{stroke:#f5a524;stroke-width:2.5;fill:none;stroke-dasharray:6 22;opacity:.85;animation:f-flow 1.4s linear infinite}
-.flow.slow{stroke:#4aa8ff;stroke-width:1.5;animation-duration:2.6s}
-.fans{position:absolute;inset:6px 18px auto 18px;display:flex;justify-content:space-between}
-.fan{display:block;width:40px;height:40px;border-radius:50%;background:#0e1319;border:3px solid #38434f;padding:3px}
-.fan:nth-child(2){visibility:hidden}
-.fan svg{width:100%;height:100%;fill:#4b5a6b;animation:f-spin 2.2s linear infinite}
-.dry-sign{display:none;position:absolute;left:50%;top:4px;transform-origin:50% -10px;margin-left:-70px;width:140px;text-align:center;
-  background:#f2c230;color:#1b1f24;border:2px solid #1b1f24;border-radius:4px;padding:3px 0 2px;font-weight:800;letter-spacing:.08em;animation:f-sway 3.4s ease-in-out infinite}
-.dry-sign small{display:block;font-weight:600;letter-spacing:0;font-size:10px}
-.floor.dry .dry-sign{display:block}
+/* station list */
+.fx-legend{list-style:none;counter-reset:st;display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.5rem;margin:0 0 .75rem;padding:0}
+.fx-legend li{counter-increment:st;display:flex;align-items:flex-start;gap:.6rem;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.fx-n::before{content:counter(st)}
+.fx-n{flex:none;display:grid;place-items:center;width:1.5rem;height:1.5rem;border:2px solid #1b1c24;border-radius:3px;background:#c98e55;color:#1b1c24;font:800 .8rem/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fx-t{min-width:0;display:flex;flex-direction:column}
+.fx-t small{color:var(--muted);font-size:.8rem;line-height:1.3}
+.fx-legend .count{margin-left:auto;min-width:1.6rem;text-align:center;padding:0 .4rem;border-radius:3px;background:var(--line);color:var(--muted);font-variant-numeric:tabular-nums}
+.fx-legend li.busy .count{background:#f5a524;color:#1b1c24}
+.fx-sent span{margin-right:.4rem;white-space:nowrap}
 
-/* ---------- stations ---------- */
-.line{position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr)) minmax(0,1.65fr);gap:10px;align-items:end}
-.station{display:flex;flex-direction:column;min-width:0}
-.sign{display:flex;align-items:center;gap:6px;min-height:42px;background:#0e1319;border:1px solid #38434f;border-radius:6px;padding:4px 6px;font-weight:650;font-size:12px;line-height:1.15}
-.sign-t{min-width:0;overflow-wrap:anywhere}
-.sign-n{flex:none;display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#f5a524;color:#1b1f24;font-size:11px;font-weight:800}
-.count{margin-left:auto;min-width:22px;text-align:center;padding:1px 6px;border-radius:999px;background:#263040;color:#a3abb4;font-variant-numeric:tabular-nums;transition:background .3s,color .3s}
-.station.busy .count{background:#f5a524;color:#1b1f24}
-.station.flash .sign{animation:f-flash .9s ease-out}
-.what{order:-1;margin:0 2px 6px;color:#a3abb4;font-size:11px;min-height:2.7em}
-.sign{order:-2;margin-bottom:6px}
-.machine{display:block;width:100%;height:150px;overflow:visible;transition:filter .4s}
-.station.busy .machine{filter:drop-shadow(0 0 10px rgba(245,165,36,.35))}
+/* line board: the slot id is a button that selects the crate */
+.fx-pick{min-height:0;padding:0;border:0;background:none;color:var(--accent);text-decoration:underline;font:inherit;cursor:pointer}
 
-/* parts */
-.void{fill:#0b0f14}.slat{fill:#8795a6}.door-lip{fill:#f2c230}
-.box{fill:#c9955a;stroke:#7a5128;stroke-width:1.5}.tape{fill:#e6c48f}
-.cable{stroke:#9aa7b5;stroke-width:1.5}
-.hz-a{fill:#f2c230}.hz-b{fill:#1b1f24}
-.metal{fill:#8a9bb0}.rod{fill:#c2ccd7}
-.bezel{fill:#262e38}.screen{fill:#071423}
-.code{fill:#4aa8ff;opacity:.85}.code.c1{fill:#3fd47a}.code.c2{fill:#f5a524}
-.bulb{fill:#ffe27a}
-.stamp-head{fill:#e8702a}.stamp-txt,.press-txt,.truck-txt,.bin-txt{font:800 8px system-ui,sans-serif;fill:#fff;text-anchor:middle}
-.gear{fill:#8a9bb0}
-.smoke{fill:#9aa7b5;opacity:0}
-.mouth-rim{fill:#1a1f26}
-.reel-disc{fill:#1b1f24;stroke:#8a9bb0;stroke-width:2}.reel-hole{fill:#ffb347}
-.gauge{fill:#e9edf2;stroke:#38434f;stroke-width:2}.needle{stroke:#e8502a;stroke-width:2;stroke-linecap:round}
-.lamp-g{fill:#3fd47a}.lens{fill:#0b1a2a;stroke:#8a9bb0;stroke-width:3}.pupil{fill:#4aa8ff}
-.beam{fill:#ff4d6d;opacity:.85}.scan-floor{fill:#ff4d6d;opacity:.25}
-.spray{opacity:.15}.sp1,.d1,.c1{fill:#ff6fae}.sp2,.d2,.c2{fill:#3fd4c9}
-.paint-txt{font:800 11px system-ui,sans-serif;text-anchor:middle;fill:#ff6fae}
-.press-head{fill:#e8702a}.spark{stroke:#ffd166;stroke-width:2;stroke-linecap:round;opacity:0}
-.booth-win{fill:#4aa8ff;opacity:.35}.guard{fill:#f2c9a0}
-.tl{fill:#0b0f14}.tl-red{fill:#4a1b18}.tl-green{fill:#3fd47a}
-.station.waiting .tl-red{fill:#ff5a4f;animation:f-blink .9s steps(2) infinite}
-.station.waiting .tl-green{fill:#12301c}
-.arm{transform-box:view-box;transform-origin:74px 100px;transform:rotate(-72deg);transition:transform 1.2s cubic-bezier(.5,0,.2,1.3)}
-.station.waiting .arm{transform:rotate(0)}
-.canopy{fill:#38434f}.bay{fill:#0e1319}
-.cargo{stroke:#0e1319;stroke-width:1.5}
-.t-youtube .cargo{fill:#e0322b}.t-facebook .cargo{fill:#1877f2}.t-instagram .cargo{fill:#c13584}.t-tiktok .cargo{fill:#16181d;stroke:#25f4ee}
-.truck-txt{font-size:12px}
-.cab{fill:#d7dde4}.cab-win{fill:#4aa8ff}
-.wheel{fill:#111;stroke:#8a9bb0;stroke-width:2;stroke-dasharray:4 3}
-.exhaust{fill:#9aa7b5;opacity:0;transform-box:fill-box;transform-origin:center}
-.ship-n{font:800 16px system-ui,sans-serif;fill:#f5a524;text-anchor:middle;font-variant-numeric:tabular-nums}
-.ship-l{font:600 7px system-ui,sans-serif;fill:#a3abb4;text-anchor:middle}
-.rig{transition:opacity .3s}
-
-/* always moving */
-.spin,.wheel,.reel{transform-box:fill-box;transform-origin:center;animation:f-spin 6s linear infinite}
-.spin.rev{animation-direction:reverse}
-.station.busy .spin{animation-duration:1.8s}
-.beacon{fill:#f5a524;animation:f-blink 1.2s steps(2) infinite}
-.bulb{animation:f-pulse 2.4s ease-in-out infinite}
-.station.busy .bulb{animation-duration:.9s}
-.smoke{transform-box:fill-box;transform-origin:center;animation:f-smoke 3.6s ease-out infinite}
-.smoke.s2{animation-delay:-1.2s}.smoke.s3{animation-delay:-2.4s}
-.station.busy .smoke{animation-duration:1.8s}
-.fire{animation:f-flicker .9s ease-in-out infinite alternate}
-.needle{transform-box:view-box;transform-origin:128px 70px;animation:f-needle 3s ease-in-out infinite alternate}
-.lamp-g{animation:f-blink 2s steps(2) infinite}
-.paint-txt{animation:f-hue 4s linear infinite}
-.wheel{animation-play-state:paused}
-
-/* moving only while a crate is at the station */
-.door{animation:f-door 3.4s ease-in-out infinite}
-.hoist{animation:f-hoist 3.4s ease-in-out infinite}
-.scroll{animation:f-scroll 3s linear infinite}
-.stamp{animation:f-stamp 1.3s cubic-bezier(.6,0,.4,1) infinite}
-.reel{animation-duration:1.2s}
-.pupil{transform-box:fill-box;transform-origin:center;animation:f-look 2.4s ease-in-out infinite alternate}
-.beam{animation:f-sweep 1.8s ease-in-out infinite alternate}
-.spray{transform-box:fill-box;transform-origin:50% 0;animation:f-spray .7s ease-in-out infinite alternate}
-.sp2{animation-delay:-.35s}
-.drip{animation:f-drip 1.1s ease-in infinite}.d2{animation-delay:-.55s}
-.press{animation:f-press 1.6s cubic-bezier(.7,0,.3,1) infinite}
-.sparks{animation:f-sparks 1.6s linear infinite}
-.sparks .spark{opacity:1}
-.station:not(.busy) .act{animation-play-state:paused}
-.station:not(.busy) .spray{opacity:.05}
-.station:not(.busy) .sparks{opacity:0}
-.station:not(.busy) .beam{opacity:.25}
-
-/* trucks */
-.truck.loading .exhaust{animation:f-exhaust 1s ease-out infinite}
-.truck.loading .e2{animation-delay:-.5s}
-.truck.loading .rig{animation:f-idle .25s linear infinite alternate}
-.truck.depart .rig{animation:f-depart 2.6s cubic-bezier(.5,0,.5,1) 1}
-.truck.depart .wheel{animation-play-state:running;animation-duration:.4s}
-.truck.depart .ship-n{animation:f-pop .6s ease-out 1}
-
-/* ---------- belt ---------- */
-.belt{position:relative;height:40px;margin:0 -14px}
-.belt-top{height:14px;background:repeating-linear-gradient(90deg,#2b333d 0 18px,#46525f 18px 20px);border-top:2px solid #5b6b7d;border-bottom:2px solid #0b0f14;animation:f-belt .7s linear infinite}
-.rollers{display:flex;justify-content:space-between;padding:0 8px;margin-top:-1px}
-.roller{width:12px;height:12px;border-radius:50%;background:conic-gradient(#8a9bb0 0 25%,#4b5a6b 0 50%,#8a9bb0 0 75%,#4b5a6b 0);animation:f-spin .9s linear infinite}
-.legs{height:12px;background:repeating-linear-gradient(90deg,transparent 0 76px,#2b333d 76px 84px)}
-
-/* ---------- yard and scrap ---------- */
-.yard{position:relative;display:flex;align-items:flex-end;gap:1.5rem;min-height:96px;margin:0 -14px;padding:10px 24px 12px;background:repeating-linear-gradient(135deg,#12171d 0 22px,#151b22 22px 44px)}
-.scrap{display:flex;align-items:flex-end;gap:.6rem;margin-left:41%}
-.scrap svg{width:140px;height:70px;display:block}
-.bin{fill:#3a4553;stroke:#0e1319;stroke-width:2}.bin-rim{fill:#5b6b7d}.bin-txt{font-size:12px;fill:#a3abb4}
-.bin-lamp{fill:#ff5a4f;animation:f-blink 1.4s steps(2) infinite}
-.scrap-n{color:#a3abb4}
-.scrap-n b{color:#ff8d85;font-size:15px}
-.yard-note{margin:0 0 4px auto;color:#a3abb4;font-size:12px}
-
-/* ---------- crates ---------- */
-.items{position:absolute;inset:0;pointer-events:none}
-.crate{position:absolute;left:0;top:0;width:40px;height:34px;min-height:0;padding:0;margin:0;pointer-events:auto;cursor:pointer;
-  border:1.5px solid #7a5128;border-radius:3px;background:linear-gradient(180deg,#dcaa6e,#b07a42);color:#3a2410;
-  font:800 10px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  transform:translate(var(--x,0),var(--y,0)) rotate(var(--r,0deg));transition:transform 2.4s cubic-bezier(.5,.05,.3,1),opacity .6s,filter .6s}
-.crate.no-t{transition:none}
-.crate:hover{text-decoration:none;filter:brightness(1.12)}
-.crate:focus-visible,.crate.sel{outline:3px solid #4aa8ff;outline-offset:3px}
-.crate .c-tape{position:absolute;left:0;right:0;top:12px;height:6px;background:#e6c48f}
-.crate.k-manual .c-tape{background:#4aa8ff}
-.crate .c-id{position:relative;display:block;text-align:center;line-height:34px;text-shadow:0 1px 0 rgba(255,255,255,.35)}
-.crate.moving{animation:f-jiggle .35s linear infinite}
-.crate.working{animation:f-work 1s ease-in-out infinite}
-.crate.gone{opacity:0}
-.crate.scrapped{filter:grayscale(.85) brightness(.75)}
-.d{position:absolute;transform:scale(0);transition:transform .5s cubic-bezier(.3,1.6,.5,1)}
-.d-bp{left:3px;top:3px;width:9px;height:7px;background:#4aa8ff;border:1px solid #0b5cad}
-.d-film{right:3px;top:3px;width:10px;height:7px;background:repeating-linear-gradient(90deg,#1b1f24 0 2px,#ffb347 2px 4px)}
-.d-ok{left:3px;bottom:3px;width:8px;height:8px;border-radius:50%;background:#3fd47a;border:1px solid #12301c}
-.d-paint{left:-1px;right:-1px;top:-4px;height:4px;border-radius:2px 2px 0 0;background:linear-gradient(90deg,#ff6fae,#f5a524,#3fd4c9)}
-.d-tag{right:-7px;bottom:2px;width:10px;height:12px;background:#e8702a;clip-path:polygon(0 0,100% 0,100% 100%,0 100%,0 60%,30% 50%,0 40%)}
-.has-bp .d-bp,.has-film .d-film,.has-ok .d-ok,.has-paint .d-paint,.has-tag .d-tag{transform:scale(1)}
-
-/* ---------- inspector ---------- */
+/* inspector */
 .inspector h3{margin-top:0}
 .insp-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.3rem 1rem;margin:.5rem 0 0}
 .insp-grid dt{font-weight:600;color:var(--muted)}
@@ -176,37 +39,5 @@
 .chip.uploading{color:var(--warn);border-color:var(--warn)}
 .chip.needs_attention,.chip.skipped{color:var(--bad);border-color:var(--bad)}
 
-/* ---------- keyframes ---------- */
-@keyframes f-spin{to{transform:rotate(360deg)}}
 @keyframes f-blink{50%{opacity:.25}}
-@keyframes f-pulse{0%,100%{opacity:.55}50%{opacity:1}}
-@keyframes f-flow{to{stroke-dashoffset:-28}}
-@keyframes f-lights{0%,100%{opacity:.55}50%{opacity:.4}}
-@keyframes f-sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
-@keyframes f-flash{0%{border-color:#f5a524;box-shadow:0 0 0 0 rgba(245,165,36,.7)}100%{border-color:#38434f;box-shadow:0 0 0 12px rgba(245,165,36,0)}}
-@keyframes f-door{0%,12%{transform:translateY(0)}42%,70%{transform:translateY(-60px)}100%{transform:translateY(0)}}
-@keyframes f-hoist{0%,15%{transform:translateY(-30px)}50%,65%{transform:translateY(22px)}100%{transform:translateY(-30px)}}
-@keyframes f-scroll{to{transform:translateY(-49px)}}
-@keyframes f-stamp{0%,40%{transform:translateY(0)}55%,65%{transform:translateY(12px)}100%{transform:translateY(0)}}
-@keyframes f-smoke{0%{transform:translate(0,8px) scale(.4);opacity:0}20%{opacity:.7}100%{transform:translate(16px,-34px) scale(1.7);opacity:0}}
-@keyframes f-flicker{0%{opacity:.82}25%{opacity:1}50%{opacity:.72}75%{opacity:.95}100%{opacity:.86}}
-@keyframes f-needle{0%{transform:rotate(-55deg)}60%{transform:rotate(35deg)}100%{transform:rotate(20deg)}}
-@keyframes f-look{0%{transform:translateX(-4px)}100%{transform:translateX(4px)}}
-@keyframes f-sweep{0%{transform:translateX(0)}100%{transform:translateX(88px)}}
-@keyframes f-spray{0%{opacity:.2;transform:scaleY(.8)}100%{opacity:.6;transform:scaleY(1.05)}}
-@keyframes f-drip{0%{transform:translateY(0);opacity:1}100%{transform:translateY(58px);opacity:0}}
-@keyframes f-press{0%,30%{transform:translateY(0)}48%,58%{transform:translateY(26px)}100%{transform:translateY(0)}}
-@keyframes f-sparks{0%,47%{opacity:0}50%{opacity:1}62%,100%{opacity:0}}
-@keyframes f-hue{0%{fill:#ff6fae}33%{fill:#f5a524}66%{fill:#3fd4c9}100%{fill:#ff6fae}}
-@keyframes f-exhaust{0%{transform:translate(0,0) scale(.5);opacity:.8}100%{transform:translate(-12px,-10px) scale(1.6);opacity:0}}
-@keyframes f-idle{0%{transform:translateY(0)}100%{transform:translateY(-.8px)}}
-@keyframes f-depart{0%{transform:translateX(0);opacity:1}45%{transform:translateX(70px);opacity:0}55%{transform:translateX(-50px);opacity:0}100%{transform:translateX(0);opacity:1}}
-@keyframes f-pop{0%{transform:scale(1)}40%{transform:scale(1.5)}100%{transform:scale(1)}}
-@keyframes f-belt{to{background-position:20px 0}}
-@keyframes f-jiggle{0%,100%{margin-top:0}50%{margin-top:-1.5px}}
-@keyframes f-work{0%,100%{margin-top:0;box-shadow:0 0 0 0 rgba(245,165,36,0)}50%{margin-top:-3px;box-shadow:0 0 12px 2px rgba(245,165,36,.55)}}
-
-@media (prefers-reduced-motion:reduce){
-  .floor *,.floor *::before,.f-hb::before{animation:none!important}
-  .crate,.arm{transition-duration:.01s!important}
-}
+@media (prefers-reduced-motion:reduce){.f-hb::before{animation:none!important}}

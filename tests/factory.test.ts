@@ -106,6 +106,8 @@ test('the factory page needs a session, allows one same-origin script and escape
   assert.ok(!r.text.includes('"><script>alert'));
   assert.ok(!/ style="|<style/i.test(r.text));
   assert.match(r.text, /data-station="foundry"/);
+  assert.match(r.text, /<canvas id="factory" class="fx" width="544" height="320"/);
+  assert.ok(!/<img|\.png|\.gif/i.test(r.text)); // every sprite is drawn by the script
   const j = await req('GET', '/factory.json', cookie);
   assert.match(String(j.headers['content-type']), /application\/json/);
   assert.equal(j.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
