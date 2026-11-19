@@ -97,7 +97,7 @@ async function main(): Promise<number> {
   const config = await loadEffectiveConfig(db, clock()); // a producer keeps the snapshot it starts with
   usePrompts(loadPrompts(db));
   const rebuild = (c: typeof config) => makePublishers(c, { now: clock });
-  const deps = { db, config, publishers: rebuild(config), producer: makeProducer(childSpawn(config)), wait: !!values.once, rebuild };
+  const deps = { db, config, publishers: rebuild(config), producer: makeProducer(childSpawn(config)), wait: !!values.once, rebuild, ingest: async (c: typeof config, n: Date, signal: AbortSignal) => { await runIngest(db, c, n, { print: false, signal }); } };
   if (cmd === 'run') await run(deps, clock, !!values.once);
   else if (cmd === 'produce') {
     if (!values.slot) {

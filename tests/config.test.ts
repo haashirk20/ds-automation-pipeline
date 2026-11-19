@@ -44,6 +44,6 @@ test('migration 009 applies over version 8; old slots become planned', () => {
   db.exec('PRAGMA user_version = 8');
   db.exec("INSERT INTO slots (id, local_date, idx, created_at, updated_at) VALUES ('d#0','d',0,'t','t')");
   migrate(db);
-  assert.equal(schemaVersion(db), 9);
+  assert.equal(schemaVersion(db), readdirSync(new URL('../src/db/migrations', import.meta.url)).filter((f) => f.endsWith('.sql')).length); // 009 and every later migration
   assert.deepEqual({ ...(db.prepare("SELECT kind, hold, video_model FROM slots WHERE id = 'd#0'").get() as object) }, { kind: 'planned', hold: null, video_model: null });
 });

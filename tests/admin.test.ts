@@ -55,9 +55,10 @@ function formOf(text: string, action: string): URLSearchParams {
     const a = (n: string) => new RegExp(`${n}="([^"]*)"`).exec(i[1])?.[1];
     const name = a('name');
     if (!name) continue;
-    if (a('type') === 'checkbox') {
-      if (/\schecked/.test(i[1])) p.set(name, un(a('value') ?? 'on'));
-    } else p.set(name, un(a('value') ?? ''));
+    // Repeated names (the post time grid) are appended, as a browser sends them.
+    if (a('type') === 'checkbox' || a('type') === 'radio') {
+      if (/\schecked/.test(i[1])) p.append(name, un(a('value') ?? 'on'));
+    } else p.append(name, un(a('value') ?? ''));
   }
   for (const s of m[1].matchAll(/<select[^>]*name="([^"]*)"[^>]*>([\s\S]*?)<\/select>/g)) p.set(s[1], /<option value="([^"]*)" selected/.exec(s[2])?.[1] ?? /<option value="([^"]*)"/.exec(s[2])![1]);
   for (const t of m[1].matchAll(/<textarea[^>]*name="([^"]*)"[^>]*>([\s\S]*?)<\/textarea>/g)) p.set(t[1], un(t[2]));
@@ -137,19 +138,19 @@ test('other methods and unknown paths; nothing is served from disk', async () =>
   assert.equal((await req('GET', '/..%2fpackage.json')).status, 404);
   assert.equal((await req('GET', '/package.json')).status, 404);
   assert.equal((await req('GET', '/healthz')).text, 'ok');
-  const css = await req('GET', '/style.css');
-  assert.equal(css.status, 200);
-  assert.match(String(css.headers['content-type']), /text\/css/);
+  for (const f of ['/style.css', '/pixel.css']) {
+    const css = await req('GET', f);
+    assert.equal(css.status, 200);
+    assert.match(String(css.headers['content-type']), /text\/css/);
+  }
+  assert.equal((await req('GET', '/settings.js')).status, 404); // the block editor is gone (D-41)
+  assert.equal((await req('GET', '/blocks.css')).status, 404);
 });
 
 test('every response carries the security headers and no page has a script tag', async () => {
   const { cookie } = await login();
-  // The settings page is the one other page with a script: its own /settings.js and nothing else (D-38).
-  const s = await req('GET', '/settings', { cookie });
-  assert.equal(s.headers['content-security-policy'], "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
-  assert.deepEqual([...s.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/settings.js" defer>']);
-  assert.ok(!/ style="|<style/i.test(s.text));
-  for (const path of ['/login', '/overview', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
+  // Only Factory has a script (D-37, D-41); it is tested in factory.test.ts.
+  for (const path of ['/login', '/overview', '/settings', '/history?view=1', '/pixel.css', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
     const r = await req('GET', path, { cookie });
     assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
     assert.equal(r.headers['x-content-type-options'], 'nosniff');
@@ -292,8 +293,9 @@ test('settings: switching the clip preset does not carry the old preset caps ove
 test('settings: unchanged form means no changes; a bad value is refused inline; a good one saves a version, pointer and audit together', async () => {
   const { cookie, csrf } = await login();
   const page = await req('GET', '/settings', { cookie });
-  for (const stage of ['Schedule and timing', 'Platforms', 'Concept writing', 'Claim checks', 'Video generation', 'Frame check', 'Budget', 'Ops']) assert.ok(page.text.includes(`<legend>${stage}</legend>`), stage);
-  assert.ok(page.text.includes('File default'));
+  for (const [id, title] of [['when', 'When videos go out'], ['where', 'Where videos go'], ['money', 'Spending limits'], ['look', 'Look and sound']]) assert.ok(page.text.includes(`id="${id}"><h2>${title}</h2>`), title);
+  assert.ok(page.text.includes('<details class="card" id="advanced"><summary>Advanced</summary>'));
+  assert.ok(!page.text.includes('File default') && !page.text.includes('data-blocks'));
   const form = formOf(page.text, '/settings/preview');
   const none = await req('POST', '/settings/preview', { cookie, form });
   assert.equal(none.status, 200);
@@ -303,7 +305,8 @@ test('settings: unchanged form means no changes; a bad value is refused inline; 
   bad.set('tiers.capsUsd.t2', '9999');
   const refused = await req('POST', '/settings/preview', { cookie, form: bad });
   assert.equal(refused.status, 422);
-  assert.match(refused.text, /class="err"[^>]*>tiers\.capsUsd\.t2: 9999 is above the limit/);
+  assert.match(refused.text, /class="err"[^>]*>9999 is above the limit/); // the field path is not shown
+  assert.match(refused.text, /class="err-summary" role="alert"[\s\S]*href="#f-tiers-capsUsd-t2"/);
   const nan = new URLSearchParams(form);
   nan.set('ugc.captionPx', 'big');
   const refused2 = await req('POST', '/settings/preview', { cookie, form: nan });
@@ -327,7 +330,8 @@ test('settings: unchanged form means no changes; a bad value is refused inline; 
   assert.deepEqual(JSON.parse((db.prepare('SELECT overrides_json FROM config_versions WHERE id = 1').get() as { overrides_json: string }).overrides_json), { 'ugc.captionPx': 90, 'platforms.youtube.slots': ['12:30', '20:00'], 'platforms.tiktok.slots': ['12:30', '20:00'] });
   assert.ok(db.prepare("SELECT 1 FROM audit WHERE action = 'config.save'").get());
   const after = await req('GET', '/settings?saved=1', { cookie });
-  assert.ok(after.text.includes('Saved as v1. Takes effect at the next tick'));
+  assert.ok(after.text.includes('<strong>Saved.</strong> The factory picks up the change within a minute.'));
+  assert.ok(!/v1|version 1/i.test(after.text.split('<main>')[1].split('</p>')[0])); // no version number in the flash
   assert.ok(after.text.includes('value="90"'));
 
   // A stale base_id is refused.
@@ -350,6 +354,33 @@ test('settings: unchanged form means no changes; a bad value is refused inline; 
   assert.ok(hist.text.includes('ugc.captionPx') && hist.text.includes('config.save'));
   assert.equal((await req('POST', '/history/activate', { cookie, form: { csrf, id: '' } })).status, 303);
   assert.equal(kvGet(db, 'config_active'), undefined);
+});
+
+test('settings: post times are one input per daily post; Post 2 without Post 1 is refused', async () => {
+  const { cookie, csrf } = await login();
+  const page = await req('GET', '/settings', { cookie });
+  assert.equal([...page.text.matchAll(/type="time" name="platforms\.youtube\.slots"/g)].length, 2);
+  assert.match(page.text, /<label class="vh" for="f-platforms-youtube-slots-1">YouTube, Post 2 time<\/label>/);
+  const form = formOf(page.text, '/settings/preview');
+  assert.deepEqual(form.getAll('platforms.youtube.slots'), ['12:15', '19:45']);
+  const two = new URLSearchParams(form);
+  for (const p of ['youtube', 'tiktok']) {
+    two.delete(`platforms.${p}.slots`);
+    two.append(`platforms.${p}.slots`, '12:30');
+    two.append(`platforms.${p}.slots`, '20:00');
+  }
+  const diff = await req('POST', '/settings/preview', { cookie, form: two });
+  assert.equal(diff.status, 200, diff.text);
+  assert.deepEqual(JSON.parse(formOf(diff.text, '/settings/save').get('draft')!)['platforms.youtube.slots'], ['12:30', '20:00']);
+  assert.match(diff.text, /<tr data-path="platforms\.youtube\.slots"><td data-label="Setting">YouTube post times<\/td>/);
+  const gap = new URLSearchParams(form);
+  gap.delete('platforms.youtube.slots');
+  gap.append('platforms.youtube.slots', '');
+  gap.append('platforms.youtube.slots', '20:00');
+  const r = await req('POST', '/settings/preview', { cookie, form: gap });
+  assert.equal(r.status, 422);
+  assert.match(r.text, /class="err">YouTube post times: Fill in Post 1 first\./);
+  assert.ok(csrf);
 });
 
 test('going public needs the confirmation', async () => {
@@ -389,7 +420,7 @@ test('prompts: save a version, see it in history, activate another, use the file
   assert.equal((await req('POST', '/prompts/save', { cookie, form: save })).status, 422); // stale base_id
 
   const hist = await req('GET', '/prompts/history?key=ugc&view=1', { cookie });
-  assert.ok(hist.text.includes('v1') && hist.text.includes('active'));
+  assert.ok(hist.text.includes('Version 1') && hist.text.includes('In use'));
   assert.equal((await req('POST', '/prompts/activate', { cookie, form: { csrf, key: 'ugc', id: '' } })).status, 303);
   assert.equal(kvGet(db, 'text_active:ugc'), undefined);
   assert.equal((await req('POST', '/prompts/activate', { cookie, form: { csrf, key: 'ugc', id: '1' } })).status, 303);

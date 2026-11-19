@@ -121,7 +121,12 @@ Every system text ends with the brief JSON (`systemPrompt`).
    plans today if it has no slots. The planner makes no creative choices.
 2. **Produce.** The tick starts `produce --slot` in a child process for the oldest planned slot.
    `produceSlot` claims it with one atomic update and the claim time fences every later write.
-3. **Ingest.** The product is fetched at most once a day, under a five-minute deadline. The Admin
+3. **Ingest.** The store is read at most hourly, under a five-minute deadline that aborts the read:
+   by the scheduler tick (started and not waited for, one read at a time) and by the producer before
+   it picks a product. The owner's "check now" on the Products page writes `kv ingest_requested`,
+   which makes the next tick read the store before the hour is up; the admin never reads the store
+   itself (D-32, D-40). The product for the slot is then chosen by `pickBrief` (per-post lists, else
+   the ticked products, else every product). The Admin
    API is used when `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` are set, and the public feed
    when they are not or when the Admin call fails. The result becomes a brief: facts with the field
    each came from, disclosures, and a photo inventory. A failed ingest alerts and the stored brief
@@ -219,6 +224,7 @@ so a crash, a restart or a missed minute changes nothing. A tick that runs longe
 | Snapshot | Once a day after `ops.snapshotAt`: a consistent copy of the database for the backup service. Failure alerts `snapshot_failed` |
 | Housekeeping | Once a day after `ops.snapshotAt`, then the disk check, which alerts `disk_full` above `ops.diskAlertPercent` |
 | Summary | After `ops.summaryAt`: the daily summary, then the second dead-man's ping |
+| Ingest | `ensureIngest`: reads the store when an hour has passed since the last attempt or `kv ingest_requested` is newer. Started without waiting, never two at once; aborted at five minutes. Writes `kv shop_sync_result` after every attempt. Alerts `ingest_failed`, `shop_empty` and `shop_truncated` (rate-limited) |
 | Heartbeat | Written at the start of the tick, so a long publish still shows the loop alive, and again at the end. The end also pings `HEALTHCHECK_URL` if set |
 
 Rendering runs in a child process so that an out-of-memory kill takes the child and not the loop,
@@ -329,9 +335,10 @@ loudness is measured. The upload needs a rights confirmation.
 stored as a hash), a Host allow-list against DNS rebinding, Origin and `Sec-Fetch-Site` checks and a
 per-session CSRF token on every POST, a login lockout, form-encoded bodies of at most 256 kB (the music upload is the one
 exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
-database value. Two pages are exceptions: the read-only Factory page (D-37), whose CSP allows its own
-`/factory.js` and fetches to the same origin, and the Settings pages (D-38), whose CSP allows
-`/settings.js` only (no fetch); it lays the same form out as blocks and works without the script.
+database value. The one exception is the read-only Factory page (D-37), whose CSP allows its own
+`/factory.js` and fetches to the same origin. Every page loads `/style.css` except Factory, which loads
+`/pixel.css`, the previous pixel-art stylesheet kept for that page alone (D-41). Destructive actions
+open a `<details>` confirmation first, so no script is needed for them.
 Product photos and the logo are image uploads with the same handling as music: PNG or JPEG sniffed
 from the first bytes, ffmpeg with the image demuxer, a forced decoder and a file-only whitelist, and a
 re-encode to PNG without metadata. The code never queries `oauth_tokens` (a test checks this).

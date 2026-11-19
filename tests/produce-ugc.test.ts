@@ -68,10 +68,11 @@ function rig(over: { concepts?: UgcConcept[]; checks?: boolean[]; providers?: Re
   return { deps, seen };
 }
 
-function stored(db: ReturnType<typeof fresh>, id: string, date: string, c: UgcConcept, file: string | null, handle = brief.product.handle, status = 'done') {
+const allFacts = () => Object.fromEntries(brief.facts.map((f) => [f.id, f.text]));
+function stored(db: ReturnType<typeof fresh>, id: string, date: string, c: UgcConcept, file: string | null, handle = brief.product.handle, status = 'done', factTexts: unknown = allFacts()) {
   const i = Number(id.split('#')[1]);
   db.prepare("INSERT INTO slots (id, local_date, idx, status, product_handle, master_json, created_at, updated_at) VALUES (?,?,?,?,?,?,'t','t')")
-    .run(id, date, i, status, handle, JSON.stringify({ mode: 'ugc', concept: c, clipFile: file, reusedFrom: null }));
+    .run(id, date, i, status, handle, JSON.stringify({ mode: 'ugc', concept: c, clipFile: file, reusedFrom: null, factTexts }));
 }
 // A stored clip lives in DATA_DIR/clips: call after setup(), which sets DATA_DIR.
 const clipFile = (name: string) => { const d = resolve(process.env.DATA_DIR!, 'clips'); mkdirSync(d, { recursive: true }); const f = join(d, name + '.mp4'); writeFileSync(f, name); return f; };
@@ -183,6 +184,24 @@ test('resume after a crash: the stored concept is used, the job is fetched, noth
   assert.deepEqual([p.calls.submit, p.calls.fetch], [0, 1]);
   assert.equal(JSON.parse(slot(db).master_json).concept.caption, 'stored caption');
   assert.deepEqual(spend(db).map((r) => r.state), ['succeeded']);
+});
+
+test('pickStoredClip: a clip is reused only when the brief facts it was checked against are unchanged', () => {
+  const db = setup();
+  stored(db, '2026-09-01#1', '2026-09-01', concept('A'), clipFile('a'));
+  assert.equal(pickStoredClip(db, config, brief, NOW, '2026-11-12')?.slotId, '2026-09-01#1');
+  const edited = { ...brief, facts: brief.facts.map((f) => (f.id === 'f-size' ? { ...f, text: 'One size fits most adults' } : f)) };
+  assert.equal(pickStoredClip(db, config, edited, NOW, '2026-11-12'), null);
+  stored(db, '2026-09-02#1', '2026-09-02', concept('B'), clipFile('b'), brief.product.handle, 'done', null); // no factTexts: never reused
+  db.prepare("UPDATE slots SET status = 'failed' WHERE id = '2026-09-01#1'").run();
+  assert.equal(pickStoredClip(db, config, brief, NOW, '2026-11-12'), null);
+});
+
+test('a new clip stores the text of every brief fact; a reused one keeps the stored facts', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  await produceSlot(db, config, ID, T, rig().deps);
+  assert.deepEqual(JSON.parse(slot(db).master_json).factTexts, allFacts());
 });
 
 test('pickStoredClip: reuseAfterDays, oldest last use, missing files and other products ignored', () => {

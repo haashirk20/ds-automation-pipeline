@@ -15,11 +15,7 @@ import * as posts from './posts.ts';
 import * as products from './products.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
-import { readFileSync } from 'node:fs';
-
-// Static files of the settings block editor, read once. They hold no data.
-export const SETTINGS_JS = readFileSync(new URL('./settings.client.js', import.meta.url), 'utf8');
-export const BLOCKS_CSS = readFileSync(new URL('./blocks.css', import.meta.url), 'utf8');
+import { PIXEL_CSS } from './pixel.ts';
 
 const MAX_BODY = 256 * 1024;
 const MAX_PASSWORD = 1024;
@@ -50,6 +46,7 @@ const ROUTES: Record<string, Route> = {
   'POST /products/save': { auth: true, h: () => pages.notFound(null) }, // multipart, handled before the body is read
   'POST /products/select': { auth: true, h: products.productsSelect },
   'POST /products/delete': { auth: true, h: products.productsDelete },
+  'POST /products/sync': { auth: true, h: products.productsSync },
   'POST /brand/logo': { auth: true, h: () => pages.notFound(null) }, // multipart
   'POST /brand/logo/reset': { auth: true, h: products.logoReset },
   'GET /media/photo': { auth: true, h: products.mediaPhoto },
@@ -119,8 +116,7 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   if (method === 'GET' && path === '/style.css') return { status: 200, body: CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.css') return { status: 200, body: factory.FACTORY_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
-  if (method === 'GET' && path === '/settings.js') return { status: 200, body: SETTINGS_JS, type: 'text/javascript; charset=utf-8' };
-  if (method === 'GET' && path === '/blocks.css') return { status: 200, body: BLOCKS_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/pixel.css') return { status: 200, body: PIXEL_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();

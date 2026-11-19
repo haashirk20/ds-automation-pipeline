@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { readdirSync } from 'node:fs';
 import raw from '../config/pipeline.config.ts';
 import { parseConfig } from '../src/config/index.ts';
 import { activateConfig, effectiveConfig, limits, loadEffectiveConfig, resolveConfig, saveConfig } from '../src/config/overrides.ts';
@@ -140,8 +141,9 @@ test('the next tick picks up a new version; a snapshot taken earlier keeps the o
 
 test('migrate re-reads the version inside the transaction', () => {
   const log: string[] = [];
-  const versions = [8, 8, 8, 8, 8, 8, 8, 8, 8, 9]; // another process applies 009 between the first read and BEGIN IMMEDIATE
-  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? 9 }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
+  const L = readdirSync(new URL('../src/db/migrations', import.meta.url)).filter((f) => f.endsWith('.sql')).length;
+  const versions = [...Array(L).fill(L - 1), L]; // another process applies the newest migration between the first read and BEGIN IMMEDIATE
+  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? L }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
   migrate(fake as unknown as DatabaseSync);
   assert.deepEqual(log, ['BEGIN IMMEDIATE', 'ROLLBACK']);
 });

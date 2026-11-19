@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { Brief } from '../contracts.ts';
 import { env, type Config } from '../config/index.ts';
 import { kvGet, type Db } from '../db/index.ts';
+import { alert } from '../ops/alert.ts';
 
 export const OWN_PREFIX = 'own-';
 export const SAFE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -88,6 +89,69 @@ export function selectBriefs<T extends { product: { handle: string } }>(briefs: 
   if (!active) return briefs;
   const picked = briefs.filter((b) => active.includes(b.product.handle));
   return picked.length ? picked : briefs;
+}
+
+export function listBriefs(db: Db): Brief[] {
+  return (db.prepare('SELECT json FROM briefs ORDER BY handle').all() as { json: string }[]).map((r) => Brief.parse(JSON.parse(r.json)));
+}
+
+// The store could not be read and there is no stored brief: the slot goes back to 'planned'.
+export class NoBriefError extends Error {}
+
+// The products chosen per daily post on the Products page: {"1": [handles], "2": [handles]}. A malformed value is ignored.
+export function slotProducts(db: Db): Record<string, string[]> {
+  const v = kvGet(db, 'slot_products');
+  if (!v) return {};
+  try {
+    const o = JSON.parse(v);
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+    return Object.fromEntries(Object.entries(o).filter(([k, a]) => /^\d+$/.test(k) && Array.isArray(a) && a.every((h) => typeof h === 'string'))) as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+}
+
+// Pure. A post with its own products takes turns among them by `turn` (earlier slots with the same index);
+// a post with none, or whose products are all gone, uses the general pool by `ordinal` (every earlier slot).
+// A post with no stored choice uses the "Any post" products, else the products chosen for any post, else every
+// product, so a "Not used" product only runs when nothing chosen is left in the store.
+export function chooseBrief<T extends { product: { handle: string } }>(briefs: T[], active: string[] | null, postList: string[], turn: number, ordinal: number, assigned: string[] = []): T | undefined {
+  const own = briefs.filter((b) => postList.includes(b.product.handle));
+  if (own.length) return own[turn % own.length];
+  const of = (hs: string[] | null) => (hs ? briefs.filter((b) => hs.includes(b.product.handle)) : []);
+  const pool = [of(active), of(assigned)].find((p) => p.length) ?? briefs;
+  return pool[ordinal % pool.length];
+}
+
+// The brief a slot uses. The producer and the Products page preview both call this. Manual slots use the pool.
+export function pickBrief(db: Db, slot: { local_date: string; idx: number; kind: string }): Brief {
+  const postList = slot.kind === 'planned' ? (slotProducts(db)[String(slot.idx)] ?? []) : [];
+  const count = (sql: string, ...a: (string | number)[]) => (db.prepare(`SELECT COUNT(*) AS n FROM slots WHERE ${sql}`).get(...a) as { n: number }).n;
+  const turn = count('idx = ? AND local_date < ?', slot.idx, slot.local_date);
+  const ordinal = count('local_date < ? OR (local_date = ? AND idx < ?)', slot.local_date, slot.local_date, slot.idx);
+  const b = chooseBrief(listBriefs(db), activeHandles(db), postList, turn, ordinal, Object.values(slotProducts(db)).flat());
+  if (!b) throw new NoBriefError('no product brief and the store could not be read');
+  return b;
+}
+
+// Each non-empty choice whose handles match no stored brief: a daily post's list (post = its index) or the
+// ticked products (post null). pickBrief falls back to the pool for these; the owner should fix the choice.
+export function staleSelections(db: Db): { post: number | null; handles: string[] }[] {
+  const have = new Set((db.prepare('SELECT handle FROM briefs').all() as { handle: string }[]).map((r) => r.handle));
+  const stale = (hs: string[]) => hs.length > 0 && !hs.some((h) => have.has(h));
+  const out: { post: number | null; handles: string[] }[] = Object.entries(slotProducts(db)).filter(([, hs]) => stale(hs)).map(([k, hs]) => ({ post: Number(k), handles: hs }));
+  const active = activeHandles(db);
+  if (active && stale(active)) out.push({ post: null, handles: active });
+  return out;
+}
+
+// After pickBrief: alerts (rate-limited per choice) when this slot's post list or the ticked products are stale.
+export async function alertStaleSelection(db: Db, slot: { id: string; idx: number; kind: string }, picked: string, now: Date): Promise<void> {
+  for (const s of staleSelections(db)) {
+    if (s.post !== null && (slot.kind !== 'planned' || s.post !== slot.idx)) continue;
+    const what = s.post === null ? 'the ticked products' : `daily post ${s.post}`;
+    await alert(db, 'selection_stale', s.post === null ? 'active' : `post-${s.post}`, `${what} ${s.post === null ? 'name' : 'names'} only products that are no longer stored (${s.handles.slice(0, 5).join(', ')}); ${slot.id} uses ${picked} instead. Choose again on the Products page.`, now);
+  }
 }
 
 export const LOGO_DIR = 'brand';

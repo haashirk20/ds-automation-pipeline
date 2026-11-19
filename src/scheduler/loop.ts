@@ -8,6 +8,7 @@ import { log } from '../ops/log.ts';
 import { snapshotDaily } from '../ops/snapshot.ts';
 import { summaryDaily } from '../ops/summary.ts';
 import { publishDue } from '../publish/index.ts';
+import { ensureIngest } from '../shopify/index.ts';
 import type { Publisher } from '../publish/types.ts';
 import { holdsTick } from './holds.ts';
 import { planDay } from './planner.ts';
@@ -16,8 +17,10 @@ import { addDays, localDateOf, localHHMM } from './time.ts';
 // Resolves when the producer for one slot has exited, however it exited.
 export type Spawn = (slotId: string, now: Date) => Promise<void>;
 export type Producer = { busy(): boolean; start(slotId: string, now: Date): Promise<void> };
+// `ingest` refreshes the stored catalogue at most hourly. The tick starts it and does not wait, so a slow store read
+// never delays a post or the heartbeat.
 // With `rebuild`, run() reads the config again before every tick and rebuilds the publishers from it.
-export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean; rebuild?: (config: Config) => Record<string, Publisher> };
+export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean; rebuild?: (config: Config) => Record<string, Publisher>; ingest?: (config: Config, now: Date, signal: AbortSignal) => Promise<void> };
 
 // One slot at a time. start() returns a promise the caller may ignore.
 export function makeProducer(spawnFn: Spawn): Producer {
@@ -68,6 +71,9 @@ export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?:
 // A slot the producer put back to 'planned' with an error waits this long before it starts again.
 const RETRY_GAP_MINUTES = 10;
 
+// The store read the tick started, if it is still running: never two at once.
+let ingesting: Promise<void> | null = null;
+
 const hasSlots = (db: Db, date: string) => !!db.prepare("SELECT 1 FROM slots WHERE local_date = ? AND kind = 'planned'").get(date);
 
 export async function tick(deps: Deps, now: Date): Promise<void> {
@@ -114,6 +120,13 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   await snapshotDaily(db, config, now);
   await housekeepingDaily(db, config, now);
   await summaryDaily(db, config, now);
+  if (deps.ingest && !ingesting) {
+    const read = deps.ingest;
+    ingesting = ensureIngest(db, now, { ingest: (n, signal) => read(config, n, signal), ingestDeadlineMs: 5 * 60000 })
+      .catch((e) => log.error('ingest failed', { error: String(e) }))
+      .finally(() => (ingesting = null));
+  }
+  if (deps.wait && ingesting) await ingesting; // run --once finishes its read before the process exits
 
   kvSet(db, 'heartbeat', now.toISOString());
   const url = env.healthcheckUrl();

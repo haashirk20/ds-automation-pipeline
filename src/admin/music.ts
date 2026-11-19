@@ -12,7 +12,10 @@ import { ff } from '../render/ffmpeg.ts';
 import { safeEqual } from './auth.ts';
 import { html } from './html.ts';
 import { musicRoot } from './media.ts';
-import { csrfField, fmtTs, layout, redirect, type Ctx, type Res } from './pages.ts';
+import fileConfig from '../../config/pipeline.config.ts';
+import { parseConfig } from '../config/index.ts';
+import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { confirmRemove, empty, flash, fmtLocal, formRow, toggle } from './ui.ts';
 
 export const MAX_FILE = 40 * 1024 * 1024;
 export const MAX_BODY = MAX_FILE + 64 * 1024;
@@ -24,17 +27,24 @@ type Row = { sha256: string; name: string; seconds: number; lufs: number; select
 
 export function musicPage(ctx: Ctx, error: string | null = null, status = 200): Res {
   const rows = ctx.db.prepare('SELECT sha256, name, seconds, lufs, selected, last_used_at FROM music_tracks WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as Row[];
+  const tz = (() => { try { return parseConfig(fileConfig).timezone; } catch { return 'UTC'; } })();
   const m = ctx.query.get('msg');
-  const flash = error ? html`<p class="error-box" role="alert">${error}</p>` : m === 'uploaded' ? html`<p class="notice" role="status">Uploaded.</p>` : m === 'saved' ? html`<p class="notice" role="status">Selection saved. It applies to the next video made.</p>` : m === 'deleted' ? html`<p class="notice" role="status">Deleted.</p>` : '';
+  const top = error ? flash('bad', 'Not added.', error) : m === 'uploaded' ? flash('ok', 'Track added.', 'Tick it below to use it.') : m === 'saved' ? flash('ok', 'Choices saved.', 'The next video made uses them.') : m === 'deleted' ? flash('ok', 'Track deleted.', 'Videos already made keep their music.') : '';
+  const len = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
   return {
-    ...layout(ctx, 'Music', '/music', html`${flash}<p class="banner">Only upload music you have the right to use in ads. YouTube, Facebook, Instagram and TikTok scan uploads for copyrighted music; a match can mute or block the post, hand its earnings to the rights holder, or strike the account. TikTok business accounts may use only its Commercial Music Library or audio you own.</p>
-<p>Ticked tracks take turns, the least recently used first. With none ticked, videos have no music.</p>
-<h2>Tracks</h2>${rows.length ? html`<form method="post" action="/music/select">${csrfField(ctx)}<div class="scroll"><table><thead><tr><th>Use</th><th>Name</th><th>Length</th><th>Loudness</th><th>Last used</th><th>Preview</th><th></th></tr></thead><tbody>${rows.map((r) => html`<tr><td><input type="checkbox" name="sel" value="${r.sha256}" aria-label="Use ${r.name}"${r.selected ? html` checked` : ''}></td><td>${r.name}</td><td>${Math.round(r.seconds)} s</td><td>${r.lufs.toFixed(1)} LUFS</td><td>${fmtTs(r.last_used_at)}</td><td><audio controls preload="none" src="/media/music?sha=${r.sha256}"></audio></td><td><button class="link" type="submit" formaction="/music/delete" name="sha" value="${r.sha256}">Delete</button></td></tr>`)}</tbody></table></div>
-<div class="actions"><button class="primary" type="submit">Save selection</button></div></form>` : html`<p class="muted">No tracks yet.</p>`}
-<h2>Upload</h2><form method="post" action="/music/upload" enctype="multipart/form-data">${csrfField(ctx)}
-<div class="field"><label for="file">Track</label><div><input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4"><span class="hint">Up to 40 MB. mp3, m4a, mp4 or wav; the picture of a video file is discarded.</span></div></div>
-<div class="field"><label for="ack">Rights</label><div><input id="ack" type="checkbox" name="ack" value="1"> I hold the rights to use this track in ads on these platforms.</div></div>
-<div class="actions"><button class="primary" type="submit">Upload</button></div></form>`),
+    ...layout(ctx, 'Music', '/music', html`${top}${flash('info', 'Only upload music you own or have licensed for ads.', html`Platforms mute or block posts with music they recognise.<details><summary>Why this matters</summary>YouTube, Facebook, Instagram and TikTok scan uploads for copyrighted music; a match can mute or block the post, hand its earnings to the rights holder, or strike the account. TikTok business accounts may use only its Commercial Music Library or audio you own.</details>`)}
+<section><h2>Your tracks</h2><p class="hint">Ticked tracks take turns, the least recently used first. With none ticked, videos have no music.</p>
+${rows.length ? html`<form method="post" action="/music/select">${csrfField(ctx)}<ul class="tracks card">${rows.map((r, i) => html`<li class="track">${toggle({ id: `t-${i}`, name: 'sel', value: r.sha256, checked: !!r.selected, label: `Use ${r.name}` })}
+<div><strong>${r.name}</strong><span class="hint">${len(r.seconds)} · ${r.last_used_at ? `Last used ${fmtLocal(r.last_used_at, tz)}` : 'Never used'}</span></div>
+${confirmRemove('Delete…', html`<button class="danger" type="submit" form="del-${i}">Yes, delete ${r.name}</button>`)}
+<audio controls preload="none" src="/media/music?sha=${r.sha256}" aria-label="Play ${r.name}"></audio>
+<details class="tech"><summary>Technical details</summary>Loudness ${r.lufs.toFixed(1)} LUFS (evened out when mixed).</details></li>`)}</ul>
+<div class="sticky-save"><button class="primary" type="submit">Save choices</button></div></form>
+${rows.map((r, i) => html`<form id="del-${i}" method="post" action="/music/delete">${csrfField(ctx)}<input type="hidden" name="sha" value="${r.sha256}"></form>`)}` : empty('No music yet. Without music, videos have none.')}</section>
+<section class="card"><h2>Upload a track</h2><form method="post" action="/music/upload" enctype="multipart/form-data">${csrfField(ctx)}
+${formRow({ id: 'file', label: 'Track', control: html`<input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4" required>`, hint: 'Up to 40 MB. mp3, m4a, mp4 or wav; the picture of a video file is dropped.' })}
+<label class="check" for="ack"><input id="ack" type="checkbox" name="ack" value="1" required> I own this track or hold the rights to use it in ads on these platforms.</label>
+<div class="actions"><button class="primary" type="submit">Upload track</button></div></form></section>`),
     status,
   };
 }

@@ -2,7 +2,7 @@
 // which products get videos, and upload the logo the video model sees. Each product's brief is the only
 // source of what an ad may claim.
 import type { IncomingMessage } from 'node:http';
-import { closeSync, openSync, readSync, rmSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { Brief } from '../contracts.ts';
 import { audit, loadEffectiveConfig } from '../config/overrides.ts';
@@ -10,11 +10,15 @@ import { env } from '../config/index.ts';
 import { kvGet, kvSet, type Db } from '../db/index.ts';
 import { MAX_IMAGE, MAX_PHOTOS } from './upload.ts';
 import { log } from '../ops/log.ts';
-import { activeHandles, brandLogoFile, isLogoKey, LOGO_DIR, OwnerProduct, ownerBrief, OWN_PREFIX, SAFE_HANDLE, shopOf, slugHandle } from '../shopify/catalog.ts';
+import { activeHandles, brandLogoFile, isLogoKey, LOGO_DIR, NoBriefError, OwnerProduct, ownerBrief, OWN_PREFIX, pickBrief, SAFE_HANDLE, shopOf, slotProducts, slugHandle, staleSelections } from '../shopify/catalog.ts';
+import { enabledPlatforms } from '../scheduler/planner.ts';
+import { addDays, localDateOf, localToUtc } from '../scheduler/time.ts';
+import type { Config } from '../config/index.ts';
 import { safeEqual } from './auth.ts';
 import { html, raw, type Raw } from './html.ts';
 import { inside } from './media.ts';
 import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { badge, confirmRemove, empty, errSummary, flash, fmtDate, fmtLocal, formRow } from './ui.ts';
 import { ImageError, imageKind, readMultipart, saveImage } from './upload.ts';
 
 export const MAX_PRODUCT_BODY = 64 * 1024 * 1024;
@@ -22,14 +26,15 @@ export const MAX_LOGO_BODY = MAX_IMAGE + 64 * 1024;
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const CURRENCIES = ['CAD', 'USD', 'EUR', 'GBP', 'AUD'];
 
-type Row = { handle: string; json: string; own: number };
-type Item = { handle: string; brief: Brief; own: boolean };
+type Row = { handle: string; json: string; own: number; skipped: number | null };
+type Item = { handle: string; brief: Brief; own: boolean; skipped: number };
 
 function items(db: Db): Item[] {
-  const rows = db.prepare('SELECT b.handle, b.json, (o.handle IS NOT NULL) AS own FROM briefs b LEFT JOIN owner_products o ON o.handle = b.handle ORDER BY own, b.handle').all() as Row[];
+  // skipped: Shopify photos the last store read could not download (products.raw_json, written by ingest).
+  const rows = db.prepare("SELECT b.handle, b.json, (o.handle IS NOT NULL) AS own, CASE WHEN json_valid(p.raw_json) THEN json_extract(p.raw_json, '$.imagesSkipped') END AS skipped FROM briefs b LEFT JOIN owner_products o ON o.handle = b.handle LEFT JOIN products p ON p.handle = b.handle ORDER BY own, b.handle").all() as Row[];
   const out: Item[] = [];
   for (const r of rows) {
-    try { out.push({ handle: r.handle, brief: Brief.parse(JSON.parse(r.json)), own: !!r.own }); } catch { /* an unreadable brief is skipped */ }
+    try { out.push({ handle: r.handle, brief: Brief.parse(JSON.parse(r.json)), own: !!r.own, skipped: Number(r.skipped) || 0 }); } catch { /* an unreadable brief is skipped */ }
   }
   return out;
 }
@@ -75,56 +80,155 @@ export async function mediaLogo(ctx: Ctx): Promise<Res> {
 
 // ---------- the page ----------
 
-const MSG: Record<string, string> = {
-  saved: 'Product saved. It is in the rotation from the next video made.',
-  selected: 'Selection saved. The next video uses it.',
-  deleted: 'Product removed.',
-  logo: 'Logo uploaded. The next video made uses it.',
-  logofile: 'Back to the logo from the config file.',
+const MSG: Record<string, [string, string]> = {
+  saved: ['Product saved.', 'It can be used from the next video made.'],
+  selected: ['Choices saved.', 'The next video made uses them.'],
+  deleted: ['Product removed.', 'Videos already made are not changed.'],
+  logo: ['Logo uploaded.', 'The next video made uses it.'],
+  logofile: ['Back to the default logo.', 'The next video made uses it.'],
+  sync_requested: ['Shopify check requested.', 'The factory reads your store within a minute; refresh to see the result.'],
 };
+
+// The daily post times, from the first enabled platform (the planner uses the same one).
+function postTimes(cfg: Config): string[] {
+  const p = enabledPlatforms(cfg)[0];
+  return p ? cfg.platforms[p as keyof Config['platforms']].slots : [];
+}
+
+// The next time each daily post goes out, and the product pickBrief gives it.
+function nextPosts(db: Db, cfg: Config, now: Date): { idx: number; date: string; time: string; title: string }[] {
+  const today = localDateOf(now, cfg.timezone);
+  return postTimes(cfg).map((time, i) => {
+    const date = localToUtc(today, time, cfg.timezone) > now ? today : addDays(today, 1);
+    let title = 'no product yet';
+    try { title = pickBrief(db, { local_date: date, idx: i + 1, kind: 'planned' }).product.title; } catch (e) { if (!(e instanceof NoBriefError)) throw e; }
+    return { idx: i + 1, date, time, title };
+  });
+}
+
+// The one choice per product. It maps onto the stored kv (D-40) in productsSelect: a post choice puts the
+// handle in slot_products, 'any' puts it in the products_active pool, 'none' in neither.
+type Use = 'none' | '1' | '2' | 'both' | 'any';
+function useOf(h: string, pool: string[] | null, perPost: Record<string, string[]>): Use {
+  const p1 = (perPost['1'] ?? []).includes(h);
+  const p2 = (perPost['2'] ?? []).includes(h);
+  if (p1 && p2) return 'both';
+  if (p1) return '1';
+  if (p2) return '2';
+  return !pool || pool.includes(h) ? 'any' : 'none';
+}
+
+const parseJson = <T>(s: string | undefined): T | null => { try { return s ? (JSON.parse(s) as T) : null; } catch { return null; } };
+type SyncResult = { at?: string; ok?: boolean; added?: number; updated?: number; removed?: number; error?: string };
+type Stale = { post: number | null; handles: string[] };
+const staleOf = (db: Db): Stale[] => staleSelections(db);
+
+// A failed store read in plain words; the raw (already scrubbed) text goes under Technical details.
+export function plainSyncError(e: string): string {
+  if (/\b40[13]\b/.test(e)) return "Shopify refused the app's key. Check the Shopify app connection.";
+  if (/network|fetch failed|timeout|timed out|abort|deadline|ECONN|ENOTFOUND|EAI_AGAIN/i.test(e)) return 'Shopify could not be reached. It tries again within the hour.';
+  if (/returned no products/.test(e)) return e;
+  return 'Shopify could not be read.';
+}
+
+function shopStatus(db: Db, tz: string): Raw {
+  const res = parseJson<SyncResult>(kvGet(db, 'shop_sync_result'));
+  const r = res && typeof res === 'object' && typeof res.at === 'string' ? res : null;
+  const requested = kvGet(db, 'ingest_requested');
+  const pending = requested && (!r || requested > r.at!);
+  const fallback = kvGet(db, 'shop_synced_at');
+  const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const line = r
+    ? r.ok === false ? html`<span class="err">Last check failed (${fmtLocal(r.at, tz)}): ${plainSyncError(String(r.error ?? ''))}</span>` : html`Last checked ${fmtLocal(r.at, tz)}: ${n(r.added)} new, ${n(r.updated)} updated, ${n(r.removed)} gone.`
+    : fallback ? html`Last checked ${fmtLocal(fallback, tz)}.` : html`Not checked yet.`;
+  const trunc = parseJson<{ total?: number; kept?: number }>(kvGet(db, 'shop_truncated'));
+  const tech = r && r.ok === false && r.error ? html`<details class="tech"><summary>Technical details</summary>${String(r.error)}</details>` : '';
+  return html`<span class="hint">${line}${pending ? html` <strong>Check pending…</strong>` : ''} Shopify is also checked every hour.</span>${tech}${trunc && typeof trunc === 'object' && trunc.total ? html`<span class="hint"><strong>Your store has ${n(trunc.total)} products; only the first ${n(trunc.kept)} are used.</strong></span>` : ''}`;
+}
 
 export async function productsPage(ctx: Ctx, error: string | null = null, status = 200): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+  const tz = cfg.timezone;
   const list = items(ctx.db);
-  const active = activeHandles(ctx.db);
-  const on = (h: string) => (active ? active.includes(h) : true);
-  const nOn = list.filter((x) => on(x.handle)).length;
+  const pool = activeHandles(ctx.db);
+  const times = postTimes(cfg).slice(0, 2);
+  const perPost = slotProducts(ctx.db);
+  const next = nextPosts(ctx.db, cfg, ctx.now);
   const m = ctx.query.get('msg');
   const uploaded = kvGet(ctx.db, 'brand_logo');
   const hasLogo = !!brandLogoFile(ctx.db, cfg, ROOT);
-  const card = (x: Item) => html`<li class="pcard${on(x.handle) ? ' on' : ''}">
-<label class="pcard-pick"><input type="checkbox" name="sel" value="${x.handle}"${on(x.handle) ? raw(' checked') : ''}> <span>Make videos</span></label>
-<div class="pcard-img">${x.brief.shots.length ? html`<img src="/media/photo?handle=${x.handle}" alt="" loading="lazy" width="160" height="160">` : html`<span class="muted">No photo</span>`}</div>
-<div class="pcard-body"><span class="tag ${x.own ? 'own' : 'shop'}">${x.own ? 'Added by you' : 'Shopify'}</span>
+  const used = (h: string) => useOf(h, pool, perPost) !== 'none';
+  const nOn = list.filter((x) => used(x.handle)).length;
+  const choices: [Use, string][] = [['none', 'Not used'], ...times.map((t, i): [Use, string] => [String(i + 1) as Use, `Post ${i + 1} · ${t}`]), ...(times.length > 1 ? [['both', 'Both posts'] as [Use, string]] : []), ['any', 'Any post']];
+  const photoOk = (x: Item) => !!x.brief.shots[0] && !!inside(path.resolve(dataRoot(), x.brief.shots[0].file), path.join(dataRoot(), 'assets')) && existsSync(path.resolve(dataRoot(), x.brief.shots[0].file));
+  const card = (x: Item, i: number) => {
+    const u = useOf(x.handle, pool, perPost);
+    const name = `use.${x.handle}`;
+    return html`<li class="pcard${u !== 'none' ? ' on' : ''}">
+<div class="pcard-img">${photoOk(x) ? html`<img src="/media/photo?handle=${x.handle}" alt="${x.brief.product.title}" loading="lazy" width="160" height="120">` : html`<span class="muted">No photo${!x.own && x.skipped > 0 ? '. Photos could not be downloaded from Shopify; they are tried again at the next check.' : ''}</span>`}</div>
+<div class="pcard-body">${x.own ? badge('warn', 'Added by you') : badge('ok', 'From Shopify')}
 <strong>${x.brief.product.title}</strong><span class="pcard-price">${x.brief.product.priceText}</span>
-<span class="muted">${x.brief.facts.length} facts · ${x.brief.shots.length} photos</span>
-${x.own ? html`<span class="pcard-act"><a href="/products/edit?handle=${x.handle}">Edit</a> <button class="link danger" type="submit" formaction="/products/delete" name="handle" value="${x.handle}">Remove</button></span>` : html`<span class="pcard-act"><a href="/prompts/edit?key=${encodeURIComponent('note:' + x.handle)}">What it looks like</a></span>`}</div></li>`;
+<fieldset><legend>Use in videos</legend>${choices.map(([v, label]) => html`<label class="check" for="u-${x.handle}-${v}"><input id="u-${x.handle}-${v}" type="radio" name="${name}" value="${v}"${u === v ? raw(' checked') : ''}> ${label}</label>`)}</fieldset>
+<div class="pcard-act">${x.own ? html`<a href="/products/edit?handle=${x.handle}">Edit</a>${confirmRemove('Remove…', html`<button class="danger" type="submit" form="del-${i}">Yes, remove ${x.brief.product.title}</button>`)}` : html`<a href="/prompts/edit?key=${encodeURIComponent('note:' + x.handle)}">Describe how it looks</a>`}</div></div></li>`;
+  };
+  // "Any post" products are unused by daily posts when every post has a product of its own (chooseBrief).
+  const title = (h: string) => list.find((x) => x.handle === h)?.brief.product.title;
+  const anyTitles = (pool ?? []).map(title).filter((t): t is string => !!t);
+  const allPostsOwn = times.length > 0 && postTimes(cfg).every((_, i) => (perPost[String(i + 1)] ?? []).some((h) => title(h)));
+  const trap = anyTitles.length && allPostsOwn ? flash('bad', `${anyTitles.join(', ')} ${anyTitles.length > 1 ? 'are' : 'is'} set to "Any post", but every post already has its own product, so ${anyTitles.length > 1 ? 'they are' : 'it is'} used only by "Make a video now".`, `Put ${anyTitles.length > 1 ? 'them' : 'it'} on a post, or leave one post with no product of its own so "Any post" products fill it.`) : '';
+  const flashes = html`${trap}${error ? flash('bad', 'Not done.', error) : m === 'synced' ? flash('ok', 'Shopify checked.', '') : m && MSG[m] ? flash(m === 'sync_requested' ? 'info' : 'ok', MSG[m][0], MSG[m][1]) : ''}
+${staleOf(ctx.db).map((s) => flash('bad', s.post === null ? 'Some products you set to Any post are no longer in the store.' : `Post ${s.post}: the product you chose is no longer in the store, so the other products take turns.`, 'Choose again below and save.'))}`;
   return {
-    ...layout(ctx, 'Products', '/products', html`${error ? html`<p class="error-box" role="alert">${error}</p>` : m && MSG[m] ? html`<p class="notice" role="status">${MSG[m]}</p>` : ''}
-<div class="steps"><div><b>1</b><span>Tick the products you want videos for.</span></div><div><b>2</b><span>Press <em>Save selection</em>.</span></div><div><b>3</b><span>Ticked products take turns, one per video.</span></div></div>
-<h2>Your products <small class="muted">${nOn} of ${list.length} get videos</small></h2>
+    ...layout(ctx, 'Products', '/products', html`${flashes}
+<section class="card"><div class="section-head"><h2>Next posts</h2><div class="section-actions"><a class="btn primary" href="/products/new">Add a product</a><form method="post" action="/products/sync">${csrfField(ctx)}<button type="submit">Get latest from Shopify</button></form></div></div>
+${shopStatus(ctx.db, tz)}
+${next.length ? html`<ul class="next-posts">${next.map((x) => html`<li data-post="${x.idx}" data-date="${x.date}"><strong>Post ${x.idx} · ${x.time}</strong> next on ${fmtDate(x.date)}, uses: <strong>${x.title}</strong></li>`)}</ul>` : html`<p>Every platform is off, so nothing is posted. Turn one on in <a href="/settings#where">Settings</a>.</p>`}
+<p class="hint">${times.length ? `Each day has ${times.map((t, i) => `Post ${i + 1} (${t})`).join(' and ')}. ` : ''}Products on the same post take turns day by day. "Any post" products fill posts that have no product chosen, and "Make a video now". If no product is set to "Any post", those use the products chosen for a post. "Not used" products are never used unless nothing else is chosen.</p></section>
+<section><h2>Your products</h2>
 ${list.length ? html`<form method="post" action="/products/select">${csrfField(ctx)}<ul class="pgrid">${list.map(card)}
-<li class="pcard add"><a href="/products/new"><span class="plus">+</span>Add your own product</a></li></ul>
-<div class="actions"><button class="primary" type="submit">Save selection</button></div></form>`
-      : html`<div class="panel"><p>No products yet. Shopify products appear after the pipeline's next store read (once a day, or when it starts). You can also add one yourself.</p><p><a class="btn primary" href="/products/new">+ Add your own product</a></p></div>`}
-<h2>Logo</h2>
-<div class="panel logo-panel"><div class="logo-box">${hasLogo ? html`<img src="/media/logo?v=${uploaded && isLogoKey(uploaded) ? uploaded.slice(11, 23) : 'file'}" alt="Current logo" width="160" height="160">` : html`<span class="muted">No logo</span>`}</div>
-<div><p>The logo is sent to the video model with the product photos, so a gift box or label in the scene can carry it. ${uploaded && isLogoKey(uploaded) ? 'Using the logo uploaded here.' : cfg.brand.logo ? 'Using the logo from the config file.' : 'No logo is set.'}</p>
+<li class="pcard add"><a href="/products/new"><span class="plus" aria-hidden="true">+</span>Add your own product</a></li></ul>
+<div class="sticky-save"><button class="primary" type="submit">Save choices</button><span class="muted">${nOn} of ${list.length} used in videos</span></div></form>
+${list.map((x, i) => (x.own ? html`<form id="del-${i}" method="post" action="/products/delete">${csrfField(ctx)}<input type="hidden" name="handle" value="${x.handle}"></form>` : ''))}`
+      : empty('No products yet. Shopify products appear after the next store check (every hour), or press "Get latest from Shopify" above.', html`<a class="btn primary" href="/products/new">Add your own product</a>`)}</section>
+<section class="card"><h2>Your logo</h2><div class="logo-panel"><div class="logo-box">${hasLogo ? html`<img src="/media/logo?v=${uploaded && isLogoKey(uploaded) ? uploaded.slice(11, 23) : 'file'}" alt="Your logo" width="160" height="160">` : html`<span class="muted">No logo</span>`}</div>
+<div><p>Shown to the video model so a gift box or label in the scene can carry it. ${uploaded && isLogoKey(uploaded) ? 'Using the logo uploaded here.' : cfg.brand.logo ? 'Using the default logo.' : 'No logo is set.'}</p>
 <form method="post" action="/brand/logo" enctype="multipart/form-data">${csrfField(ctx)}
-<div class="field"><label for="logo">New logo</label><div><input id="logo" type="file" name="file" accept="image/png,image/jpeg" required><span class="hint">PNG or JPEG, up to 15 MB. A transparent PNG works best. It is resized to at most 1024 pixels.</span></div></div>
+${formRow({ id: 'logo', label: 'New logo', control: html`<input id="logo" type="file" name="file" accept="image/png,image/jpeg" required>`, hint: 'PNG or JPEG, up to 15 MB. A transparent PNG works best.' })}
 <div class="actions"><button class="primary" type="submit">Upload logo</button></div></form>
-${uploaded ? html`<form method="post" action="/brand/logo/reset">${csrfField(ctx)}<button type="submit">Use the config file's logo</button></form>` : ''}</div></div>`),
+${uploaded ? html`<form method="post" action="/brand/logo/reset">${csrfField(ctx)}<button class="link" type="submit">Use the default logo instead</button></form>` : ''}</div></div></section>`),
     status,
   };
 }
 
 export async function productsSelect(ctx: Ctx): Promise<Res> {
-  const known = new Set(items(ctx.db).map((x) => x.handle));
-  const sel = [...new Set(ctx.form.getAll('sel'))].filter((h) => known.has(h));
-  if (!sel.length) return productsPage(ctx, 'Tick at least one product. With none ticked there is nothing to make videos for.', 422);
-  kvSet(ctx.db, 'products_active', JSON.stringify(sel.sort()));
-  audit(ctx.db, 'admin', 'products.select', 'products', { selected: sel }, ctx.now);
+  const known = items(ctx.db).map((x) => x.handle);
+  const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+  const nPosts = postTimes(cfg).length;
+  // The page sends one choice per product (use.<handle>); plain sel / postN fields are read too.
+  const sel = new Set(ctx.form.getAll('sel'));
+  const posts: Record<string, Set<string>> = Object.fromEntries(Array.from({ length: nPosts }, (_, i) => [String(i + 1), new Set(ctx.form.getAll(`post${i + 1}`))]));
+  for (const h of known) {
+    const u = ctx.form.get(`use.${h}`);
+    if (u === 'any') sel.add(h);
+    if ((u === '1' || u === 'both') && posts['1']) posts['1'].add(h);
+    if ((u === '2' || u === 'both') && posts['2']) posts['2'].add(h);
+  }
+  const pool = [...sel].filter((h) => known.includes(h)).sort();
+  const lists = Object.fromEntries(Object.entries(posts).map(([k, s]) => [k, [...s].filter((h) => known.includes(h)).sort()]));
+  if (!pool.length && !Object.values(lists).some((l) => l.length)) return productsPage(ctx, 'Choose at least one product for a post or for "Any post". With none chosen there is nothing to make videos for.', 422);
+  kvSet(ctx.db, 'products_active', JSON.stringify(pool));
+  kvSet(ctx.db, 'slot_products', JSON.stringify(lists));
+  audit(ctx.db, 'admin', 'products.select', 'products', { selected: pool, posts: lists }, ctx.now);
   return redirect('/products?msg=selected');
+}
+
+// Asks the factory to read the store now. The admin has no Shopify credentials (D-32); the scheduler does the read.
+export function productsSync(ctx: Ctx): Res {
+  const prev = kvGet(ctx.db, 'ingest_requested');
+  if (prev && ctx.now.getTime() - Date.parse(prev) < 60_000) return redirect('/products?msg=sync_requested'); // already asked this minute
+  kvSet(ctx.db, 'ingest_requested', ctx.now.toISOString());
+  audit(ctx.db, 'admin', 'products.sync', 'products', {}, ctx.now);
+  return redirect('/products?msg=sync_requested');
 }
 
 export function productsDelete(ctx: Ctx): Res {
@@ -151,7 +255,7 @@ export function productsDelete(ctx: Ctx): Res {
 // ---------- the product form ----------
 
 type FormVals = { handle: string; title: string; type: string; price: string; currency: string; url: string; colors: string; facts: string; disclosures: string };
-const empty = (cur: string): FormVals => ({ handle: '', title: '', type: '', price: '', currency: cur, url: '', colors: '', facts: '', disclosures: '' });
+const blank = (cur: string): FormVals => ({ handle: '', title: '', type: '', price: '', currency: cur, url: '', colors: '', facts: '', disclosures: '' });
 
 function storeCurrency(db: Db): string {
   const r = db.prepare(`SELECT json FROM briefs WHERE handle NOT LIKE '${OWN_PREFIX}%' ORDER BY built_at DESC LIMIT 1`).get() as { json: string } | undefined;
@@ -167,27 +271,27 @@ function ownerRow(db: Db, handle: string): OwnerProduct | null {
 export function productForm(ctx: Ctx, v: FormVals | null = null, errors: string[] = [], status = 200): Res {
   const editing = ctx.query.get('handle') ?? v?.handle ?? '';
   const existing = editing ? ownerRow(ctx.db, editing) : null;
-  if (editing && !existing) return { ...layout(ctx, 'Not found', '/products', html`<p>No such product. <a href="/products">Back to products</a></p>`), status: 404 };
-  const vals: FormVals = v ?? (existing ? { handle: editing, title: existing.title, type: existing.type, price: String(existing.price), currency: existing.currency, url: existing.url, colors: existing.colors.join(', '), facts: existing.facts.join('\n'), disclosures: existing.disclosures.join('\n') } : empty(storeCurrency(ctx.db)));
-  const f = (id: string, label: string, input: Raw, hint: string) => html`<div class="field"><label for="${id}">${label}</label><div>${input}<span class="hint">${hint}</span></div></div>`;
+  if (editing && !existing) return { ...layout(ctx, 'Not found', '/products', html`<p>No such product.</p><p><a class="btn" href="/products">Back to Products</a></p>`), status: 404 };
+  const vals: FormVals = v ?? (existing ? { handle: editing, title: existing.title, type: existing.type, price: String(existing.price), currency: existing.currency, url: existing.url, colors: existing.colors.join(', '), facts: existing.facts.join('\n'), disclosures: existing.disclosures.join('\n') } : blank(storeCurrency(ctx.db)));
+  const f = (id: string, label: string, input: Raw, hint: string) => formRow({ id, label, control: input, hint });
   return {
-    ...layout(ctx, existing ? `Edit ${existing.title}` : 'Add a product', '/products', html`${errors.length ? html`<div class="error-box" role="alert"><strong>Not saved.</strong><ul>${errors.map((e) => html`<li>${e}</li>`)}</ul>${v ? html`<p>Choose the photos again: a browser does not keep them after an error.</p>` : ''}</div>` : ''}
+    ...layout(ctx, existing ? `Edit ${existing.title}` : 'Add a product', '/products', html`${errSummary(errors.map((msg) => ({ msg })))}${errors.length && v ? html`<p class="hint">Choose the photos again: a browser does not keep them after an error.</p>` : ''}
 <p>Add a product that is not in your Shopify store. Videos may say <strong>only</strong> what you write under <em>Facts</em>, so write each true statement on its own line.</p>
 <form method="post" action="/products/save" enctype="multipart/form-data">${csrfField(ctx)}<input type="hidden" name="handle" value="${vals.handle}">
-<fieldset><legend>The basics</legend>
+<section class="card"><h2>About the product</h2>
 ${f('title', 'Product name', html`<input id="title" type="text" name="title" value="${vals.title}" maxlength="120" required>`, 'As it should appear in a video, for example: Heated Shawl Wrap.')}
 ${f('type', 'Kind of product (optional)', html`<input id="type" type="text" name="type" value="${vals.type}" maxlength="60">`, 'For example: Wearable blanket.')}
 ${f('price', 'Price', html`<span class="price-row"><input id="price" type="text" inputmode="decimal" name="price" value="${vals.price}" required><select name="currency" aria-label="Currency">${CURRENCIES.map((c) => html`<option${c === vals.currency ? raw(' selected') : ''}>${c}</option>`)}</select></span>`, 'The regular price. Videos never mention discounts for products added here.')}
 ${f('url', 'Link (optional)', html`<input id="url" type="text" name="url" value="${vals.url}" maxlength="300" placeholder="https://">`, 'Where a viewer can buy it. Must start with https://.')}
-${f('colors', 'Colours (optional)', html`<input id="colors" type="text" name="colors" value="${vals.colors}" maxlength="400">`, 'Comma separated, for example: Beige, Green, Red.')}</fieldset>
-<fieldset><legend>Facts the videos may use</legend>
+${f('colors', 'Colours (optional)', html`<input id="colors" type="text" name="colors" value="${vals.colors}" maxlength="400">`, 'Comma separated, for example: Beige, Green, Red.')}</section>
+<section class="card"><h2>What videos may say</h2>
 ${f('facts', 'Facts, one per line', html`<textarea id="facts" name="facts" class="short" rows="8" required>${vals.facts}</textarea>`, 'Only true statements you can stand behind: what it is, what it is made of, what it does, size, what is in the box. No reviews, ratings or "best seller". Up to 40 lines.')}
-${f('disclosures', 'Disclosures, one per line (optional)', html`<textarea id="disclosures" name="disclosures" class="short" rows="3">${vals.disclosures}</textarea>`, 'Shown in every caption, for example: Power bank not included.')}</fieldset>
-<fieldset><legend>Photos</legend>
-${existing ? html`<div class="field"><span class="lbl">Keep these photos</span><div class="thumbs">${existing.photos.map((p, i) => html`<label class="thumb"><img src="/media/photo?handle=${editing}&i=${i}" alt="" width="96" height="96"><span><input type="checkbox" name="keep" value="${p.file}" checked> Keep</span></label>`)}</div></div>` : ''}
-${f('photos', existing ? 'Add photos' : 'Photos', html`<input id="photos" type="file" name="photos" accept="image/png,image/jpeg" multiple${existing ? '' : raw(' required')}>`, `1 to ${MAX_PHOTOS} photos of the product itself, PNG or JPEG, up to 15 MB each. Photos with no printed text work best; the video model copies what it sees.`)}</fieldset>
-<div class="field"><label for="ack">Check</label><div><input id="ack" type="checkbox" name="ack" value="1" required> Every fact above is true, and I may use these photos in ads.</div></div>
-<div class="actions"><button class="primary" type="submit">${existing ? 'Save product' : 'Add product'}</button><a href="/products">Cancel</a></div></form>`),
+${f('disclosures', 'Disclosures, one per line (optional)', html`<textarea id="disclosures" name="disclosures" class="short" rows="3">${vals.disclosures}</textarea>`, 'Shown in every caption, for example: Power bank not included.')}</section>
+<section class="card"><h2>Photos</h2>
+${existing ? html`<fieldset class="form-row"><legend class="lbl">Keep these photos</legend><div class="thumbs">${existing.photos.map((p, i) => html`<label class="thumb"><img src="/media/photo?handle=${editing}&i=${i}" alt="${existing.title}, photo ${i + 1}" width="96" height="96"><span><input type="checkbox" name="keep" value="${p.file}" checked> Keep</span></label>`)}</div></fieldset>` : ''}
+${f('photos', existing ? 'Add photos (optional)' : 'Photos', html`<input id="photos" type="file" name="photos" accept="image/png,image/jpeg" multiple${existing ? '' : raw(' required')}>`, `1 to ${MAX_PHOTOS} photos of the product itself, PNG or JPEG, up to 15 MB each. Photos with no printed text work best; the video model copies what it sees.`)}</section>
+<div class="card"><label class="check" for="ack"><input id="ack" type="checkbox" name="ack" value="1" required> I confirm every fact is true and I may use these photos in ads.</label></div>
+<div class="sticky-save"><button class="primary" type="submit">${existing ? 'Save product' : 'Add product'}</button><a href="/products">Cancel</a></div></form>`),
     status,
   };
 }

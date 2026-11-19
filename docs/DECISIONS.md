@@ -792,6 +792,8 @@ owner wants to try a prompt from the page.
 
 ## D-38 Settings as blocks on a factory line, with a shipping animation (2026-11-17, branch `dev`)
 
+*Superseded by D-41 (2026-11-19): the block editor and its script are removed.*
+
 **Chosen.** The owner asked for settings that are easier to change: blocks that connect, and an
 animation that packs the settings into a box and sends it to the factory. `/settings` still renders
 the same form, grouped into fieldsets that each carry a block id. One same-origin script,
@@ -850,6 +852,108 @@ have nothing to check against.
 
 **Cost.** No dependency. Facts for an added product are only as true as the owner's lines; the form
 says so.
+
+## D-40 Hourly Shopify sync with removal, and products chosen per daily post (2026-11-19, branch `dev`)
+
+**Chosen.** The store is read at most hourly (`INGEST_EVERY_MS`, `ensureIngest` in
+`src/shopify/index.ts`). The scheduler tick starts the read and does not wait for it, and never runs
+two at once (a module-level in-flight promise); `run --once` waits for it before exiting. The producer
+still reads before it picks a product and waits, under the same deadline. `kv ingest_at` is the
+attempt time and is written when the read starts, so the tick and a producer process do not read at
+the same time. At the five-minute deadline the read is aborted (`AbortSignal.any` with each request's
+20-second timeout; checked between products and before each photo), so no read keeps running. The
+alert and its six-hour rate limit are unchanged; a failed read is tried again an hour later.
+
+The admin does not read the store; D-32 holds. Its "check now" writes `kv ingest_requested` (ISO
+time), and the next tick reads when that is newer than `ingest_at`, whatever the hour. After every
+attempt `syncShop` writes `kv shop_sync_result` = `{at, ok, added, updated, removed, error?}` (the
+error passed through `scrub`). `kv shop_synced_at` is the last successful read.
+
+After a read that returns products, stored Shopify products the store no longer lists (deleted,
+archived, draft, unpublished) lose their `products` and `briefs` rows. Owner products (`own-` and
+`owner_products`) are never removed. A failed read removes nothing. An empty read removes nothing,
+logs a warning and alerts `shop_empty`: an empty store is more likely a broken read. Removal is based
+on the full list of handles: on the Admin API a second, cheap query (`products(first: 250, query:
+same filter) { nodes { handle } pageInfo { hasNextPage } }`); on the public feed the handles of the
+pages read (up to four pages of 250). When that list may go on (`hasNextPage`, or four full pages),
+nothing is removed. Only the first `MAX_PRODUCTS` (20) are stored; above that `kv shop_truncated` =
+`{at, total, kept}` is set and `shop_truncated` alerts, and the key is deleted when the store is back
+under the limit. The Admin filter is `status:active AND published_status:published`; Shopify's
+products query docs say "`published`/`visible`: Returns resources that are published to the online
+store." (https://shopify.dev/docs/api/admin-graphql/latest/queries/products, read 2026-11-19), which
+matches the public feed.
+
+When a product's brief changes, its active hooks that cite a fact the new brief dropped or reworded
+are retired (`hooks.status`). Each finished master stores `factTexts` = `{factId: text}` for the facts
+it cites: the script's beats and hook in `ad` mode; every brief fact in `ugc` mode, since a concept
+cites no ids. A stored script or clip is reused only when each of those ids is still in the current
+brief with the same text; a master without `factTexts` is never reused. Slots keep `product_handle`
+and their stored master, so a product that leaves only stops being picked for new slots.
+
+`kv slot_products` (`{"1": [handles], "2": [handles]}`) names the products of each daily post.
+`pickBrief(db, slot)` (`src/shopify/catalog.ts`) takes turns within the post's list by the number of
+earlier slots with the same index, so one product on both posts, or several taking turns day by day,
+both work. An empty list, a list whose products are all gone, a malformed value and manual slots use
+the previous rule: `products_active` (else every product) by global slot ordinal. `staleSelections`
+lists each non-empty post list or `products_active` that matches no stored brief; the producer alerts
+`selection_stale` for the slot's post (and for `products_active`) after `pickBrief`, rate-limited per
+choice. `staleSelections` is exported for the Products page.
+
+**Review fixes.** `ingest_at` is claimed atomically: a conditional `UPDATE kv ... WHERE value IS <the
+value read>` (an `INSERT ... DO NOTHING` when the key is missing), and only the process whose claim
+changes one row reads the store. A request (`ingest_requested`) still waits at least 60 s after the last
+attempt, and the admin keeps an existing request younger than 60 s instead of rewriting it. A Shopify
+product whose handle starts with `own-` is skipped with a warning, since that prefix belongs to owner
+products. `products.raw_json` carries `imagesSkipped` (photos the read could not download), so the
+Products page can say why a Shopify product has no photo; no schema change.
+
+**Alternatives.** Shopify webhooks: they need a public endpoint and a registered app. A per-day
+schedule table: more than the owner asked for. The admin reading the store itself: the admin has no
+network need beyond the owner's browser (D-32). Awaiting the read in the tick: a slow store delayed
+posts and the heartbeat by up to five minutes.
+
+**Cost.** No dependency. One store read an hour: three requests on the Admin API (token, products,
+handles), two on the public feed, plus photos only when new.
+
+## D-41 Plain admin pages; the settings block editor is removed (supersedes D-38) (2026-11-19, branch `dev`)
+
+**Chosen.** The admin is restyled for a shop owner who is not technical: sentence-case system fonts, a
+calm warm palette that meets 4.5:1 contrast in both colour schemes, six main nav items plus "More",
+local times, plain labels and status words, one flash pattern and one error pattern. Settings is one
+server-rendered form in five sections (When videos go out, Where videos go, Spending limits, Look and
+sound, Advanced), with post times as a Post 1 / Post 2 by platform grid. `/settings.js` and
+`/blocks.css` are removed; only Factory loads a script (D-37). Factory keeps its pixel look: the
+previous stylesheet is served unchanged as `/pixel.css` to that page alone, with rules for the new nav
+appended. URLs and form contracts are unchanged, with two exceptions on Products: each product has one
+choice ("Not used / Post 1 / Post 2 / Both posts / Any post", field `use.<handle>`) that the handler
+maps onto the D-40 kv format (`slot_products` and the `products_active` pool, unchanged; the old
+`sel` and `postN` fields are still read), and saving is accepted with an empty pool when a post has a
+product. "Get latest from Shopify" (`POST /products/sync`) no longer reads the store, since the admin
+container has no Shopify credentials (D-32): it writes `kv ingest_requested` and the page shows the last
+result from `kv shop_sync_result`, a cut-short store from `kv shop_truncated`, and stale selections.
+
+**Review fixes.** Each "Yes, remove/delete" button on Products and Music submits its own standalone
+form (`form="del-N"`, rendered after the select form, with the csrf field), so Enter in the select form
+always saves and never deletes. When products are set to "Any post" but every daily post has its own
+product, the page warns that daily posts never use them (only "Make a video now" does). A failed store
+read is shown in plain words (key refused, could not be reached, empty store, could not be read) with
+the scrubbed error under "Technical details". Pages with the sticky save bar set `scroll-padding-bottom`
+so keyboard focus is never scrolled under the bar.
+
+**Why.** The blocks hid fields behind metaphors ("Claim checker", "Inspection") and dialogs. The
+sticky bar took a fifth of a phone screen, the truck drag was not discoverable, and every save waited
+three seconds. Uppercase monospace at small sizes was the main readability loss. On Products, a
+"Make videos" tick and separate Post 1 and Post 2 ticks overlapped and confused the owner.
+
+**Alternatives.** Keep the blocks and restyle them: the hidden fields and the metaphors stay. Split
+Settings into several pages: each save would need partial-draft logic in draftFrom, against one review
+today. Keep only the shipping animation: a script for decoration.
+
+**What would change it.** The owner prefers the block editor after trying the plain form. Then restore
+`settings.client.js` against the new section ids, with the same no-fetch rules.
+
+**Cost.** No dependency. The owner loses the drag and the animation. A product that was both in the
+pool and on a post shows only its post choice; saving drops it from the pool.
 
 ## Open questions for the owner
 

@@ -153,7 +153,7 @@ DRY_RUN=1 node src/cli.ts run --once       # one tick, no publish call
 
 ## Known limitations
 
-- It handles one product. Ingest reads more, but the creative step is tuned for a single listing.
+- It handles several products (up to 20 from the store, plus ones added by hand), and each daily post can have its own products. The creative prompts were tuned on a single listing.
 - A fresh install has no stored clips for the first 14 days, so a slot that can't make a new clip fails or waits.
 - The frame check is reliable on Wan 3.0 clips and splits on one Seedance 2.0 sample.
 - `ad` mode (voice-over over animated product photos) works, but `ugc` mode is the default and gets more testing.
