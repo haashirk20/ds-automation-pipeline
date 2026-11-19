@@ -217,3 +217,10 @@ test('a look-alike letter from another script is rejected', async () => {
   assert.equal(languageProblems(brief, 'Our bеstseller shawl', 'x').length, 1); // Cyrillic е
   assert.deepEqual(languageProblems(brief, 'Café-ready, 150 × 80 cm', 'x'), []);
 });
+
+test('fallbackCopy ignores Shopify tags, so tags like sale or under-50 do not fail copyProblems', () => {
+  const b = Brief.parse({ ...samples.brief, angles: ['sale', 'under-50'], rules: { ...samples.brief.rules, discountClaims: false } });
+  const fb = fallbackCopy(b, { style: 'ugc', headline: 'Cozy nights in', summary: '' });
+  assert.deepEqual(copyProblems(b, fb, [2026, 2027]), []);
+  assert.ok(!fb.youtube.hashtags.some((h) => /sale|under/i.test(h)));
+});

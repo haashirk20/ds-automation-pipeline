@@ -51,6 +51,11 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
 
   if (words(c.line) > 9) p.push(`line is ${words(c.line)} words, at most 9`);
   p.push(...textProblems(brief, c.line, NO_NUMBERS, 'line'));
+  // A clip is posted again for weeks and a price in it goes stale (D-42): no currency sign or code next to a digit.
+  const spoken = norm(c.caption + ' ' + c.line);
+  const code = brief.shop.currency.replace(/[^A-Za-z]/g, '');
+  const codeNearDigit = !!code && new RegExp(`\\b${code}\\s?\\d|\\d\\s?${code}\\b`, 'i').test(spoken);
+  if (/\p{Sc}\s?\d|\d\s?\p{Sc}/u.test(spoken) || codeNearDigit) p.push('caption or line states a price');
 
   if (!brief.product.colors.some((x) => x.toLowerCase() === c.color.toLowerCase())) p.push(`color "${c.color}" is not one of ${brief.product.colors.join(', ')}`);
 

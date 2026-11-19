@@ -22,11 +22,10 @@ import { addDays, localDateOf } from '../scheduler/time.ts';
 import { ensureIngest, runIngest } from '../shopify/index.ts';
 import { NoBriefError, alertStaleSelection, pickBrief } from '../shopify/catalog.ts';
 
-export { alertStaleSelection, ensureIngest, NoBriefError, pickBrief };
 import { synthesize } from '../tts/index.ts';
 import { slotTierDef } from '../config/models.ts';
 import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
-import { ClipPendingError } from '../router/errors.ts';
+import { ClipPendingError, NotSentError } from '../router/errors.ts';
 import { ff } from './ffmpeg.ts';
 import { probeVideo } from './probe.ts';
 import { renderEdl, renderUgc } from './render.ts';
@@ -244,7 +243,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   }
   hold();
 
-  // Tier: some slots open with one AI clip made from the hook photo. Any failure leaves the slot at tier 0.
+  // Tier: some slots open with one AI clip made from the hook photo. A failure leaves the slot at tier 0, except a request not sent, which retries the slot.
   const tier = await chooseTier(db, config, d.providers, slot.id, now);
   let clip: AssembleInput['clip'] = null;
   if (tier !== 't0') {
@@ -260,7 +259,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
       if (ok && info && info.seconds >= 2 && Math.min(info.width, info.height) >= 480) clip = { src: out, width: info.width, height: info.height };
       else if (ok) rejectClip(db, slot.id, now, 'clip failed the size or length check');
     } catch (e) {
-      if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError) throw e;
+      if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError || e instanceof NotSentError) throw e;
       log.warn('clip step failed, using tier 0', { slot: slot.id, error: String(e) });
     }
   }
@@ -370,6 +369,8 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
     const attempt = tries;
     const paid = db.prepare("SELECT 1 FROM spend WHERE slot_id = ? AND state IN ('submitted','succeeded')").get(slotId);
     if (paid && attempt < config.render.maxAttempts && fenced('planned', text, 0, ended())) return log.warn('slot will be tried again, the paid clip is kept', { slot: slotId, error: text });
+    // The clip request failed before the paid call: nothing was spent, so the slot is tried again while attempts remain.
+    if (e instanceof NotSentError && attempt < config.render.maxAttempts && fenced('planned', text, 0, ended())) return log.warn('slot will be tried again, the clip was not sent', { slot: slotId, error: text });
     if (fenced('failed', text)) await alert(db, 'produce_failed', slotId, `produce failed for ${slotId}: ${text}`, now);
   }
 }

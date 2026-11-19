@@ -138,7 +138,7 @@ Every system text ends with the brief JSON (`systemPrompt`).
 5. **Concept.** The script model writes a concept as structured JSON: a setting, one woman, a
    product colour, one caption of at most 12 words, at most one spoken line of at most 9 words, and
    three to five shots whose seconds add up to the clip length. Code checks the caption and line
-   against the brief (numbers, prices, banned phrases, repeats of recent captions), then the claim
+   against the brief (numbers, any price: a currency sign or the shop's currency code next to a digit, banned phrases, repeats of recent captions), then the claim
    judge checks that no statement is unsupported. One retry lists the problems. The accepted concept
    is stored in `slots.master_json` before any paid job starts, so a crash leaves the concept the
    job was made from.
@@ -211,8 +211,13 @@ code and no secrets with `pipeline`; the only link is the `backup-status` volume
 
 The process runs a tick once a minute. Every job reads the database to decide whether it has work,
 so a crash, a restart or a missed minute changes nothing. A tick that runs longer than
-`watchdogMinutes` (45) makes the process exit so Docker restarts it. The watchdog is not armed for
-`run --once`, whose tick waits for every producer and each producer has its own timeout.
+`watchdogMinutes` (45) makes the process exit so Docker restarts it. The platforms post one after
+another, so the config check requires `watchdogMinutes` to be at least 4 × `publish.timeoutMinutes` + 5,
+and `publishDue` claims no further row once the tick has run `watchdogMinutes − timeoutMinutes − 2`
+minutes; those rows wait for the next tick.
+The watchdog is not armed for `run --once`, whose tick waits for every producer and each producer has
+its own timeout. A producer child gets `--now` only when the clock is overridden, read from the
+override clock when the child starts, so a later child of `run --once` never runs behind.
 
 | Step in the tick | Does |
 |---|---|
@@ -225,7 +230,7 @@ so a crash, a restart or a missed minute changes nothing. A tick that runs longe
 | Housekeeping | Once a day after `ops.snapshotAt`, then the disk check, which alerts `disk_full` above `ops.diskAlertPercent` |
 | Summary | After `ops.summaryAt`: the daily summary, then the second dead-man's ping |
 | Ingest | `ensureIngest`: reads the store when an hour has passed since the last attempt or `kv ingest_requested` is newer. Started without waiting, never two at once; aborted at five minutes. Writes `kv shop_sync_result` after every attempt. Alerts `ingest_failed`, `shop_empty` and `shop_truncated` (rate-limited) |
-| Heartbeat | Written at the start of the tick, so a long publish still shows the loop alive, and again at the end. The end also pings `HEALTHCHECK_URL` if set |
+| Heartbeat | Written at the start of the tick, so a long publish still shows the loop alive. The end of the tick pings `HEALTHCHECK_URL` if set |
 
 Rendering runs in a child process so that an out-of-memory kill takes the child and not the loop,
 and publishing continues while a render is in progress. The produce timeout is 90 minutes, enough
@@ -371,12 +376,15 @@ A slot ID is `<local date>#<index>`, for example `2026-11-12#1`. A publication i
 `UPDATE … SET state='uploading', claimed_at=… WHERE state='pending'`, and the post goes ahead only
 if that statement changed a row. The claim time is a fencing token: every later write to the row
 names it, and a write that no longer matches is dropped. The same holds for slots, with
-`claimed_at` on `slots`. A manual `publish` beside the loop cannot take the same row.
+`claimed_at` on `slots`. A manual `publish` beside the loop cannot take the same row. Posting is
+serial and one call can take minutes, so each claim, the published time and a retry's
+`next_attempt_at` are read from the clock when they happen, not from the tick start.
 
 **Recovery.** A crash can leave a row in `producing` or `uploading`. Rows older than their timeout
 (`render.produceTimeoutMinutes` for slots, `publish.uploadTimeoutMinutes` for publications, 90 and 30
 minutes) are taken over. A stale `uploading` publication with no stored handle goes back
-to `pending`, because nothing was posted. One with a handle is run again, which resumes from the
+to `pending` with its attempt count unchanged, because nothing was posted and the next claim counts
+the attempt. One with a handle is run again, which resumes from the
 handle. If it is also past `maxLatenessMinutes`, or has used more than `retryMinutes.length + 1`
 attempts, it becomes `needs_attention`. A stale row is left alone in a dry run.
 
@@ -417,13 +425,13 @@ handle is stored. Any other 4xx, a missing
 bridge account, a post the bridge reports as failed, and a refused `private` Instagram post are
 permanent: the publication is `skipped` and an alert goes out, or `needs_attention` if a handle is stored. A publication more than
 `maxLatenessMinutes` (360) past its time is skipped, so a long outage never produces a burst of
-posts. One publish call is cut off after `publish.timeoutMinutes` (20), which is less than the
-30-minute recovery timeout.
+posts. One publish call is cut off after `publish.timeoutMinutes` (10), which is less than the
+30-minute recovery timeout. The video upload inside it is cut off at 6 minutes.
 
 **Retry of a slot.** A passing outage (a model rate limit or 5xx, a paid clip that cannot be fetched
 yet) puts the slot back to `planned` and gives back the attempt, with one `degraded` alert. A clip job is waited for at most 2 hours after it was created; then it is marked `failed` and the slot uses a stored clip. A concept-writer outage with no stored clip gives the attempt back once per slot; a repeat uses it. The
 same holds for no stored brief, with an `ingest_failed` alert. Any other error after a clip was paid for does the same while `attempt < render.maxAttempts`,
-but uses the attempt. Any other error fails the slot. The tick waits 10 minutes before it tries a
+but uses the attempt. So does a clip request that failed before the paid call (`NotSentError`, below). Any other error fails the slot. The tick waits 10 minutes before it tries a
 planned slot that has an error, and the "too late" rule ends the wait (D-31).
 
 ## Creative pipeline
@@ -509,10 +517,10 @@ Weights would be computed in code. The model would not set them.
 | Tier | Meaning | Provider | Default share |
 |---|---|---|---|
 | 0 | No new clip. `ugc` mode reuses a stored clip. `ad` mode uses photos only | none | 0% |
-| 1 | An open-weight clip from a hosted API | none: `tiers.t1` is in the config but no provider exists | 0% |
 | 2 | A premium-model clip made on the owner's Higgsfield subscription credits | Higgsfield MCP server | 100% |
 
-A tier 1 draw behaves as tier 0. The tier is drawn from a hash of the slot id and the mix.
+Tier 1 (an open-weight clip) was removed, since no provider was ever written (D-42). The tier is drawn
+from a hash of the slot id and the mix.
 
 **Provider.** `src/router/mcp.ts` is a minimal MCP client over `fetch` (JSON-RPC, no model, no SDK).
 `higgsfield-auth.ts` signs the owner in once with `node src/cli.ts auth higgsfield` (authorization
@@ -530,7 +538,11 @@ refused when that quote is above `maxCredits` (30) or when the balance after it 
 `keepCredits` (350), which sits above Higgsfield's auto-refill threshold so the pipeline cannot
 trigger an automatic purchase. A quote answer that holds a started job, or no positive number,
 stops clips. A refusal alerts once a day and the
-slot reuses a stored clip. With no stored sign-in the tier falls back to 0 without an alert. If the
+slot reuses a stored clip. A failure before the paid call (the balance read, the image uploads, the
+confirm, a quote answer without a usable number) is a `NotSentError`: its ledger row becomes `failed`
+at $0 with an error starting `not sent:`, and does not count toward `maxJobsPerSlot`. A quote call
+with images that fails in transit may have started a job, so its row stays at the reserved price. A limit refusal at that point alerts like the first check; any other
+such failure sends the slot back to `planned` while attempts remain. With no stored sign-in the tier falls back to 0 without an alert. If the
 stored sign-in is refused and cannot be refreshed, a `clip_sign_in` alert goes out.
 
 **Monthly cap.** `tiers.capsUsd` limits each paid tier per UTC month. The month's total counts every
@@ -614,8 +626,10 @@ Every call is `callJson` in `src/llm/client.ts`. Models come from `llm.models` i
 | `hooks` | `creative/hooks.ts` | `claude-sonnet-5-5` (`script`) | Refills the hook library (`ad`) |
 | `script` | `creative/script.ts` | `claude-sonnet-5-5` (`script`) | Writes the four-beat script for a hook (`ad`) |
 
-`llm.models.escalation` (`claude-opus-5-5`) and `llm.escalationEnabled` exist in the config, and no
-code calls the model.
+A call is refused (`LlmCapError`) when the month's spend plus the most the call can cost (every
+output token and the prompt estimated at the cache-write price) would pass `llm.monthlyCapUsd`. A
+`ugc` slot starts no new paid clip with less than $0.05 of that budget left, since the frame check
+and the copy follow the clip; it reuses a stored clip instead.
 
 ## Operations
 
@@ -685,7 +699,7 @@ src/                 one TypeScript package; each folder is a module
   tts/  music/       wrappers around the Python tools (ad mode); music/tracks.ts picks and sweeps owner tracks
   render/  qa/       producers (produce.ts, produce-ugc.ts), Remotion render; file checks, frame check
   router/            tier choice, spend ledger, MCP client, Higgsfield sign-in and provider
-  publish/           the bridge publisher, the registry, the claim and retry logic
+  publish/           the bridge publishers, the claim and retry logic
   scheduler/  ops/   tick loop, planner, time, holds.ts (manual slots); alerts and logging
   config/models.ts   custom video model rules, shared by the admin and the loader
   admin/             the admin page: server, auth, pages, posts, music, models, media (Phases 6b, 6c)

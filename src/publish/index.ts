@@ -8,14 +8,15 @@ import { AmbiguousError, ClaimLostError, PermanentError, RetryableError, type Pu
 type Row = { slot_id: string; platform: string; scheduled_at: string; attempt: number; handle_json: string | null; claimed_at: string | null; file_path: string | null; tier: string | null; title: string | null; caption: string | null; ai_json: string | null };
 
 // The claim time is the fencing token: every write after a claim must carry it.
-const COLS = new Set(['error', 'post_id', 'post_url', 'published_at', 'next_attempt_at', 'handle_json', 'claimed_at']);
+const COLS = new Set(['error', 'post_id', 'post_url', 'published_at', 'next_attempt_at', 'handle_json', 'claimed_at', 'attempt']);
 
 const SELECT = `SELECT p.slot_id, p.platform, p.scheduled_at, p.attempt, p.handle_json, p.claimed_at, r.file_path, s.tier, r.title, r.caption, r.ai_json
   FROM publications p
   LEFT JOIN slots s ON s.id = p.slot_id
   LEFT JOIN renders r ON r.slot_id = p.slot_id AND r.platform = p.platform AND r.qa_pass = 1`;
 
-export async function publishDue(db: Db, config: Config, publishers: Record<string, Publisher>, now: Date): Promise<void> {
+// `now` is the tick start and picks the rows. `clock` stamps each claim, publish time and backoff, since posting is serial and slow.
+export async function publishDue(db: Db, config: Config, publishers: Record<string, Publisher>, now: Date, clock: () => Date = () => now): Promise<void> {
   const ts = now.toISOString();
   const platformCfg = (p: Row) => config.platforms[p.platform as keyof Config['platforms']];
   // Visuals or music made by AI always need the label; a synthetic voice only when tier0 disclosure is on.
@@ -75,7 +76,7 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
       if (e instanceof RetryableError) {
         const mins = config.publish.retryMinutes[p.attempt - 1];
         if (mins === undefined) return hasHandle ? fail(p, token, 'needs_attention', `retries exhausted, a post request may have been sent: ${msg}`) : fail(p, token, 'skipped', `retries exhausted: ${msg}`);
-        write(p, token, 'pending', { next_attempt_at: new Date(now.getTime() + mins * 60000).toISOString(), error: scrub(msg), claimed_at: null });
+        write(p, token, 'pending', { next_attempt_at: new Date(clock().getTime() + mins * 60000).toISOString(), error: scrub(msg), claimed_at: null });
       } else if (e instanceof PermanentError) {
         await fail(p, token, hasHandle ? 'needs_attention' : 'skipped', hasHandle ? `a post request may have been sent: ${msg}` : msg);
       } else {
@@ -88,13 +89,15 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     }
     // Outside the classifier: a DB error here leaves the row 'uploading' with its handle for recovery.
     try {
-      write(p, token, 'published', { post_id: result.postId, post_url: result.postUrl, published_at: ts, error: null });
+      write(p, token, 'published', { post_id: result.postId, post_url: result.postUrl, published_at: clock().toISOString(), error: null });
     } catch (e) {
       log.error('recording success failed', { slot: p.slot_id, platform: p.platform, error: e instanceof Error ? e.message : String(e) });
     }
   };
 
   const lateBefore = new Date(now.getTime() - config.publish.maxLatenessMinutes * 60000).toISOString();
+  // Posting is serial: stop claiming while one more publish call could still end before the watchdog; the rest wait for the next tick.
+  const outOfTime = () => clock().getTime() - now.getTime() > (config.watchdogMinutes - config.publish.timeoutMinutes - 2) * 60000;
 
   // Stale recovery only: a fresh 'uploading' row belongs to a live upload.
   const staleBefore = new Date(now.getTime() - config.publish.uploadTimeoutMinutes * 60000).toISOString();
@@ -102,16 +105,18 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
   if (stale.length && env.dryRun()) log.info('dry-run: stale uploading rows left untouched', { count: stale.length });
   else {
     for (const p of stale) {
+      if (outOfTime()) break;
+      const token = clock().toISOString();
       const claim = db.prepare("UPDATE publications SET claimed_at = ?, attempt = attempt + 1 WHERE slot_id = ? AND platform = ? AND state = 'uploading' AND claimed_at IS ?")
-        .run(ts, p.slot_id, p.platform, p.claimed_at);
+        .run(token, p.slot_id, p.platform, p.claimed_at);
       if (claim.changes !== 1) continue;
       p.attempt += 1;
-      if (p.attempt > config.publish.retryMinutes.length + 1) await fail(p, ts, 'needs_attention', 'too many attempts');
+      if (p.attempt > config.publish.retryMinutes.length + 1) await fail(p, token, 'needs_attention', 'too many attempts');
       else if (p.scheduled_at < lateBefore) {
-        if (p.handle_json) await fail(p, ts, 'needs_attention', 'too late, upload may have started');
-        else await fail(p, ts, 'skipped', 'too late');
-      } else if (p.handle_json) await run(p, ts);
-      else write(p, ts, 'pending', { claimed_at: null });
+        if (p.handle_json) await fail(p, token, 'needs_attention', 'too late, upload may have started');
+        else await fail(p, token, 'skipped', 'too late');
+      } else if (p.handle_json) await run(p, token);
+      else write(p, token, 'pending', { claimed_at: null, attempt: p.attempt - 1 }); // the due claim counts this attempt
     }
   }
 
@@ -138,14 +143,16 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
     }
     if (env.dryRun()) {
       log.info('dry-run publish', { slot: p.slot_id, platform: p.platform, title: p.title ?? p.slot_id, caption: p.caption ?? '', aiDisclosure: aiDisclosure(p), visibility: platformCfg(p).visibility, file: p.file_path });
-      db.prepare("UPDATE publications SET state = 'published', dry_run = 1, post_id = 'dry-run', published_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(ts, p.slot_id, p.platform);
+      db.prepare("UPDATE publications SET state = 'published', dry_run = 1, post_id = 'dry-run', published_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(clock().toISOString(), p.slot_id, p.platform);
       continue;
     }
+    if (outOfTime()) break;
     // Atomic claim: only one process can move the row out of 'pending'.
-    const claim = db.prepare("UPDATE publications SET state = 'uploading', attempt = attempt + 1, claimed_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(ts, p.slot_id, p.platform);
+    const token = clock().toISOString();
+    const claim = db.prepare("UPDATE publications SET state = 'uploading', attempt = attempt + 1, claimed_at = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(token, p.slot_id, p.platform);
     if (claim.changes !== 1) continue;
     p.attempt += 1;
-    await run(p, ts);
+    await run(p, token);
   }
 
   db.prepare(`UPDATE slots SET status = 'done', updated_at = ? WHERE status = 'ready' AND NOT EXISTS (

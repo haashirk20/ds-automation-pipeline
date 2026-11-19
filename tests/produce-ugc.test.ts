@@ -11,6 +11,7 @@ import { pickStoredClip } from '../src/render/produce-ugc.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { planManual } from '../src/scheduler/holds.ts';
 import type { ClipProvider } from '../src/router/index.ts';
+import { NotSentError } from '../src/router/errors.ts';
 import { config, fresh } from './helpers.ts';
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
@@ -153,6 +154,19 @@ test('the provider refuses to start: no ledger row, the stored clip is used', as
   await produceSlot(db, config, ID, T, rig({ providers: provider({ checkThrows: true }).providers }).deps);
   assert.equal(slot(db).status, 'ready', slot(db).error);
   assert.equal(JSON.parse(slot(db).master_json).reusedFrom, '2026-10-01#1');
+  assert.equal(spend(db).length, 0);
+});
+
+test('less than $0.05 of model budget left: no clip job is paid for, the stored clip is used', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  stored(db, '2026-10-01#1', '2026-10-01', concept('an old caption'), clipFile('old'));
+  db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd) VALUES (?,'x','m',0,0,0,0,?)").run(NOW.toISOString(), config.llm.monthlyCapUsd - 0.04);
+  const p = provider();
+  await produceSlot(db, config, ID, T, rig({ providers: p.providers }).deps);
+  assert.equal(slot(db).status, 'ready', slot(db).error);
+  assert.equal(JSON.parse(slot(db).master_json).reusedFrom, '2026-10-01#1');
+  assert.equal(p.calls.submit, 0);
   assert.equal(spend(db).length, 0);
 });
 
@@ -348,6 +362,21 @@ test('the caption render throws once after the clip was paid for: planned, then 
   await produceSlot(db, config, ID, LATER, deps);
   assert.equal(slot(db).status, 'ready', slot(db).error);
   assert.equal(p.calls.submit, 1);
+});
+
+test('the clip upload fails before the paid call: no cost, the slot is planned again with the attempt counted, then ready', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const p = provider();
+  const submit = p.providers.higgsfield.submit;
+  p.providers.higgsfield.submit = async () => { throw new NotSentError('image upload answered 503'); };
+  const { deps } = rig({ providers: p.providers });
+  await produceSlot(db, config, ID, T, deps);
+  assert.deepEqual([slot(db).status, slot(db).attempt], ['planned', 1]);
+  assert.deepEqual(spend(db).map((r) => [r.state, r.quoted_usd]), [['failed', 0]]);
+  p.providers.higgsfield.submit = submit;
+  await produceSlot(db, config, ID, LATER, deps);
+  assert.equal(slot(db).status, 'ready', slot(db).error);
 });
 
 test('the paid job cannot be fetched now: the slot waits, the attempt is given back and no stored clip is rendered', async () => {

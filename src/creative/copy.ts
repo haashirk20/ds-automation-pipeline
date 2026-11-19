@@ -77,7 +77,7 @@ const Verdicts = z.object({ verdicts: z.array(z.object({ platform: z.string(), s
 // Deterministic copy from the brief and the script alone, for when the copy model cannot be used.
 export function fallbackCopy(brief: Brief, about: CopyAbout): Record<Platform, PlatformCopy> {
   const alnum = (s: string) => s.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join('');
-  const tags = [...new Set([...brief.angles, brief.product.type, brief.shop.name, ...brief.product.title.split(/\s+/)].map(alnum).filter((t) => t.length > 2))].slice(0, 5).map((t) => `#${t}`);
+  const tags = [...new Set([brief.product.type, brief.shop.name, ...brief.product.title.split(/\s+/)].map(alnum).filter((t) => t.length > 2))].slice(0, 5).map((t) => `#${t}`);
   const caption = about.style === 'ugc' ? `${about.headline}\n${brief.product.title} from ${brief.shop.name}.` : `${about.headline} ${brief.product.title}, ${brief.product.priceText}, at ${brief.shop.name}.`;
   const out = {} as Record<Platform, PlatformCopy>;
   for (const p of PLATFORMS) out[p] = { title: about.headline.slice(0, TITLE_MAX), text: assemble(brief, p, caption, tags), hashtags: tags, caption };

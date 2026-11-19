@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { produceSlot } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { tick } from '../src/scheduler/loop.ts';
-import { makePublishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/bridge.ts';
 import { kvGet } from '../src/db/index.ts';
 import { makeProducer } from '../src/scheduler/loop.ts';
 import { AT_SLOT1, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';

@@ -47,6 +47,16 @@ export function costUsd(model: string, u: Usage): number {
   );
 }
 
+// The most one call can cost: every output token, and the prompt at about 4 characters a token (an image about
+// 1,600 tokens), all at the cache-write price.
+// shortcut: rough upper bound (4 chars/token, 1,600 tokens/image), not a token count; the monthly cap is the hard stop. Count tokens if the cap is ever hit early.
+export function maxCostUsd(req: Pick<LlmRequest<unknown>, 'model' | 'system' | 'user' | 'maxTokens' | 'images'>): number {
+  const p = PRICES[req.model];
+  if (!p) throw new Error(`no price for model ${req.model}`);
+  const input = (req.system.length + req.user.length) / 4 + (req.images?.length ?? 0) * 1600;
+  return (req.maxTokens * p.output + input * Math.max(p.input, p.cacheWrite)) / 1e6;
+}
+
 export function monthSpend(db: Db, now: Date): number {
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
@@ -136,7 +146,8 @@ export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, no
   }
   if (!PRICES[req.model]) throw new Error(`unknown model ${req.model}`);
   const spent = monthSpend(db, now);
-  if (spent >= config.llm.monthlyCapUsd) throw new LlmCapError(`monthly model spend $${spent.toFixed(2)} reached the cap of $${config.llm.monthlyCapUsd}`);
+  const most = maxCostUsd(req);
+  if (spent + most > config.llm.monthlyCapUsd) throw new LlmCapError(`monthly model spend $${spent.toFixed(2)} plus this call's most of $${most.toFixed(3)} would pass the cap of $${config.llm.monthlyCapUsd}`);
 
   client ??= realClient();
   let res: LlmResponse;

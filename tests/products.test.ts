@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { kvGet, kvSet, type Db } from '../src/db/index.ts';
 import { startAdmin, setPassword } from '../src/admin/index.ts';
-import { activeHandles, brandLogoFile, chooseBrief, listBriefs, ownerBrief, pickBrief, selectBriefs, slugHandle, type OwnerProduct } from '../src/shopify/catalog.ts';
+import { activeHandles, brandLogoFile, chooseBrief, listBriefs, ownerBrief, pickBrief, slugHandle, type OwnerProduct } from '../src/shopify/catalog.ts';
 import { config, fresh, seedBrief } from './helpers.ts';
 
 const PW = 'correct horse battery';
@@ -72,11 +72,6 @@ test('an owner product becomes a brief whose facts are exactly the lines typed',
 });
 
 test('only ticked products take turns; a stale selection falls back to all', () => {
-  const a = { product: { handle: 'a' } };
-  const b = { product: { handle: 'b' } };
-  assert.deepEqual(selectBriefs([a, b], null), [a, b]);
-  assert.deepEqual(selectBriefs([a, b], ['b']), [b]);
-  assert.deepEqual(selectBriefs([a, b], ['gone']), [a, b]);
   const s = seedBrief(db);
   const o = ownerBrief('own-x', { ...owner, title: 'X' }, s.shop);
   db.prepare("INSERT INTO products (handle, title, raw_json, fetched_at) VALUES ('own-x','X','{}','t')").run();
@@ -286,4 +281,45 @@ test('a Shopify product whose photos failed to download says why it has none', a
   assert.equal((await send('GET', '/products', { cookie })).status, 200);
   db.prepare("DELETE FROM briefs WHERE handle = 'pc'").run();
   db.prepare("DELETE FROM products WHERE handle = 'pc'").run();
+});
+
+test('saving an owner product never deletes a photo it still uses', async () => {
+  const { cookie, csrf } = await login();
+  const form = (handle: string, photos: Buffer[], keep: string[] = []) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ csrf, handle, title: 'Photo Keeper', type: '', price: '10', currency: 'CAD', url: '', colors: '', facts: 'A plain test product', disclosures: '', ack: '1' })) f.set(k, v);
+    for (const k of keep) f.append('keep', k);
+    for (const p of photos) f.append('photos', new File([new Uint8Array(p)], 'p.png', { type: 'image/png' }));
+    return f;
+  };
+  const h = 'own-photo-keeper';
+  const photosOf = () => (JSON.parse((db.prepare('SELECT json FROM owner_products WHERE handle = ?').get(h) as { json: string }).json) as OwnerProduct).photos.map((p) => p.file);
+  assert.equal((await multipart('/products/save', cookie, form('', [LOGO, LOGO]))).status, 303);
+  const [a] = photosOf();
+  assert.deepEqual(photosOf(), [a]); // the same picture twice is one photo
+  const file = path.join(process.env.DATA_DIR!, a);
+  // Case 1: Keep unticked, the same picture uploaded again.
+  assert.equal((await multipart('/products/save', cookie, form(h, [LOGO]))).status, 303);
+  assert.deepEqual(photosOf(), [a]);
+  assert.ok(existsSync(file));
+  // Case 2: kept, uploaded again, and a broken second file fails the save.
+  const broken = Buffer.from('#!/bin/sh\n' + 'echo this is not an image\n'.repeat(10));
+  assert.equal((await multipart('/products/save', cookie, form(h, [LOGO, broken], [a]))).status, 422);
+  assert.ok(existsSync(file));
+  assert.equal((await send('POST', '/products/delete', { cookie, body: new URLSearchParams({ csrf, handle: h }).toString() })).status, 303);
+});
+
+test('"Next posts" names the product already made for a slot', async () => {
+  const { cookie } = await login();
+  const page = await send('GET', '/products', { cookie });
+  const date = /data-post="1" data-date="(\d{4}-\d{2}-\d{2})"/.exec(page.text)![1];
+  const h = (db.prepare("SELECT handle FROM briefs WHERE handle NOT LIKE 'own-%' ORDER BY handle LIMIT 1").get() as { handle: string }).handle;
+  const title = (db.prepare('SELECT title FROM products WHERE handle = ?').get(h) as { title: string }).title;
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, created_at, updated_at, kind, product_handle) VALUES (?, ?, 1, 'ready', 't', 't', 'planned', ?)").run(`${date}#1`, date, h);
+  try {
+    const after = await send('GET', '/products', { cookie });
+    assert.match(after.text, new RegExp(`data-post="1" data-date="${date}"><strong>Post 1 · \\d\\d:\\d\\d</strong> next on [^,]+, uses: <strong>${title} \\(already made\\)</strong>`));
+  } finally {
+    db.prepare('DELETE FROM slots WHERE id = ?').run(`${date}#1`);
+  }
 });

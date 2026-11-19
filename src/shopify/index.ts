@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { Transform } from 'node:stream';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -10,12 +10,11 @@ import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
 import { buildBrief, normalize, type Product } from './brief.ts';
 import { fetchShopAdmin } from './admin.ts';
-import { OWN_PREFIX } from './catalog.ts';
+import { LOGO_DIR, OWN_PREFIX, SAFE_HANDLE } from './catalog.ts';
 import { MAX_PHOTOS, MAX_PRODUCTS, defaultSleep, fetchShop, getWithRetry, type Fetch, type ShopRead, type Sleep } from './fetch.ts';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
-const SAFE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const DEFAULT_TAGS = join(import.meta.dirname, '../../config/photo-tags.json');
 
 // `signal` stops the read: checked between products and before each photo, and passed to every request.
@@ -173,10 +172,28 @@ async function readShop(db: Db, config: Config, now: Date, deps: IngestDeps): Pr
         throw e;
       }
       log.info('ingest: products no longer in the store removed', { handles: out.removed });
+      const assets = resolve(env.dataDir(), 'assets');
+      for (const h of out.removed) {
+        const dir = join(assets, h);
+        if (SAFE_HANDLE.test(h) && !h.startsWith(OWN_PREFIX) && dir.startsWith(assets + sep)) try { rmSync(dir, { recursive: true, force: true }); } catch { /* left on disk */ }
+      }
     }
   }
+  sweepIncoming(env.dataDir());
   kvSet(db, 'shop_synced_at', now.toISOString());
   return out;
+}
+
+// Upload leftovers (admin photo and logo staging) older than a day; an upload in progress is minutes old.
+// File ages are wall-clock mtimes, so they are compared with the system clock: a --now override cannot remove an upload in progress.
+export function sweepIncoming(dataDir: string): void {
+  const root = resolve(dataDir);
+  const ls = (d: string) => { try { return readdirSync(d); } catch { return []; } };
+  const dirs = [...ls(join(root, 'assets')).map((h) => join(root, 'assets', h, '.incoming')), join(root, LOGO_DIR, '.incoming')];
+  for (const d of dirs) for (const n of ls(d)) {
+    const f = join(d, n);
+    try { if (Date.now() - statSync(f).mtimeMs > 86_400_000) rmSync(f, { force: true }); } catch { /* gone or unreadable: next hour */ }
+  }
 }
 
 // Fetch, download, build and store. Throws if the fetch fails; the caller keeps the last stored brief.

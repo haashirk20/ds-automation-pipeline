@@ -9,12 +9,12 @@ import { Brief, Script, TEMPLATES } from '../src/contracts.ts';
 import { ttsLines } from '../src/creative/assemble.ts';
 import { PALETTES, chooseVariant, factTextsOf, produceSlot, type ProduceDeps } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
-import { childSpawn, makeProducer, tick } from '../src/scheduler/loop.ts';
+import { childSpawn, makeProducer, produceArgv, tick } from '../src/scheduler/loop.ts';
 import { checkScript, judgeClaims } from '../src/creative/claims.ts';
 import { aboutScript, copyProblems, fallbackCopy } from '../src/creative/copy.ts';
 import { publishDue } from '../src/publish/index.ts';
 import { AT_SLOT1, adConfig, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';
-import { makePublishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/bridge.ts';
 const publishers = makePublishers(config, { now: () => new Date() });
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
@@ -74,7 +74,7 @@ test("'ad' mode: a pending clip waits the slot instead of posting without it", a
   stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
-  const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t1: 0, t2: 1 } } });
+  const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t2: 1 } } });
   const higgsfield = { name: 'higgsfield', configured: () => true, submit: async () => ({ jobId: 'j1' }), fetch: async () => { throw new Error('HTTP 503'); } };
   await produceSlot(db, cfg, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps({ providers: { higgsfield }, prepareImage: async (_s, _c, out) => writeFileSync(out, 'jpg') }));
   const s = slot(db);
@@ -324,6 +324,16 @@ test('a producer child that ignores SIGTERM is killed after the grace period', a
   assert.ok(took >= 650 && took < 5000, `took ${took} ms`); // SIGTERM ignored for the whole grace period, then SIGKILL
   const pid = Number(readFileSync(pidFile, 'utf8'));
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+});
+
+test('a producer child reads --now from the override clock when it starts, and gets none without an override', () => {
+  let t = Date.parse('2026-11-12T17:20:00Z');
+  const clock = () => new Date((t += 60_000));
+  const now = (a: string[]) => a[a.indexOf('--now') + 1];
+  const first = produceArgv('a', clock);
+  const second = produceArgv('b', clock);
+  assert.ok(now(second) > now(first));
+  assert.ok(!produceArgv('a').includes('--now'));
 });
 
 // Claim checks that must not be bypassed.

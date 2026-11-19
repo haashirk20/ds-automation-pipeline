@@ -955,6 +955,48 @@ today. Keep only the shipping animation: a script for decoration.
 **Cost.** No dependency. The owner loses the drag and the animation. A product that was both in the
 pool and on a post shows only its post choice; saving drops it from the pool.
 
+## D-42 Audit fixes: unsent clip jobs, publish timing, dead tier 1, model budget, prices in clips (2026-11-19, branch `dev`)
+
+**Chosen.**
+- A clip request that fails before the paid `generate_video` call (balance read, `media_upload`, the
+  image PUTs, `media_confirm`, a quote that answered without a usable number, a limit refusal) throws
+  `NotSentError`. Its ledger row is kept as `failed` with `quoted_usd = 0` and an error starting
+  `not sent:`; that prefix, not the price, keeps it out of `maxJobsPerSlot`, so a real job quoted at 0
+  credits still counts. A limit refusal sends the same daily `clip_refused` alert as the first check;
+  any other unsent failure sends the slot back to `planned` while `attempt < render.maxAttempts`, in
+  `ugc` and `ad` mode alike. The quote call with images is not "not sent" when it fails in transit or
+  answers with a job: it may have started one, so the row stays `failed` at its reserved price.
+- `publish.timeoutMinutes` is 10 (was 20) and the bridge upload is cut off at 6 minutes. The config
+  check requires `watchdogMinutes >= 4 x publish.timeoutMinutes + 5` (45 >= 45 with the defaults). A
+  tick may hold more than four due rows (several slots, stale rows), so `publishDue` also stops
+  claiming once the tick has run `watchdogMinutes - timeoutMinutes - 2` minutes; the rest wait for the
+  next tick.
+- Tier 1 (`tiers.t1`, `mix.t1`, `capsUsd.t1`) and `llm.models.escalation` / `llm.escalationEnabled`
+  are removed: nothing used them. A stored settings version that still names them loads with those
+  keys dropped.
+- A model call is refused when the month's spend plus the call's most possible cost would pass
+  `llm.monthlyCapUsd`, not only once the cap is reached. A `ugc` slot needs $0.05 of model budget left
+  before it pays for a clip.
+- A `ugc` caption or spoken line with a currency sign, or the shop's currency code, next to a digit is
+  refused: a clip is posted again for weeks, and a price in it would go stale.
+
+Smaller fixes in the same pass: fallback copy takes no hashtags from Shopify tags (a tag like `sale`
+failed every platform after the clip was paid for); producer children read `--now` from the override
+clock when they start; claims, published times and retry times come from the clock, not the tick
+start; stale recovery no longer counts an attempt for a row it returns to `pending`; stale render
+staging folders are swept; upload leftovers are swept by wall-clock file age, so a `--now` override
+cannot remove an upload in progress; `src/publish/registry.ts` is folded into `bridge.ts`.
+
+**Why.** An audit found each of these could double-spend, waste a paid clip, trip the watchdog
+mid-post, or carry a claim the brief does not hold.
+
+**Alternatives.** Delete the unsent ledger row instead of zeroing it: the row is the only record that
+the provider was contacted. Keep `publish.timeoutMinutes` at 20 and raise the watchdog to 85: a hung
+tick would then hold every other job for over an hour.
+
+**Cost.** No dependency. Old `config_versions` rows keep the removed keys in their JSON; they are
+ignored.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

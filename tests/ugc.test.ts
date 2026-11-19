@@ -28,6 +28,11 @@ test('each caption rule fails', () => {
   has(with_({ caption: 'so cosy 😭🥶🎄🎁' }), /emoji/);
   has(with_({ caption: 'so cosy #gift' }), /hashtag/);
   has(with_({ caption: 'so cosy @giftwell' }), /@name/);
+  has(with_({ caption: 'so cosy for $ 25' }), /states a price/);
+  has(with_({ line: 'only $25 today' }), /states a price/);
+  has(with_({ caption: 'so cosy for £25' }), /states a price/);
+  has(with_({ caption: 'so cosy for CAD 34.50' }), /states a price/);
+  has(with_({ line: 'only 34.50 cad today' }), /states a price/);
   has(with_({ caption: 'so cosy see shopgiftwell.com' }), /link/);
   has(with_({ caption: '50% off today' }), /caption.*discount/);
   has(with_({ caption: 'warms to 60 degrees' }), /number/);

@@ -25,7 +25,7 @@ const good = (o: Record<string, unknown>) => {
 test('a path outside the editable list is refused', () => {
   bad({ 'publish.timeoutMinutes': 5 }, /publish.timeoutMinutes cannot be changed/);
   bad({ 'platforms.youtube.handle': 'x' }, /handle cannot be changed/);
-  bad({ 'tiers.mix.t1': 0.5 }, /tiers.mix.t1 cannot be changed/);
+  bad({ 'tiers.mix.t1': 0.5 }, /tiers.mix.t1 cannot be changed/); // a removed key is refused on save
   bad({ 'tiers.t2.params': {} }, /cannot be changed/);
 });
 
@@ -63,9 +63,9 @@ test('a preset may not set the keys the request sets itself', () => {
   assert.throws(() => parseConfig(file), /must not set/);
 });
 
-test('mix is a share of reused clips; tier 1 stays 0', () => {
+test('mix is a share of reused clips; the rest is tier 2', () => {
   const c = good({ 'tiers.mix.t0': 0.25 });
-  assert.deepEqual(c.tiers.mix, { t0: 0.25, t1: 0, t2: 0.75 });
+  assert.deepEqual(c.tiers.mix, { t0: 0.25, t2: 0.75 });
   bad({ 'tiers.mix.t0': 1.1 }, /tiers\.mix/);
 });
 
@@ -121,6 +121,17 @@ test('a stored version that fails today\'s rules falls back to the file with one
   assert.match(String(r.version), /^refused: .*capsUsd/);
   await resolveConfig(db, NOW);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'config_invalid'").get() as any).n, 1);
+});
+
+test('a stored version that names removed keys (tier 1, escalation) still loads, without them', async () => {
+  const db = fresh();
+  const old = { 'tiers.mix.t0': 0.25, 'tiers.mix.t1': 0, 'tiers.t1.usdPerClip': 0.2, 'tiers.capsUsd.t1': 15, 'llm.models.escalation': 'claude-opus-5-5', 'llm.escalationEnabled': true };
+  db.prepare("INSERT INTO config_versions (id, created_at, overrides_json) VALUES (1, 't', ?)").run(JSON.stringify(old));
+  db.prepare("INSERT INTO kv (key, value) VALUES ('config_active', '1')").run();
+  const r = await resolveConfig(db, NOW);
+  assert.equal(r.version, 1);
+  assert.deepEqual(r.config.tiers.mix, { t0: 0.25, t2: 0.75 });
+  assert.equal(activateConfig(db, 1, NOW), null);
 });
 
 test('the next tick picks up a new version; a snapshot taken earlier keeps the old one', async () => {

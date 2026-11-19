@@ -102,7 +102,7 @@ function activeOverrides(db: Db): { id: number | null; o: Record<string, unknown
 
 const getPath = (o: any, p: string): unknown => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const dryRunOn = (db: Db): boolean => { try { return !!JSON.parse(kvGet(db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } };
+export const dryRunOn = (db: Db): boolean => { try { return !!JSON.parse(kvGet(db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } };
 
 // The prompt file for a key; product notes come from the notes file.
 function fileText(key: string): string {
@@ -132,7 +132,7 @@ type Kind = 'time' | 'int' | 'num' | 'bool' | 'select' | 'times';
 type Sec = 'when' | 'where' | 'money' | 'look' | 'models' | 'safe' | 'house';
 type Field = { path: string; label: string; sec: Sec; kind: Kind; unit?: string; hint?: string };
 const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
-const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
+export const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
 const EDGES = ['top', 'bottom', 'left', 'right'] as const;
 const VIS: Record<string, string> = { public: 'Everyone', private: 'Only me' };
 
@@ -179,7 +179,6 @@ const LOCKED: { label: string; value: (c: Config, dry: boolean) => unknown; reas
   { label: 'Rule checks', value: () => 'claims, caption check, frame check', reason: 'They enforce the advertising rules; see Writing instructions (read only).' },
   { label: 'Clip length (seconds)', value: (c) => c.tiers.clipSeconds, reason: 'Tied to the 14 to 16 second rule.' },
   { label: 'Clip model parameters', value: (c) => c.tiers.t2.params, reason: 'Free-form values; pick a video model instead.' },
-  { label: 'Open-weight clips', value: (c) => `share ${c.tiers.mix.t1}, cap $${c.tiers.capsUsd.t1}`, reason: 'No provider exists for it yet.' },
   { label: 'Frame check effort and photo tags', value: () => 'low; config/photo-tags.json', reason: 'Calibrated together with the model.' },
   { label: 'Waiting-video expiry, credit price, added-model ceiling', value: (c) => `${c.approval.expireHours} h, ${c.tiers.usdPerCredit.toFixed(4)} USD per credit, ${c.tiers.customMaxCredits} credits`, reason: 'They guard spend and stale posts.' },
   { label: 'Render timeouts and attempts', value: (c) => c.render, reason: 'Tied to the tries per video and the clip timeout.' },

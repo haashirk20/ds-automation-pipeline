@@ -15,7 +15,7 @@ const mod = (f: (c: any) => void) => {
 test('ugc mode needs a produce timeout that outlasts every video job', () => {
   assert.ok(parseConfig(mod((c) => (c.render.produceTimeoutMinutes = 90))));
   assert.throws(() => parseConfig(mod((c) => (c.render.produceTimeoutMinutes = 89))), /produceTimeoutMinutes/);
-  assert.ok(parseConfig(mod((c) => { c.creative.mode = 'ad'; c.tiers.mix = { t0: 1, t1: 0, t2: 0 }; c.tiers.clipSeconds = 4; c.render.produceTimeoutMinutes = 30; })));
+  assert.ok(parseConfig(mod((c) => { c.creative.mode = 'ad'; c.tiers.mix = { t0: 1, t2: 0 }; c.tiers.clipSeconds = 4; c.render.produceTimeoutMinutes = 30; })));
 });
 
 test('an enabled instagram cannot be private', () => {

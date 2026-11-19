@@ -6,20 +6,22 @@ import { UgcConcept, type Brief } from '../contracts.ts';
 import { aboutConcept } from '../creative/copy.ts';
 import { buildClipPrompt, conceptProblems, productLook } from '../creative/ugc.ts';
 import type { Db } from '../db/index.ts';
-import { RetryableLlmError } from '../llm/client.ts';
+import { RetryableLlmError, monthSpend } from '../llm/client.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { pickTrack, musicGainDb } from '../music/tracks.ts';
 import { chooseTier, generateClip, rejectClip } from '../router/index.ts';
-import { ClipPendingError } from '../router/errors.ts';
-import { ClaimLostError, DeferSlotError, alertStaleSelection, commitSlot, ensureIngest, factTextsOf, factsUnchanged, getCopy, holdOf, pickBrief, yearsOf, type FactTexts, type ProduceDeps, type Slot } from './produce.ts';
-import { assertInside } from './render.ts';
-import { brandLogoFile } from '../shopify/catalog.ts';
+import { ClipPendingError, NotSentError } from '../router/errors.ts';
+import { ClaimLostError, DeferSlotError, commitSlot, factTextsOf, factsUnchanged, getCopy, holdOf, yearsOf, type FactTexts, type ProduceDeps, type Slot } from './produce.ts';
+import { UGC_MIN_SECONDS, UGC_MIN_SHORT_SIDE, assertInside } from './render.ts';
+import { alertStaleSelection, brandLogoFile, pickBrief } from '../shopify/catalog.ts';
+import { ensureIngest } from '../shopify/index.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const RECENT = 20;
+const MIN_LLM_USD = 0.05; // the model budget a new clip needs left for its frame check and copy
 
 type Rendered = { concept: UgcConcept; clipFile: string; file: string; qa: unknown; factTexts?: FactTexts };
 
@@ -117,6 +119,12 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         rejectClip(db, slot.id, now, why);
         recent.unshift({ caption: concept.caption, setting: concept.setting });
       };
+      // The frame check and the copy run after the paid clip: without model budget left for them, no new job is paid for.
+      if (!jobMade && config.llm.monthlyCapUsd - monthSpend(db, now) < MIN_LLM_USD) {
+        log.warn('model budget too low for the frame check and the copy, no new clip', { slot: slot.id });
+        why = 'the model budget is too low for the frame check and the copy';
+        break;
+      }
 
       // Reference images: the product in the concept's colour, then the logo.
       const colour = brief.shots.filter((s) => s.variant?.toLowerCase() === concept.color.toLowerCase());
@@ -136,7 +144,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         hold();
         ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, images, prompt, shots, outFile: clipFile, signal }, now);
       } catch (e) {
-        if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError) throw e;
+        if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError || e instanceof NotSentError) throw e;
         log.warn('clip step failed, no new clip', { slot: slot.id, error: String(e) });
       }
       if (!ok) { why = 'the clip step gave no clip'; break; }
@@ -144,7 +152,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
 
       const info = await d.probeClip(clipFile).catch(() => null); // a corrupt download counts as a rejected clip
       why = 'every clip was rejected';
-      if (!info || info.seconds < 14 || Math.min(info.width, info.height) < 480) {
+      if (!info || info.seconds < UGC_MIN_SECONDS || Math.min(info.width, info.height) < UGC_MIN_SHORT_SIDE) {
         reject('clip failed the size or length check');
         continue;
       }

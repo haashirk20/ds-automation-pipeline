@@ -83,14 +83,6 @@ export function activeHandles(db: Db): string[] | null {
   }
 }
 
-// The ticked products, in handle order. A selection that matches nothing stored (a product left the store)
-// falls back to every product, so the line never stops because of a stale tick.
-export function selectBriefs<T extends { product: { handle: string } }>(briefs: T[], active: string[] | null): T[] {
-  if (!active) return briefs;
-  const picked = briefs.filter((b) => active.includes(b.product.handle));
-  return picked.length ? picked : briefs;
-}
-
 export function listBriefs(db: Db): Brief[] {
   return (db.prepare('SELECT json FROM briefs ORDER BY handle').all() as { json: string }[]).map((r) => Brief.parse(JSON.parse(r.json)));
 }

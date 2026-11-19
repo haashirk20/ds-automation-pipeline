@@ -101,7 +101,8 @@ Set `visibility: 'public'` per platform when you are happy with what you see.
 
 ## 5. Backups (Cloudflare R2)
 
-The `backup` service copies the nightly database snapshot and `data/clips` to R2, encrypted with
+The `backup` service copies the nightly database snapshot, `data/clips`, `data/assets` (product photos)
+and `data/brand` (the uploaded logo) to R2, encrypted with
 restic. It does not copy `data/music`: keep the original music files yourself. It idles until `.env.backup` names a repository. Its secrets stay out of `.env`.
 
 1. In Cloudflare, create an R2 bucket (for example `giftwell-backup`). R2 gives 10 GB free.

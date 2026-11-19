@@ -47,11 +47,11 @@ test('backup.sh leaves data/clips out of the restic call while the folder does n
   const lastOk = () => (t.has('last-ok') ? readFileSync(path.join(t.status, 'last-ok'), 'utf8').trim() : '');
   await t.run(() => lastOk() === READY);
   assert.equal(lastOk(), READY);
-  assert.doesNotMatch(t.calls(), /clips/);
-  mkdirSync(path.join(t.data, 'clips'));
+  assert.doesNotMatch(t.calls(), /clips|assets|brand/);
+  for (const d of ['clips', 'assets', 'brand']) mkdirSync(path.join(t.data, d));
   t.ready('2026-11-14T08:30:00Z');
   await t.run(() => lastOk() === '2026-11-14T08:30:00Z');
-  assert.match(t.calls(), /backup.*pipeline\.db .*clips/);
+  assert.match(t.calls(), /backup.*pipeline\.db .*clips .*assets .*brand/);
   assert.match(t.calls(), /-o s3\.connections=2/);
   assert.match(t.calls(), /forget .*--retry-lock 1h/);
 });

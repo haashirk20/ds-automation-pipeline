@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { kvGet, kvSet, type Db } from '../src/db/index.ts';
@@ -240,6 +240,28 @@ test('shop_sync_result records every read; an empty read alerts and keeps the pr
   assert.equal(syncResult(db).ok, false);
   assert.deepEqual(stored(db), ['p-a']);
   assert.equal(events(db, 'shop_empty').length, 1); // rate-limited
+});
+
+test('a product gone from the store loses its photo folder; owner folders stay; day-old upload leftovers are swept', async () => {
+  const db = fresh();
+  let list = ['p-a', 'p-b'];
+  const sync = shop(db, () => list);
+  await sync();
+  const assets = join(process.env.DATA_DIR!, 'assets');
+  assert.ok(existsSync(join(assets, 'p-b')));
+  mkdirSync(join(assets, 'own-x', '.incoming'), { recursive: true });
+  writeFileSync(join(assets, 'own-x', 'a.png'), 'x');
+  for (const n of ['old.png', 'new.png']) writeFileSync(join(assets, 'own-x', '.incoming', n), 'x');
+  const day = new Date(NOW.getTime() - 86_400_000 - 1000);
+  utimesSync(join(assets, 'own-x', '.incoming', 'old.png'), day, day);
+  utimesSync(join(assets, 'own-x', '.incoming', 'new.png'), NOW, NOW);
+  list = ['p-a'];
+  assert.deepEqual((await sync()).removed, ['p-b']);
+  assert.equal(existsSync(join(assets, 'p-b')), false);
+  assert.ok(existsSync(join(assets, 'p-a')));
+  assert.ok(existsSync(join(assets, 'own-x', 'a.png')));
+  assert.equal(existsSync(join(assets, 'own-x', '.incoming', 'old.png')), false);
+  assert.ok(existsSync(join(assets, 'own-x', '.incoming', 'new.png')));
 });
 
 test('more than MAX_PRODUCTS: removal uses the full handle list; shop_truncated is set, alerted and cleared', async () => {

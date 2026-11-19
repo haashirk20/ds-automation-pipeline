@@ -12,6 +12,7 @@ import { ff } from '../render/ffmpeg.ts';
 import { safeEqual } from './auth.ts';
 import { html } from './html.ts';
 import { musicRoot } from './media.ts';
+import { readMultipart } from './upload.ts';
 import fileConfig from '../../config/pipeline.config.ts';
 import { parseConfig } from '../config/index.ts';
 import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
@@ -90,25 +91,11 @@ let busy = false;
 
 // Reads the form, streams the file to `incoming` while hashing, and lets go of the form, so the 40 MB it holds can be freed
 // before ffmpeg starts. Returns the fields the rest needs, or the response to send.
-async function stage(ctx: Ctx, req: IncomingMessage, ct: string, incoming: string): Promise<{ sha: string; name: string; d: 'mov' | 'wav' | 'mp3' } | Res> {
+async function stage(ctx: Ctx, req: IncomingMessage, incoming: string): Promise<{ sha: string; name: string; d: 'mov' | 'wav' | 'mp3' } | Res> {
   const fail = (status: number, msg: string): Res => ({ ...musicPage(ctx, msg, status), headers: status === 413 ? { connection: 'close' } : undefined });
-  let n = 0;
-  let capped = false;
-  const counter = new Transform({
-    transform(chunk: Buffer, _e, cb) {
-      n += chunk.length;
-      if (n > MAX_BODY) { capped = true; cb(new Error('too large')); } else cb(null, chunk);
-    },
-  });
-  req.pipe(counter);
-  req.on('error', (e) => counter.destroy(e));
-  let fd: FormData;
-  try {
-    fd = await new Request('http://x/', { method: 'POST', headers: { 'content-type': ct }, body: Readable.toWeb(counter) as ReadableStream, duplex: 'half' } as RequestInit).formData();
-  } catch {
-    req.unpipe(counter);
-    return capped ? fail(413, 'The upload is too large.') : fail(400, 'The upload could not be read.');
-  }
+  const r = await readMultipart(req, MAX_BODY);
+  if ('why' in r) return r.why === 'large' ? fail(413, 'The upload is too large.') : fail(400, 'The upload could not be read.');
+  const fd = r.fd;
   if (!safeEqual(String(fd.get('csrf') ?? ''), ctx.csrf ?? '')) return { status: 403, body: 'Forbidden', type: 'text/plain; charset=utf-8', headers: { connection: 'close' } };
   if (fd.get('ack') !== '1') return fail(422, 'Tick the box to confirm you hold the rights to this track.');
   const file = fd.get('file');
@@ -127,15 +114,10 @@ async function stage(ctx: Ctx, req: IncomingMessage, ct: string, incoming: strin
   return { sha: hash.digest('hex'), name, d };
 }
 
-// Steps 4 to 15 of the upload order. The caller has checked host, session, Origin and Sec-Fetch-Site.
+// Steps 4 to 15 of the upload order. The caller has checked host, session, Origin, Sec-Fetch-Site, content type and length.
 export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> {
   const fail = (status: number, msg: string): Res => ({ ...musicPage(ctx, msg, status), headers: status === 413 ? { connection: 'close' } : undefined });
   const plain = (status: number, text: string): Res => ({ status, body: text, type: 'text/plain; charset=utf-8' });
-  const ct = req.headers['content-type'] ?? '';
-  if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return plain(415, 'Unsupported media type');
-  const len = req.headers['content-length'];
-  if (len === undefined || !/^\d+$/.test(len)) return plain(411, 'Length required');
-  if (Number(len) > MAX_BODY) return { ...plain(413, 'Request too large'), headers: { connection: 'close' } };
   if (busy) return plain(429, 'Another upload is running');
   busy = true;
   let part: string | null = null;
@@ -143,7 +125,7 @@ export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> 
   const incoming = path.join(root, '.incoming', `${randomBytes(12).toString('hex')}.bin`);
   try {
     mkdirSync(path.join(root, '.incoming'), { recursive: true });
-    const st = await stage(ctx, req, ct, incoming);
+    const st = await stage(ctx, req, incoming);
     if ('status' in st) return st;
     const { sha, name, d } = st;
     const guard = ['-protocol_whitelist', 'file', '-format_whitelist', 'mov,wav,mp3', '-codec_whitelist', 'aac,mp3,mp3float,pcm_s16le,pcm_s24le,h264,mjpeg,png', '-f', d];

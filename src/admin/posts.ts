@@ -3,14 +3,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/index.ts';
 import { audit, loadEffectiveConfig } from '../config/overrides.ts';
-import { kvGet } from '../db/index.ts';
 import { approveHold, discardHold, manualToday, planManual } from '../scheduler/holds.ts';
 import { html, raw } from './html.ts';
 import { inside, SLOT_ID } from './media.ts';
-import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { csrfField, dryRunOn, layout, PNAME, redirect, type Ctx, type Res } from './pages.ts';
 import { badge, empty, flash, fmtLocal, formRow, money, type Kind } from './ui.ts';
 
-const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
 const VIS: Record<string, string> = { public: 'everyone', private: 'only me' };
 const MESSAGES: Record<string, [Kind, string, string]> = {
   made: ['ok', 'Making your video.', 'This takes about 5 minutes; the page refreshes by itself.'],
@@ -42,7 +40,7 @@ function statusOf(s: ManualSlot): ['ok' | 'warn' | 'bad' | 'neutral', string] {
 export async function postsPage(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const tz = cfg.timezone;
-  const dry = (() => { try { return !!JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } })();
+  const dry = dryRunOn(ctx.db);
   const { made, inFlight } = manualToday(ctx.db, cfg, ctx.now);
   const enabled = Object.entries(cfg.platforms).filter(([, p]) => p.enabled);
   const slots = ctx.db.prepare("SELECT s.id, s.status, s.hold, s.video_model, s.error, s.held_at, s.updated_at, s.master_json, pr.title AS product FROM slots s LEFT JOIN products pr ON pr.handle = s.product_handle WHERE s.kind = 'manual' ORDER BY s.local_date DESC, s.idx DESC LIMIT 20").all() as ManualSlot[];

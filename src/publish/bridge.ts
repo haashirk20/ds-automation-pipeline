@@ -1,6 +1,6 @@
 import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
-import { env } from '../config/index.ts';
+import { env, type Config } from '../config/index.ts';
 import { AI_LINE } from '../contracts.ts';
 import { AmbiguousError, PermanentError, RetryableError, type Publisher } from './types.ts';
 
@@ -10,7 +10,7 @@ const POLL_MS = 10_000;
 const MAX_POLLS = 9; // 90 s; the post id is stored, so the next attempt only reads the post
 const KEY_TTL_MS = 23 * 3600_000; // the bridge forgets an Idempotency-Key after 24 h
 const API_TIMEOUT_MS = 30_000;
-const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+const UPLOAD_TIMEOUT_MS = 6 * 60_000; // inside publish.timeoutMinutes (10), with room for the API calls and the status polls
 
 export type BridgeDeps = {
   fetch: typeof fetch;
@@ -45,7 +45,6 @@ export function findAccount(accounts: Account[], platform: string, handle: strin
 
 export function makeBridgePublisher(platform: string, cfg: PlatformConfig, deps: BridgeDeps): Publisher {
   return {
-    platform,
     async publish(input) {
       const { signal } = input;
       const key = env.bridgeKey();
@@ -175,4 +174,10 @@ function parseHandle(h: unknown): Handle | null {
   const x = h as Partial<Handle>;
   if (typeof x.mediaUrl !== 'string' || typeof x.at !== 'string') throw new AmbiguousError('bridge: stored handle is unreadable');
   return { mediaUrl: x.mediaUrl, at: x.at, postId: typeof x.postId === 'string' ? x.postId : undefined };
+}
+
+// Every platform publishes through the bridge. `now` comes from cli.ts; tests pass a fake fetch.
+export function makePublishers(config: Config, deps: Pick<BridgeDeps, 'now'> & Partial<BridgeDeps>): Record<string, Publisher> {
+  const d: BridgeDeps = { fetch, sleep: abortableSleep, ...deps };
+  return Object.fromEntries(Object.entries(config.platforms).map(([name, c]) => [name, makeBridgePublisher(name, c, d)]));
 }

@@ -1,8 +1,8 @@
-// Products and brand. Shopify products arrive with the daily store read; the owner can add more here, tick
+// Products and brand. Shopify products arrive with the hourly store read; the owner can add more here, tick
 // which products get videos, and upload the logo the video model sees. Each product's brief is the only
 // source of what an ad may claim.
 import type { IncomingMessage } from 'node:http';
-import { closeSync, existsSync, openSync, readSync, rmSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { Brief } from '../contracts.ts';
 import { audit, loadEffectiveConfig } from '../config/overrides.ts';
@@ -95,13 +95,15 @@ function postTimes(cfg: Config): string[] {
   return p ? cfg.platforms[p as keyof Config['platforms']].slots : [];
 }
 
-// The next time each daily post goes out, and the product pickBrief gives it.
+// The next time each daily post goes out, and its product: the one already made for that slot, else the one pickBrief gives it.
 function nextPosts(db: Db, cfg: Config, now: Date): { idx: number; date: string; time: string; title: string }[] {
   const today = localDateOf(now, cfg.timezone);
   return postTimes(cfg).map((time, i) => {
     const date = localToUtc(today, time, cfg.timezone) > now ? today : addDays(today, 1);
     let title = 'no product yet';
-    try { title = pickBrief(db, { local_date: date, idx: i + 1, kind: 'planned' }).product.title; } catch (e) { if (!(e instanceof NoBriefError)) throw e; }
+    const made = db.prepare("SELECT p.title, s.product_handle AS handle FROM slots s LEFT JOIN products p ON p.handle = s.product_handle WHERE s.local_date = ? AND s.idx = ? AND s.kind = 'planned' AND s.product_handle IS NOT NULL").get(date, i + 1) as { title: string | null; handle: string } | undefined;
+    if (made) title = `${made.title ?? made.handle} (already made)`;
+    else try { title = pickBrief(db, { local_date: date, idx: i + 1, kind: 'planned' }).product.title; } catch (e) { if (!(e instanceof NoBriefError)) throw e; }
     return { idx: i + 1, date, time, title };
   });
 }
@@ -334,11 +336,15 @@ export async function productSave(ctx: Ctx, req: IncomingMessage): Promise<Res> 
     if (!editing) for (let k = 2; ctx.db.prepare('SELECT 1 FROM products WHERE handle = ?').get(handle); k++) handle = `${slugHandle(vals.title)}-${k}`;
     const dir = path.join(dataRoot(), 'assets', handle);
     const photos = [...kept];
+    // Photos are named by content, so a re-upload can land on a file already in use: only new files are undone on failure.
+    const before = new Set(existsSync(dir) ? readdirSync(dir) : []);
     try {
       for (const file of files) {
         const img = await saveImage(file, dir, '', 1600);
-        written.push(path.join(dir, img.name));
-        photos.push({ file: `assets/${handle}/${img.name}`, width: img.width, height: img.height });
+        const f = path.join(dir, img.name);
+        if (!before.has(img.name) && !written.includes(f)) written.push(f);
+        const rel = `assets/${handle}/${img.name}`;
+        if (!photos.some((x) => x.file === rel)) photos.push({ file: rel, width: img.width, height: img.height });
       }
     } catch (e) {
       if (e instanceof ImageError) return productForm(ctx, vals, [e.message], 422);
@@ -363,12 +369,13 @@ export async function productSave(ctx: Ctx, req: IncomingMessage): Promise<Res> 
       throw e;
     }
     written.length = 0;
-    // Photos that were not kept are removed.
-    if (editing) for (const old of editing.photos) if (!keep.has(old.file)) { const f = inside(path.resolve(dataRoot(), old.file), path.join(dataRoot(), 'assets')); if (f) try { rmSync(f, { force: true }); } catch { /* sweep */ } }
+    // Photos no longer in the product are removed; a re-uploaded one is still in `photos`.
+    const inUse = new Set(photos.map((x) => x.file));
+    if (editing) for (const old of editing.photos) if (!inUse.has(old.file)) { const f = inside(path.resolve(dataRoot(), old.file), path.join(dataRoot(), 'assets')); if (f) try { rmSync(f, { force: true }); } catch { /* left on disk */ } }
     return redirect('/products?msg=saved');
   } finally {
     busy = false;
-    for (const f of written) try { rmSync(f, { force: true }); } catch { /* sweep */ }
+    for (const f of written) try { rmSync(f, { force: true }); } catch { /* left on disk */ }
   }
 }
 
@@ -394,7 +401,7 @@ export async function logoUpload(ctx: Ctx, req: IncomingMessage): Promise<Res> {
     const old = kvGet(ctx.db, 'brand_logo');
     kvSet(ctx.db, 'brand_logo', key);
     audit(ctx.db, 'admin', 'brand.logo', key, {}, ctx.now);
-    if (old && old !== key && isLogoKey(old)) try { rmSync(path.join(dataRoot(), old), { force: true }); } catch { /* sweep */ }
+    if (old && old !== key && isLogoKey(old)) try { rmSync(path.join(dataRoot(), old), { force: true }); } catch { /* left on disk */ }
     return redirect('/products?msg=logo');
   } finally {
     busy = false;
@@ -405,6 +412,6 @@ export function logoReset(ctx: Ctx): Res {
   const old = kvGet(ctx.db, 'brand_logo');
   ctx.db.prepare("DELETE FROM kv WHERE key = 'brand_logo'").run();
   audit(ctx.db, 'admin', 'brand.logo', 'file', {}, ctx.now);
-  if (old && isLogoKey(old)) try { rmSync(path.join(dataRoot(), old), { force: true }); } catch { /* sweep */ }
+  if (old && isLogoKey(old)) try { rmSync(path.join(dataRoot(), old), { force: true }); } catch { /* left on disk */ }
   return redirect('/products?msg=logofile');
 }

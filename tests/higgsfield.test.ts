@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import raw from '../config/pipeline.config.ts';
 import { parseConfig } from '../src/config/index.ts';
-import { JobEndedError } from '../src/router/errors.ts';
+import { JobEndedError, NotSentError } from '../src/router/errors.ts';
 import { McpAuthError, type McpSession } from '../src/router/mcp.ts';
 import { higgsfieldProvider } from '../src/router/higgsfield.ts';
 import type { ClipJob } from '../src/router/index.ts';
@@ -183,6 +183,26 @@ test('submit: the exact request is quoted before the paid call; a high quote or 
   const r3 = mk(quote(30), 320); // 320 - 30 is below keepCredits 300
   await assert.rejects(go(r3), /keepCredits 300/);
   assert.equal(paid(r3), 0);
+  // A limit is a refusal; a quote answer with a job may have cost, so it is not marked as not sent.
+  await assert.rejects(go(mk(quote(41))), (e: Error) => e instanceof NotSentError && e.refused);
+  await assert.rejects(go(mk({ results: [{ id: 'started' }], cost: { credits: 30 } })), (e: Error) => !(e instanceof NotSentError));
+});
+
+test('submit: an image upload failure before the paid call is NotSentError, not a refusal', async () => {
+  const r = rig({
+    balance: () => ({ credits: 1000 }), media_upload: () => ({ uploads: [{ upload_url: 'https://up.example/p', media_id: 'm' }] }), media_confirm: () => ({}),
+    generate_video: () => quote(30),
+  }, (async () => new Response(null, { status: 503 })) as never);
+  await assert.rejects(higgsfieldProvider(signedIn(), cfgFor(), r.deps).submit(job()), (e: Error) => e instanceof NotSentError && !e.refused && /answered 503/.test(e.message));
+  assert.equal(r.calls.filter((c) => c.name === 'generate_video').length, 0);
+});
+
+test('submit: a quote call that fails in transit may have started a job, so it is not NotSentError', async () => {
+  const r = rig({
+    balance: () => ({ credits: 1000 }), media_upload: () => ({ uploads: [{ upload_url: 'https://up.example/p', media_id: 'm' }] }), media_confirm: () => ({}),
+    generate_video: () => { throw new Error('socket hang up'); },
+  }, (async () => new Response(null, { status: 200 })) as never);
+  await assert.rejects(higgsfieldProvider(signedIn(), cfgFor(), r.deps).submit(job()), (e: Error) => !(e instanceof NotSentError) && /a job may exist: socket hang up/.test(e.message));
 });
 
 test('fetch: an all_terminal without completion and a completed job without result_url are JobEndedError; a poll error is not', async () => {

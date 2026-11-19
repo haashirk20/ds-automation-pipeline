@@ -5,7 +5,7 @@ import { env, type Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
-import { ClipPendingError, JobEndedError } from './errors.ts';
+import { ClipPendingError, JobEndedError, NotSentError } from './errors.ts';
 import { NeedsSignInError } from './higgsfield-auth.ts';
 import { higgsfieldProvider } from './higgsfield.ts';
 
@@ -26,8 +26,8 @@ export type ClipProvider = {
   // Waits for the job and writes the video to outFile.
   fetch(jobId: string, outFile: string, signal: AbortSignal): Promise<void>;
 };
-export type Tier = 't0' | 't1' | 't2';
-export type PaidTier = 't1' | 't2';
+export type Tier = 't0' | 't2';
+export type PaidTier = 't2';
 
 // Test and dry-run stand-in. Offered only when CLIP_STUB_FILE is set, so it cannot be picked by accident.
 // The most a job can cost: the larger of the quoted price and maxCredits at the plan price. Cap checks and the reserved row use it.
@@ -63,7 +63,7 @@ export async function chooseTier(db: Db, config: Config, providers: Record<strin
   if (paid) return paid.tier;
   const { mix } = config.tiers;
   const u = createHash('sha256').update('tier:' + slotId).digest().readUInt32BE(0) / 2 ** 32;
-  const drawn: Tier = force ?? (u < mix.t0 ? 't0' : u < mix.t0 + mix.t1 ? 't1' : 't2');
+  const drawn: Tier = force ?? (u < mix.t0 ? 't0' : 't2');
   if (drawn === 't0') return 't0';
   const t = config.tiers[drawn];
   if (!providers[t.provider]?.configured()) return 't0';
@@ -77,9 +77,11 @@ export async function chooseTier(db: Db, config: Config, providers: Record<strin
   return drawn;
 }
 
-type Row = { id: number; state: string; job_id: string | null; file_path: string | null; provider: string; created_at: string };
+type Row = { id: number; state: string; job_id: string | null; file_path: string | null; provider: string; created_at: string; error: string | null };
 // A submitted job that has not given a file this long after it was created is given up; the slot then uses a stored clip.
 export const PENDING_JOB_MAX_MS = 2 * 3600_000;
+// The error prefix of a ledger row whose paid call was never sent; such rows do not count toward maxJobsPerSlot.
+const NOT_SENT = 'not sent:';
 const setState = (db: Db, id: number, state: string, now: Date, f: { job_id?: string; file_path?: string; error?: string } = {}) =>
   db.prepare('UPDATE spend SET state = ?, job_id = COALESCE(?, job_id), file_path = COALESCE(?, file_path), error = ?, updated_at = ? WHERE id = ?')
     .run(state, f.job_id ?? null, f.file_path ?? null, f.error ?? null, now.toISOString(), id);
@@ -94,7 +96,7 @@ export async function generateClip(
   job: { slotId: string; tier: PaidTier; images: string[]; prompt: string; shots: ClipJob['shots']; outFile: string; signal: AbortSignal }, now: Date,
 ): Promise<boolean> {
   const t = config.tiers[job.tier];
-  const rows = db.prepare('SELECT id, state, job_id, file_path, provider, created_at FROM spend WHERE slot_id = ? ORDER BY id').all(job.slotId) as Row[];
+  const rows = db.prepare('SELECT id, state, job_id, file_path, provider, created_at, error FROM spend WHERE slot_id = ? ORDER BY id').all(job.slotId) as Row[];
   mkdirSync(path.dirname(job.outFile), { recursive: true });
   const tmp = job.outFile + '.part';
   const dataDir = path.resolve(env.dataDir());
@@ -158,7 +160,7 @@ export async function generateClip(
   for (const r of stale) setState(db, r.id, 'failed', now, { error: 'crashed before the job id was stored' });
   if (stale.length) return false;
   // (c) new job
-  if (rows.length >= config.tiers.maxJobsPerSlot) return false;
+  if (rows.filter((r) => !(r.state === 'failed' && r.error?.startsWith(NOT_SENT))).length >= config.tiers.maxJobsPerSlot) return false;
   const p = providers[t.provider];
   if (!p?.configured()) return false;
   if (monthSpendUsd(db, job.tier, now) + boundUsd(t, config) > config.tiers.capsUsd[job.tier]) return false;
@@ -182,12 +184,18 @@ export async function generateClip(
       .run(jobId, credits ?? null, credits === undefined ? null : credits * config.tiers.usdPerCredit, now.toISOString(), id);
     jid = jobId;
   } catch (e) {
-    return fail(id, e);
+    if (!(e instanceof NotSentError) || job.signal.aborted) return fail(id, e);
+    // Nothing was sent: the row costs nothing and does not count toward maxJobsPerSlot.
+    db.prepare("UPDATE spend SET state = 'failed', quoted_usd = 0, error = ?, updated_at = ? WHERE id = ?").run((NOT_SENT + ' ' + scrub(e.message)).slice(0, 300), now.toISOString(), id);
+    log.warn('clip job not sent', { slot: job.slotId, refused: e.refused, error: scrub(String(e)) });
+    if (!e.refused) throw e; // the slot is tried again while attempts remain
+    await dailyAlert('clip_refused', `${p.name} clip not started (${scrub(e.message).slice(0, 200)}): slots use tier 0`);
+    return false;
   }
   try {
     await p.fetch(jid, tmp, job.signal);
     return finish(id);
   } catch (e) {
-    return await fetchFailed({ id, state: 'submitted', job_id: jid, file_path: null, provider: p.name, created_at: now.toISOString() }, e);
+    return await fetchFailed({ id, state: 'submitted', job_id: jid, file_path: null, provider: p.name, created_at: now.toISOString(), error: null }, e);
   }
 }

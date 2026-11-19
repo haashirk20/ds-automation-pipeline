@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { log } from '../ops/log.ts';
 import { Brief, Shot } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
+import { priceLabel } from './catalog.ts';
 import type { RawProduct, ShopMeta } from './fetch.ts';
 
 export type Product = {
@@ -65,12 +66,10 @@ export function normalize(raw: RawProduct, shop: string): Product {
   };
 }
 
-const SYMBOLS: Record<string, string> = { CAD: '$', USD: '$', AUD: '$', EUR: '€', GBP: '£' };
-
 export function priceText(p: Product, currency: string): string {
   const prices = p.variants.map((v) => v.price);
   const low = Math.min(...prices);
-  const text = (SYMBOLS[currency] ?? currency + ' ') + low.toFixed(2);
+  const text = priceLabel(low, currency);
   return prices.some((x) => x !== low) ? `from ${text}` : text;
 }
 
