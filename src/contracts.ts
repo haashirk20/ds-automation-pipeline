@@ -31,7 +31,8 @@ export const Shot = z.object({
 });
 export type Shot = z.infer<typeof Shot>;
 
-// Everything the creative steps may know about the product. Built from Shopify data only.
+// Everything the creative steps may know about the product. Built from Shopify data, or from the fact lines
+// the owner typed for a product added on the admin page (src/shopify/catalog.ts, D-39).
 export const Brief = z.object({
   version: z.literal(1),
   sourceHash: z.string(),

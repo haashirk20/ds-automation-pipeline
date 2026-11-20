@@ -9,11 +9,15 @@ import { makeProducer } from '../src/scheduler/loop.ts';
 import { Brief } from '../src/contracts.ts';
 import { PermanentError, type Publisher } from '../src/publish/types.ts';
 
+// Tests never spend: whatever the developer's shell holds, no real model, bridge or Shopify credential
+// reaches the code under test. A test that needs a key sets a fake one itself.
+for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'BRIDGE_API_KEY', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET']) delete process.env[k];
+
 // Facebook and Instagram are off in the shipped config; the suite exercises all four.
 export const config = parseConfig({ ...raw, platforms: { ...raw.platforms, facebook: { ...raw.platforms.facebook, enabled: true }, instagram: { ...raw.platforms.instagram, enabled: true, visibility: 'public' } } });
 
 // The photo-ad path: the shipped default is 'ugc'.
-export const adConfig = parseConfig({ ...config, creative: { ...config.creative, mode: 'ad' }, tiers: { ...config.tiers, mix: { t0: 1, t1: 0, t2: 0 }, clipSeconds: 4 } });
+export const adConfig = parseConfig({ ...config, creative: { ...config.creative, mode: 'ad' }, tiers: { ...config.tiers, mix: { t0: 1, t2: 0 }, clipSeconds: 4 } });
 
 // Fresh temp dirs and DB per call; no network alerts.
 export function fresh() {
@@ -51,7 +55,7 @@ export const AT_SLOT1 = new Date('2026-11-12T17:20:00Z'); // 12:20 Toronto
 export function fakePublishers(impl: Publisher['publish'] = async () => ({ postId: 'p1', postUrl: 'u1' })) {
   const calls: unknown[] = [];
   const publishers = Object.fromEntries(
-    ['youtube', 'facebook', 'instagram', 'tiktok'].map((platform) => [platform, { platform, publish: async (i: Parameters<Publisher['publish']>[0]) => { calls.push(i); return impl(i); } }]),
+    ['youtube', 'facebook', 'instagram', 'tiktok'].map((platform) => [platform, { publish: async (i: Parameters<Publisher['publish']>[0]) => { calls.push(i); return impl(i); } }]),
   );
   return { publishers, calls };
 }

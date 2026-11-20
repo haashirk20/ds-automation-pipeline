@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { readdirSync } from 'node:fs';
 import raw from '../config/pipeline.config.ts';
 import { parseConfig } from '../src/config/index.ts';
 import { activateConfig, effectiveConfig, limits, loadEffectiveConfig, resolveConfig, saveConfig } from '../src/config/overrides.ts';
@@ -24,7 +25,7 @@ const good = (o: Record<string, unknown>) => {
 test('a path outside the editable list is refused', () => {
   bad({ 'publish.timeoutMinutes': 5 }, /publish.timeoutMinutes cannot be changed/);
   bad({ 'platforms.youtube.handle': 'x' }, /handle cannot be changed/);
-  bad({ 'tiers.mix.t1': 0.5 }, /tiers.mix.t1 cannot be changed/);
+  bad({ 'tiers.mix.t1': 0.5 }, /tiers.mix.t1 cannot be changed/); // a removed key is refused on save
   bad({ 'tiers.t2.params': {} }, /cannot be changed/);
 });
 
@@ -62,9 +63,9 @@ test('a preset may not set the keys the request sets itself', () => {
   assert.throws(() => parseConfig(file), /must not set/);
 });
 
-test('mix is a share of reused clips; tier 1 stays 0', () => {
+test('mix is a share of reused clips; the rest is tier 2', () => {
   const c = good({ 'tiers.mix.t0': 0.25 });
-  assert.deepEqual(c.tiers.mix, { t0: 0.25, t1: 0, t2: 0.75 });
+  assert.deepEqual(c.tiers.mix, { t0: 0.25, t2: 0.75 });
   bad({ 'tiers.mix.t0': 1.1 }, /tiers\.mix/);
 });
 
@@ -122,6 +123,17 @@ test('a stored version that fails today\'s rules falls back to the file with one
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'config_invalid'").get() as any).n, 1);
 });
 
+test('a stored version that names removed keys (tier 1, escalation) still loads, without them', async () => {
+  const db = fresh();
+  const old = { 'tiers.mix.t0': 0.25, 'tiers.mix.t1': 0, 'tiers.t1.usdPerClip': 0.2, 'tiers.capsUsd.t1': 15, 'llm.models.escalation': 'claude-opus-5-5', 'llm.escalationEnabled': true };
+  db.prepare("INSERT INTO config_versions (id, created_at, overrides_json) VALUES (1, 't', ?)").run(JSON.stringify(old));
+  db.prepare("INSERT INTO kv (key, value) VALUES ('config_active', '1')").run();
+  const r = await resolveConfig(db, NOW);
+  assert.equal(r.version, 1);
+  assert.deepEqual(r.config.tiers.mix, { t0: 0.25, t2: 0.75 });
+  assert.equal(activateConfig(db, 1, NOW), null);
+});
+
 test('the next tick picks up a new version; a snapshot taken earlier keeps the old one', async () => {
   const db = fresh();
   process.env.DRY_RUN = '1';
@@ -140,8 +152,9 @@ test('the next tick picks up a new version; a snapshot taken earlier keeps the o
 
 test('migrate re-reads the version inside the transaction', () => {
   const log: string[] = [];
-  const versions = [8, 8, 8, 8, 8, 8, 8, 8, 8, 9]; // another process applies 009 between the first read and BEGIN IMMEDIATE
-  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? 9 }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
+  const L = readdirSync(new URL('../src/db/migrations', import.meta.url)).filter((f) => f.endsWith('.sql')).length;
+  const versions = [...Array(L).fill(L - 1), L]; // another process applies the newest migration between the first read and BEGIN IMMEDIATE
+  const fake = { prepare: () => ({ get: () => ({ user_version: versions.shift() ?? L }) }), exec: (s: string) => log.push(s.slice(0, 20)) };
   migrate(fake as unknown as DatabaseSync);
   assert.deepEqual(log, ['BEGIN IMMEDIATE', 'ROLLBACK']);
 });

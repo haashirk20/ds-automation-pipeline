@@ -310,7 +310,7 @@ test('summary reports last month on the 1st (local) only', () => {
   db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd) VALUES ('2026-10-21T00:00:00Z','p','m',0,0,0,0,1.25)").run();
   assert.doesNotMatch(buildSummary(db, config, AT), /last month/);
   const first = buildSummary(db, config, new Date('2026-11-01T14:00:00Z'));
-  assert.match(first, /Spend last month: model calls \$1\.25, t1 \$0\.00, t2 \$3\.50/);
+  assert.match(first, /Spend last month: model calls \$1\.25, t2 \$3\.50/);
   assert.match(first, /Spend this month: model calls \$0\.00 of/);
 });
 

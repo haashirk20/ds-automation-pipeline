@@ -42,19 +42,17 @@ const schema = z
     ugc: z.object({ reuseAfterDays: z.number().int().min(1), captionPx: z.number().min(56).max(110), music: z.object({ volumeDb: z.number().min(-40).max(0), duckDb: z.number().min(-30).max(0) }) }),
     approval: z.object({ manualPerDay: z.number().int().min(0).max(10), expireHours: z.number().min(1).max(168) }),
     llm: z.object({
-      models: z.object({ script: z.string(), copy: z.string(), qa: z.string(), escalation: z.string() }),
+      models: z.object({ script: z.string(), copy: z.string(), qa: z.string() }),
       monthlyCapUsd: z.number().positive(),
-      escalationEnabled: z.boolean(),
     }),
     hooks: z.object({ noRepeatDays: z.number().int().min(0), poolFactor: z.number().min(1) }),
     render: z.object({ produceTimeoutMinutes: z.number().positive(), maxAttempts: z.number().int().min(1) }),
     disclosure: z.object({ tier0: z.boolean() }),
     tiers: z.object({
-      mix: z.object({ t0: z.number().min(0), t1: z.number().min(0), t2: z.number().min(0) }),
-      capsUsd: z.object({ t1: z.number().min(0), t2: z.number().min(0) }),
+      mix: z.object({ t0: z.number().min(0), t2: z.number().min(0) }),
+      capsUsd: z.object({ t2: z.number().min(0) }),
       clipSeconds: z.number().positive(),
       maxJobsPerSlot: z.number().int().min(1),
-      t1: tierSchema,
       t2: tierSchema,
       usdPerCredit: z.number().positive(),
       customMaxCredits: z.number().positive(),
@@ -65,9 +63,12 @@ const schema = z
   })
   .superRefine((c, ctx) => {
     if (c.publish.timeoutMinutes >= c.publish.uploadTimeoutMinutes) ctx.addIssue({ code: 'custom', path: ['publish', 'timeoutMinutes'], message: 'must be less than uploadTimeoutMinutes' });
+    // Platforms post one after another in one tick, so the watchdog must outlast every platform's publish call.
+    const posting = Object.keys(c.platforms).length * c.publish.timeoutMinutes + 5;
+    if (c.watchdogMinutes < posting) ctx.addIssue({ code: 'custom', path: ['watchdogMinutes'], message: `must be at least ${Object.keys(c.platforms).length} x publish.timeoutMinutes + 5 (${posting})` });
     const counts = new Set(Object.values(c.platforms).filter((p) => p.enabled).map((p) => p.slots.length));
     const m = c.tiers.mix;
-    if (Math.abs(m.t0 + m.t1 + m.t2 - 1) > 1e-6) ctx.addIssue({ code: 'custom', path: ['tiers', 'mix'], message: 'shares must sum to 1' });
+    if (Math.abs(m.t0 + m.t2 - 1) > 1e-6) ctx.addIssue({ code: 'custom', path: ['tiers', 'mix'], message: 'shares must sum to 1' });
     if (c.creative.mode === 'ugc' && (c.tiers.clipSeconds < 14 || c.tiers.clipSeconds > 16)) ctx.addIssue({ code: 'custom', path: ['tiers', 'clipSeconds'], message: "must be between 14 and 16 when creative.mode is 'ugc'" });
     if (c.creative.mode === 'ugc' && c.render.produceTimeoutMinutes < c.tiers.maxJobsPerSlot * 40 + 10) ctx.addIssue({ code: 'custom', path: ['render', 'produceTimeoutMinutes'], message: "must be at least tiers.maxJobsPerSlot * 40 + 10 when creative.mode is 'ugc'" });
     if (c.platforms.instagram.enabled && c.platforms.instagram.visibility === 'private') ctx.addIssue({ code: 'custom', path: ['platforms', 'instagram', 'visibility'], message: "instagram has no private mode: set its visibility to 'public' or disable it" });

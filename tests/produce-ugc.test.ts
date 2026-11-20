@@ -11,6 +11,7 @@ import { pickStoredClip } from '../src/render/produce-ugc.ts';
 import { planDay } from '../src/scheduler/planner.ts';
 import { planManual } from '../src/scheduler/holds.ts';
 import type { ClipProvider } from '../src/router/index.ts';
+import { NotSentError } from '../src/router/errors.ts';
 import { config, fresh } from './helpers.ts';
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
@@ -68,10 +69,11 @@ function rig(over: { concepts?: UgcConcept[]; checks?: boolean[]; providers?: Re
   return { deps, seen };
 }
 
-function stored(db: ReturnType<typeof fresh>, id: string, date: string, c: UgcConcept, file: string | null, handle = brief.product.handle, status = 'done') {
+const allFacts = () => Object.fromEntries(brief.facts.map((f) => [f.id, f.text]));
+function stored(db: ReturnType<typeof fresh>, id: string, date: string, c: UgcConcept, file: string | null, handle = brief.product.handle, status = 'done', factTexts: unknown = allFacts()) {
   const i = Number(id.split('#')[1]);
   db.prepare("INSERT INTO slots (id, local_date, idx, status, product_handle, master_json, created_at, updated_at) VALUES (?,?,?,?,?,?,'t','t')")
-    .run(id, date, i, status, handle, JSON.stringify({ mode: 'ugc', concept: c, clipFile: file, reusedFrom: null }));
+    .run(id, date, i, status, handle, JSON.stringify({ mode: 'ugc', concept: c, clipFile: file, reusedFrom: null, factTexts }));
 }
 // A stored clip lives in DATA_DIR/clips: call after setup(), which sets DATA_DIR.
 const clipFile = (name: string) => { const d = resolve(process.env.DATA_DIR!, 'clips'); mkdirSync(d, { recursive: true }); const f = join(d, name + '.mp4'); writeFileSync(f, name); return f; };
@@ -155,6 +157,19 @@ test('the provider refuses to start: no ledger row, the stored clip is used', as
   assert.equal(spend(db).length, 0);
 });
 
+test('less than $0.05 of model budget left: no clip job is paid for, the stored clip is used', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  stored(db, '2026-10-01#1', '2026-10-01', concept('an old caption'), clipFile('old'));
+  db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd) VALUES (?,'x','m',0,0,0,0,?)").run(NOW.toISOString(), config.llm.monthlyCapUsd - 0.04);
+  const p = provider();
+  await produceSlot(db, config, ID, T, rig({ providers: p.providers }).deps);
+  assert.equal(slot(db).status, 'ready', slot(db).error);
+  assert.equal(JSON.parse(slot(db).master_json).reusedFrom, '2026-10-01#1');
+  assert.equal(p.calls.submit, 0);
+  assert.equal(spend(db).length, 0);
+});
+
 test('the concept writer is down: the stored clip is used and the copy falls back to deterministic text', async () => {
   const db = setup();
   setLlmClient({ create: async () => { throw new Error('model down'); } });
@@ -183,6 +198,24 @@ test('resume after a crash: the stored concept is used, the job is fetched, noth
   assert.deepEqual([p.calls.submit, p.calls.fetch], [0, 1]);
   assert.equal(JSON.parse(slot(db).master_json).concept.caption, 'stored caption');
   assert.deepEqual(spend(db).map((r) => r.state), ['succeeded']);
+});
+
+test('pickStoredClip: a clip is reused only when the brief facts it was checked against are unchanged', () => {
+  const db = setup();
+  stored(db, '2026-09-01#1', '2026-09-01', concept('A'), clipFile('a'));
+  assert.equal(pickStoredClip(db, config, brief, NOW, '2026-11-12')?.slotId, '2026-09-01#1');
+  const edited = { ...brief, facts: brief.facts.map((f) => (f.id === 'f-size' ? { ...f, text: 'One size fits most adults' } : f)) };
+  assert.equal(pickStoredClip(db, config, edited, NOW, '2026-11-12'), null);
+  stored(db, '2026-09-02#1', '2026-09-02', concept('B'), clipFile('b'), brief.product.handle, 'done', null); // no factTexts: never reused
+  db.prepare("UPDATE slots SET status = 'failed' WHERE id = '2026-09-01#1'").run();
+  assert.equal(pickStoredClip(db, config, brief, NOW, '2026-11-12'), null);
+});
+
+test('a new clip stores the text of every brief fact; a reused one keeps the stored facts', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  await produceSlot(db, config, ID, T, rig().deps);
+  assert.deepEqual(JSON.parse(slot(db).master_json).factTexts, allFacts());
 });
 
 test('pickStoredClip: reuseAfterDays, oldest last use, missing files and other products ignored', () => {
@@ -329,6 +362,21 @@ test('the caption render throws once after the clip was paid for: planned, then 
   await produceSlot(db, config, ID, LATER, deps);
   assert.equal(slot(db).status, 'ready', slot(db).error);
   assert.equal(p.calls.submit, 1);
+});
+
+test('the clip upload fails before the paid call: no cost, the slot is planned again with the attempt counted, then ready', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  const p = provider();
+  const submit = p.providers.higgsfield.submit;
+  p.providers.higgsfield.submit = async () => { throw new NotSentError('image upload answered 503'); };
+  const { deps } = rig({ providers: p.providers });
+  await produceSlot(db, config, ID, T, deps);
+  assert.deepEqual([slot(db).status, slot(db).attempt], ['planned', 1]);
+  assert.deepEqual(spend(db).map((r) => [r.state, r.quoted_usd]), [['failed', 0]]);
+  p.providers.higgsfield.submit = submit;
+  await produceSlot(db, config, ID, LATER, deps);
+  assert.equal(slot(db).status, 'ready', slot(db).error);
 });
 
 test('the paid job cannot be fetched now: the slot waits, the attempt is given back and no stored clip is rendered', async () => {

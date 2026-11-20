@@ -31,8 +31,9 @@ docker compose up -d                       # the whole deployment
 - **`DRY_RUN=1` skips the publish call and nothing else.** A dry run still calls the models and, in
   'ugc' mode, still generates paid clips. To spend nothing, also set `LLM_STUB=1` and use a config
   whose tier 2 provider is `fake` with `CLIP_STUB_FILE` set.
-- **Ad claims come from the Shopify brief only.** Tags are not claims. No discounts, reviews or
-  statistics that the store data does not contain.
+- **Ad claims come from the product brief only:** the Shopify data, or the fact lines the owner typed
+  for a product added on the admin's Products page (D-39). Tags are not claims. No discounts, reviews
+  or statistics that this data does not contain.
 - **Every paid job checks price and remaining budget first** and writes a ledger row.
 - **Secrets live in `.env`.** Rotating OAuth tokens live in the database. Neither is ever logged.
 - **No new dependency or service** without an entry in `docs/DECISIONS.md` (alternatives and

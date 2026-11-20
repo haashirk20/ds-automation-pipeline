@@ -8,8 +8,7 @@ import { backupStatus } from './ops/summary.ts';
 import { afterRestore } from './ops/snapshot.ts';
 import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
-import { findAccount, listAccounts } from './publish/bridge.ts';
-import { makePublishers } from './publish/registry.ts';
+import { findAccount, listAccounts, makePublishers } from './publish/bridge.ts';
 import { authorize, higgsfieldStatus } from './router/higgsfield-auth.ts';
 import { runSamples, runUgcSample } from './render/samples.ts';
 import { planDay } from './scheduler/planner.ts';
@@ -97,7 +96,7 @@ async function main(): Promise<number> {
   const config = await loadEffectiveConfig(db, clock()); // a producer keeps the snapshot it starts with
   usePrompts(loadPrompts(db));
   const rebuild = (c: typeof config) => makePublishers(c, { now: clock });
-  const deps = { db, config, publishers: rebuild(config), producer: makeProducer(childSpawn(config)), wait: !!values.once, rebuild };
+  const deps = { db, config, publishers: rebuild(config), producer: makeProducer(childSpawn(config, { clock: override ? clock : undefined })), wait: !!values.once, clock, rebuild, ingest: async (c: typeof config, n: Date, signal: AbortSignal) => { await runIngest(db, c, n, { print: false, signal }); } };
   if (cmd === 'run') await run(deps, clock, !!values.once);
   else if (cmd === 'produce') {
     if (!values.slot) {
@@ -115,7 +114,7 @@ async function main(): Promise<number> {
   } else if (cmd === 'plan') {
     const now = clock();
     planDay(db, config, values.date ?? localDateOf(now, config.timezone), now);
-  } else await publishDue(db, config, deps.publishers, clock());
+  } else await publishDue(db, config, deps.publishers, clock(), clock);
   return 0;
 }
 

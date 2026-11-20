@@ -22,6 +22,8 @@ test('default config is valid', () => assert.ok(parseConfig(raw)));
 test('config validation failures', () => {
   assert.throws(() => parseConfig(mod((c) => (c.platforms.youtube.slots = ['25:00', '19:45']))), /HH:MM/);
   assert.throws(() => parseConfig(mod((c) => (c.publish.timeoutMinutes = 30))), /less than uploadTimeoutMinutes/);
+  assert.throws(() => parseConfig(mod((c) => (c.publish.timeoutMinutes = 11))), /watchdogMinutes: must be at least 4 x publish.timeoutMinutes \+ 5 \(49\)/);
+  assert.ok(parseConfig(mod((c) => { c.publish.timeoutMinutes = 11; c.watchdogMinutes = 49; })));
   assert.throws(() => parseConfig(mod((c) => (c.platforms.tiktok.slots = ['12:15']))), /same number of slots/);
   assert.throws(() => parseConfig(mod((c) => (c.platforms.tiktok.handle = ''))), /tiktok\.handle/);
   assert.throws(() => parseConfig(mod((c) => (c.timezone = 'Nowhere/Land'))), /time zone/);

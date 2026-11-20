@@ -238,8 +238,9 @@ function adminSetup(admin: (u: string, init: RequestInit) => Response) {
   }) as typeof fetch;
   return { ...s, reqs };
 }
-const adminOk = (u: string) => u.endsWith('/oauth/access_token')
+const adminOk = (u: string, init: RequestInit) => u.endsWith('/oauth/access_token')
   ? Response.json({ access_token: TOKEN, expires_in: 86399 })
+  : String(init.body).includes('pageInfo') ? Response.json({ data: { products: { nodes: [{ handle: 'lamp' }], pageInfo: { hasNextPage: false } } } })
   : Response.json({ data: { shop: { name: 'Merry Marts', currencyCode: 'CAD', primaryDomain: { host: 'x.myshopify.com' }, shipsToCountries: ['CA'] }, products: { nodes: [gqlProduct] } } });
 
 async function captureStderr<T>(fn: () => Promise<T>): Promise<{ out: T; err: string }> {

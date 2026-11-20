@@ -7,14 +7,14 @@ import { parseConfig } from '../src/config/index.ts';
 import { setLlmClient } from '../src/llm/client.ts';
 import { Brief, Script, TEMPLATES } from '../src/contracts.ts';
 import { ttsLines } from '../src/creative/assemble.ts';
-import { PALETTES, chooseVariant, produceSlot, type ProduceDeps } from '../src/render/produce.ts';
+import { PALETTES, chooseVariant, factTextsOf, produceSlot, type ProduceDeps } from '../src/render/produce.ts';
 import { planDay } from '../src/scheduler/planner.ts';
-import { childSpawn, makeProducer, tick } from '../src/scheduler/loop.ts';
+import { childSpawn, makeProducer, produceArgv, tick } from '../src/scheduler/loop.ts';
 import { checkScript, judgeClaims } from '../src/creative/claims.ts';
 import { aboutScript, copyProblems, fallbackCopy } from '../src/creative/copy.ts';
 import { publishDue } from '../src/publish/index.ts';
 import { AT_SLOT1, adConfig, config, fakePublishers, fresh, readyDb, stubProducer } from './helpers.ts';
-import { makePublishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/bridge.ts';
 const publishers = makePublishers(config, { now: () => new Date() });
 
 const samples = JSON.parse(readFileSync(new URL('./fixtures/samples/samples.json', import.meta.url), 'utf8'));
@@ -74,7 +74,7 @@ test("'ad' mode: a pending clip waits the slot instead of posting without it", a
   stubOn(); // after fresh(), which clears LLM_STUB
   seedBrief(db);
   planDay(db, config, '2026-11-12', NOW);
-  const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t1: 0, t2: 1 } } });
+  const cfg = parseConfig({ ...adConfig, tiers: { ...adConfig.tiers, mix: { t0: 0, t2: 1 } } });
   const higgsfield = { name: 'higgsfield', configured: () => true, submit: async () => ({ jobId: 'j1' }), fetch: async () => { throw new Error('HTTP 503'); } };
   await produceSlot(db, cfg, '2026-11-12#1', new Date('2026-11-12T02:31:00Z'), fakeDeps({ providers: { higgsfield }, prepareImage: async (_s, _c, out) => writeFileSync(out, 'jpg') }));
   const s = slot(db);
@@ -125,8 +125,9 @@ test('no brief and an unreachable store: the slot is released to planned, attemp
   assert.equal((db.prepare("SELECT count(*) c FROM events WHERE kind = 'ingest_failed'").get() as any).c, 2); // ingest failed, slot waits
 });
 
-const oldSlot = (db: ReturnType<typeof fresh>, id: string, date: string, sc: Script) =>
-  db.prepare("INSERT INTO slots (id, local_date, idx, status, product_handle, master_json, created_at, updated_at) VALUES (?,?,1,'done',?,?,'t','t')").run(id, date, brief.product.handle, JSON.stringify({ script: sc, edl: {}, variant: { template: 'cozy-soft' } }));
+const cited = (sc: Script) => factTextsOf(brief, sc.beats.flatMap((b) => b.factIds));
+const oldSlot = (db: ReturnType<typeof fresh>, id: string, date: string, sc: Script, factTexts: unknown = cited(sc)) =>
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, product_handle, master_json, created_at, updated_at) VALUES (?,?,1,'done',?,?,'t','t')").run(id, date, brief.product.handle, JSON.stringify({ script: sc, edl: {}, variant: { template: 'cozy-soft' }, factTexts }));
 const capReached = (db: ReturnType<typeof fresh>) => db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd) VALUES ('2026-11-12T00:00:00.000Z','x','m',0,0,0,0,?)").run(config.llm.monthlyCapUsd);
 
 test('degraded: no model, reuses the oldest valid old script, fallback copy from the current brief, alerts once', async () => {
@@ -180,6 +181,30 @@ test('degraded: a stored script with a stale price is rejected', async () => {
   await produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps());
   assert.equal(slot(db).status, 'failed');
   assert.match(slot(db).error, /no usable old slot/);
+});
+
+test('degraded: a stored script is reused only when every fact it cites has the same text', async () => {
+  const edited = { ...brief, facts: brief.facts.map((f) => (f.id === 'f-heat' ? { ...f, text: f.text + ' (edited)' } : f)) };
+  const run = async (b: Brief, factTexts?: unknown) => {
+    const db = fresh();
+    seedBrief(db, b);
+    oldSlot(db, '2026-09-01#1', '2026-09-01', script, factTexts);
+    capReached(db);
+    planDay(db, config, '2026-11-12', NOW);
+    await produceSlot(db, adConfig, '2026-11-12#1', NOW, fakeDeps());
+    return slot(db);
+  };
+  const same = await run(brief);
+  assert.equal(same.status, 'ready', same.error);
+  assert.deepEqual(JSON.parse(same.master_json).factTexts, cited(script)); // carried over to the new master
+  const changed = await run(edited); // f-heat is cited by the benefit beat
+  assert.equal(changed.status, 'failed');
+  assert.match(changed.error, /no usable old slot/);
+  const legacy = await run(brief, null); // stored before factTexts existed
+  assert.equal(legacy.status, 'failed');
+  // A fact the script does not cite may change.
+  const other = await run({ ...brief, facts: brief.facts.map((f) => (f.id === 'f-gift' ? { ...f, text: 'A new gift line' } : f)) });
+  assert.equal(other.status, 'ready', other.error);
 });
 
 test('no hook, no old slot: the slot fails with an alert', async () => {
@@ -299,6 +324,16 @@ test('a producer child that ignores SIGTERM is killed after the grace period', a
   assert.ok(took >= 650 && took < 5000, `took ${took} ms`); // SIGTERM ignored for the whole grace period, then SIGKILL
   const pid = Number(readFileSync(pidFile, 'utf8'));
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+});
+
+test('a producer child reads --now from the override clock when it starts, and gets none without an override', () => {
+  let t = Date.parse('2026-11-12T17:20:00Z');
+  const clock = () => new Date((t += 60_000));
+  const now = (a: string[]) => a[a.indexOf('--now') + 1];
+  const first = produceArgv('a', clock);
+  const second = produceArgv('b', clock);
+  assert.ok(now(second) > now(first));
+  assert.ok(!produceArgv('a').includes('--now'));
 });
 
 // Claim checks that must not be bypassed.

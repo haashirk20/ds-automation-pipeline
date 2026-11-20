@@ -42,9 +42,11 @@ backup_once() {
   read_ready || return 0
   [ "$ready" = "$(cat "$STATUS/last-ok" 2>/dev/null)" ] && return 0
   ensure_repo || { log "backup failed: repository not reachable or not initialised"; return 1; }
-  # data/clips exists only after the first clip is made, and restic exits 3 for a missing path.
+  # data/clips, assets and brand exist only once something is in them, and restic exits 3 for a missing path.
   set -- "$DATA/backup/pipeline.db"
   [ -d "$DATA/clips" ] && set -- "$@" "$DATA/clips"
+  [ -d "$DATA/assets" ] && set -- "$@" "$DATA/assets"
+  [ -d "$DATA/brand" ] && set -- "$@" "$DATA/brand"
   restic backup --quiet --host pipeline -o s3.connections=2 "$@" >/dev/null 2>&1
   rc=$?
   [ "$rc" -eq 0 ] || { log "backup failed: restic backup rc=$rc"; return 1; }

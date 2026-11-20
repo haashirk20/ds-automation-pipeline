@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { Script } from '../src/contracts.ts';
-import { callJson, costUsd, LlmCapError, LlmRefusalError, monthSpend, RetryableLlmError, setLlmClient, type LlmClient, type LlmResponse } from '../src/llm/client.ts';
+import { callJson, costUsd, LlmCapError, maxCostUsd, LlmRefusalError, monthSpend, RetryableLlmError, setLlmClient, type LlmClient, type LlmResponse } from '../src/llm/client.ts';
 import { config, fresh } from './helpers.ts';
 
 const NOW = new Date('2026-11-12T17:00:00Z');
@@ -74,6 +74,20 @@ test('the monthly cap blocks a call before the client is used', async () => {
   const calls = fake({});
   await assert.rejects(callJson(db, config, base, NOW), LlmCapError);
   assert.equal(calls.length, 0);
+});
+
+test('the cap counts the most this call can cost: refused when spent + max cost passes the cap, allowed when it fits', async () => {
+  const db = fresh();
+  const big = { ...base, model: 'claude-sonnet-5-5', maxTokens: 3000 }; // 3000 x $10/M = $0.03 of output alone
+  const most = maxCostUsd(big);
+  assert.ok(most > 0.03 && most < 0.031, String(most));
+  const ins = db.prepare("INSERT INTO llm_calls (ts, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost_usd) VALUES ('2026-11-02T00:00:00.000Z','x','m',0,0,0,0,?)");
+  ins.run(config.llm.monthlyCapUsd - most + 0.001);
+  const calls = fake({});
+  await assert.rejects(callJson(db, config, big, NOW), LlmCapError);
+  assert.equal(calls.length, 0);
+  await callJson(db, config, base, NOW); // a small haiku call still fits
+  assert.equal(calls.length, 1);
 });
 
 test('unknown model throws before any request', async () => {

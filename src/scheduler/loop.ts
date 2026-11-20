@@ -8,6 +8,7 @@ import { log } from '../ops/log.ts';
 import { snapshotDaily } from '../ops/snapshot.ts';
 import { summaryDaily } from '../ops/summary.ts';
 import { publishDue } from '../publish/index.ts';
+import { ensureIngest } from '../shopify/index.ts';
 import type { Publisher } from '../publish/types.ts';
 import { holdsTick } from './holds.ts';
 import { planDay } from './planner.ts';
@@ -16,8 +17,11 @@ import { addDays, localDateOf, localHHMM } from './time.ts';
 // Resolves when the producer for one slot has exited, however it exited.
 export type Spawn = (slotId: string, now: Date) => Promise<void>;
 export type Producer = { busy(): boolean; start(slotId: string, now: Date): Promise<void> };
+// `ingest` refreshes the stored catalogue at most hourly. The tick starts it and does not wait, so a slow store read
+// never delays a post or the heartbeat.
 // With `rebuild`, run() reads the config again before every tick and rebuilds the publishers from it.
-export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean; rebuild?: (config: Config) => Record<string, Publisher> };
+// `clock` stamps publish claims and results; without it they use the tick start.
+export type Deps = { db: Db; config: Config; publishers: Record<string, Publisher>; producer: Producer; wait?: boolean; clock?: () => Date; rebuild?: (config: Config) => Record<string, Publisher>; ingest?: (config: Config, now: Date, signal: AbortSignal) => Promise<void> };
 
 // One slot at a time. start() returns a promise the caller may ignore.
 export function makeProducer(spawnFn: Spawn): Producer {
@@ -35,13 +39,17 @@ export function makeProducer(spawnFn: Spawn): Producer {
 // Runs `produce --slot` in a child process with the same environment. After the timeout the child gets
 // SIGTERM (it cancels its Chrome and exits); after the grace period the whole process group gets SIGKILL.
 // A hung producer then leaves the slot 'producing', and the stale recovery in tick() takes it.
-export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?: number; argv?: (slotId: string, now: Date) => string[] } = {}): Spawn {
+// `clock` is the clock override, if any: the child gets --now read from it when it starts, never the tick start,
+// so a later child in run --once does not run behind and take a slot another producer still holds.
+export const produceArgv = (slotId: string, clock?: () => Date): string[] => [process.argv[1], ...(clock ? ['--now', clock().toISOString()] : []), 'produce', '--slot', slotId];
+
+export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?: number; clock?: () => Date; argv?: (slotId: string) => string[] } = {}): Spawn {
   const timeoutMs = opts.timeoutMs ?? config.render.produceTimeoutMinutes * 60000;
   const graceMs = opts.graceMs ?? 20_000;
-  const argv = opts.argv ?? ((slotId, now) => [process.argv[1], '--now', now.toISOString(), 'produce', '--slot', slotId]);
-  return (slotId, now) =>
+  const argv = opts.argv ?? ((slotId) => produceArgv(slotId, opts.clock));
+  return (slotId) =>
     new Promise((resolve) => {
-      const child = spawn(process.execPath, argv(slotId, now), { stdio: 'inherit', env: process.env, detached: true });
+      const child = spawn(process.execPath, argv(slotId), { stdio: 'inherit', env: process.env, detached: true });
       const signal = (sig: NodeJS.Signals) => {
         try { process.kill(-child.pid!, sig); } catch { /* already gone */ }
       };
@@ -67,6 +75,9 @@ export function childSpawn(config: Config, opts: { timeoutMs?: number; graceMs?:
 
 // A slot the producer put back to 'planned' with an error waits this long before it starts again.
 const RETRY_GAP_MINUTES = 10;
+
+// The store read the tick started, if it is still running: never two at once.
+let ingesting: Promise<void> | null = null;
 
 const hasSlots = (db: Db, date: string) => !!db.prepare("SELECT 1 FROM slots WHERE local_date = ? AND kind = 'planned'").get(date);
 
@@ -110,12 +121,18 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   else if (planned.length && !deps.producer.busy()) void deps.producer.start(planned[0].id, now);
 
   await holdsTick(db, config, now);
-  await publishDue(db, config, deps.publishers, now);
+  await publishDue(db, config, deps.publishers, now, deps.clock);
   await snapshotDaily(db, config, now);
   await housekeepingDaily(db, config, now);
   await summaryDaily(db, config, now);
+  if (deps.ingest && !ingesting) {
+    const read = deps.ingest;
+    ingesting = ensureIngest(db, now, { ingest: (n, signal) => read(config, n, signal), ingestDeadlineMs: 5 * 60000 })
+      .catch((e) => log.error('ingest failed', { error: String(e) }))
+      .finally(() => (ingesting = null));
+  }
+  if (deps.wait && ingesting) await ingesting; // run --once finishes its read before the process exits
 
-  kvSet(db, 'heartbeat', now.toISOString());
   const url = env.healthcheckUrl();
   if (url) {
     try {

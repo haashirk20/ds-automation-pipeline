@@ -178,6 +178,14 @@ test('select, preview ranges and delete', async () => {
   assert.equal((await send('GET', '/media/music?sha=../../etc/passwd', { headers: { cookie } })).status, 404);
   assert.equal((await send('GET', `/media/music?sha=${'0'.repeat(64)}`, { headers: { cookie } })).status, 404);
 
+  // Enter in the select form must save, never delete: each delete is its own form, outside it, with the csrf token.
+  const page = (await send('GET', '/music', { headers: { cookie } })).text;
+  const selectForm = /<form method="post" action="\/music\/select">[\s\S]*?<\/form>/.exec(page)![0];
+  assert.doesNotMatch(selectForm, /formaction|\/music\/delete/);
+  assert.deepEqual(selectForm.match(/<button[^>]*type="submit"(?! form=)[^>]*>[^<]*/g), ['<button class="primary" type="submit">Save choices']); // the only submit owned by the form
+  const del = new RegExp(`<form id="(del-\\d+)" method="post" action="/music/delete"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="sha" value="${a.sha256}"></form>`).exec(page);
+  assert.ok(del, 'standalone delete form');
+  assert.match(selectForm, new RegExp(`type="submit" form="${del[1]}">Yes, delete`));
   assert.equal((await post('/music/delete', cookie, csrf, { sha: a.sha256 })).status, 303);
   assert.equal(db.prepare('SELECT selected FROM music_tracks WHERE sha256 = ?').get(a.sha256)!.selected, 0);
   assert.ok(!existsSync(join(dir, 'data', 'music', `${a.sha256}.m4a`)));

@@ -777,6 +777,253 @@ owner wants to try a prompt from the page.
 **Why.** The owner and the build agents read these documents in a terminal.
 
 
+## D-37 Factory page: the one admin page with a script (2026-11-17, branch `dev`)
+
+**Chosen.** `/factory` draws the pipeline as a factory floor: eight stations (loading dock, concept studio, clip foundry, inspection, caption shop, label press, approval gate, shipping docks) on one conveyor belt, a scrap bin, and one crate per slot. The station is read from what the producer already writes (`slots.status` and `hold`, `master_json`, the spend ledger, and the `llm_calls` purposes logged since the claim), so the pipeline is unchanged. The floor is a top-down pixel-art scene on one 544x320 canvas, scaled up with hard pixel edges. Every sprite (machines, crates, crew, trucks, trees) is drawn by the script from code; there are no image files. One same-origin script, `/factory.js`, polls `/factory.json` every 4 s and moves crates along the belt path to their station. A Pause button stops the motion and is remembered in that browser's local storage. The station list, sent counters and line board carry the same data as text. `?demo=1` runs a made-up shift in the browser and reads nothing.
+
+*Revised 2026-11-17:* the first version was a side-on SVG scene animated by CSS; the owner asked for a top-down pixel-art factory instead. The scene animates even when the system asks for reduced motion, because the owner asked for a moving floor; the Pause button is the way to stop it.
+
+**Security.** Only this page's CSP adds `script-src 'self'; connect-src 'self'`; every other page keeps the no-script policy. The script builds nodes with `createElement` and `textContent` only, and fetches only `/factory.json`; a test checks both. The JSON is read-only, behind the session, and carries what Activity already shows. Polling keeps the session alive while the tab is open, up to the absolute session limit.
+
+**Alternatives.** CSS only with a meta refresh: no script, but each refresh restarts every animation and crates jump instead of moving. Inline SVG animated by CSS (the first version): no pixel-art look, and many nodes. Sprite sheet images: binary files to maintain, and no gain over drawing in code. A front-end framework or game engine: a build step or a dependency.
+
+**Cost.** No dependency. Stage inference is approximate within `producing`: a reused clip (tier 0) shows at the foundry until the copy step, and `ad` mode shows at the concept studio until it is ready.
+
+
+## D-38 Settings as blocks on a factory line, with a shipping animation (2026-11-17, branch `dev`)
+
+*Superseded by D-41 (2026-11-19): the block editor and its script are removed.*
+
+**Chosen.** The owner asked for settings that are easier to change: blocks that connect, and an
+animation that packs the settings into a box and sends it to the factory. `/settings` still renders
+the same form, grouped into fieldsets that each carry a block id. One same-origin script,
+`/settings.js`, lays the groups out as blocks in pipeline order: clock tower, concept studio, claim
+checker, clip foundry, inspection, music room and shipping docks, joined by belts, plus an office
+row for budget and maintenance. Each block shows a live summary and how many of its values changed.
+Clicking a block opens its fields in a dialog; the fields stay inside the same form, so what is sent
+is unchanged. A platform's on/off switch is a truck in a parts box: dragging it onto the shipping docks,
+or tapping it, switches the platform on, and dragging it back switches it off. Dragging uses pointer
+events, so a mouse, a finger or a pen all work. A sticky bar counts the changes and offers Undo all
+and Pack and review. On the review page, saving plays a three-second animation first: the changed
+settings drop into a crate, the lid closes, and the crate rides a belt into the factory. Then the
+form is submitted. A Skip button ends the animation at once.
+
+**Security.** Only the settings pages (`GET /settings`, `POST /settings/preview`) get `script-src 'self'`;
+there is no `connect-src`, so the script cannot fetch. It builds nodes with `createElement` and
+`textContent` only; a test checks for markup strings, eval and every request API. All validation stays
+on the server. Without the script the plain form and review page work as before.
+
+**Alternatives.** A free node canvas with wires: the pipeline order is fixed, so most wires would mean
+nothing. CSS-only blocks with `<details>`: no drag, no count of changes and no animation before submit.
+
+**Cost.** No dependency. The animation adds about three seconds to a save unless skipped.
+
+## D-39 Products added by hand, the product selection and an uploaded logo (2026-11-17, branch `dev`)
+
+**Chosen.** The owner asked to choose which products get videos, from Shopify and from products they
+add themselves, and to upload the logo. The rule that claims come from the Shopify brief only is
+widened at the owner's request: a product added on the Products page has a brief built from the fields
+they type (`src/shopify/catalog.ts`). Its facts are the title, type, price, colours and the "facts" lines,
+each with source `owner`. Disclosures are the owner's lines. It has no tags, and discount and review
+claims are off. The form refuses review, rating, sale and "best seller" words in the facts, and asks
+the owner to confirm that every fact is true and that the photos may be used. The claim judge and copy
+judge check against these facts exactly as for a Shopify product.
+Shopify products cannot be edited or removed there; their look is still edited on Prompts. `kv
+products_active` lists the ticked handles; `pickBrief` takes turns among them. None ticked, or a tick
+that matches no stored brief, means every product, so a product leaving the store cannot stop the line.
+Saving with none ticked is refused. The uploaded logo is stored at `data/brand/logo-<sha256>.png`,
+named in `kv brand_logo`, and replaces `config.brand.logo` where the logo is used today (a reference
+image for the video model). "Use the config file's logo" removes the key. The logo is not stamped on
+the videos.
+
+**Security.** `/products/save` (64 MB) and `/brand/logo` (15 MB) join `/music/upload` as multipart
+routes: the session, Origin and Sec-Fetch-Site are checked before the body is read, the length is
+checked against the route's limit, and the CSRF field is checked after parsing. Images are PNG or JPEG
+sniffed from the first bytes (the bundled ffmpeg has no WebP decoder). ffprobe and ffmpeg run with the
+image demuxer, a format and codec whitelist, a forced decoder and `-protocol_whitelist file`. The
+image is re-encoded to PNG without metadata, at most 1600 pixels for photos and 1024 for the logo.
+`/media/photo` serves only a stored brief's shot inside `data/assets`; `/media/logo` serves only the
+uploaded logo inside `data/brand` or the file logo inside `config`. `brandLogoFile` accepts only a key
+of the exact stored form, and only when the file is inside `DATA_DIR`.
+
+**Alternatives.** Choosing from Shopify only, with a product added in Shopify first: the owner wants
+products that are not in the store. Free-form product text with no fact lines: the claim judge would
+have nothing to check against.
+
+**Cost.** No dependency. Facts for an added product are only as true as the owner's lines; the form
+says so.
+
+## D-40 Hourly Shopify sync with removal, and products chosen per daily post (2026-11-19, branch `dev`)
+
+**Chosen.** The store is read at most hourly (`INGEST_EVERY_MS`, `ensureIngest` in
+`src/shopify/index.ts`). The scheduler tick starts the read and does not wait for it, and never runs
+two at once (a module-level in-flight promise); `run --once` waits for it before exiting. The producer
+still reads before it picks a product and waits, under the same deadline. `kv ingest_at` is the
+attempt time and is written when the read starts, so the tick and a producer process do not read at
+the same time. At the five-minute deadline the read is aborted (`AbortSignal.any` with each request's
+20-second timeout; checked between products and before each photo), so no read keeps running. The
+alert and its six-hour rate limit are unchanged; a failed read is tried again an hour later.
+
+The admin does not read the store; D-32 holds. Its "check now" writes `kv ingest_requested` (ISO
+time), and the next tick reads when that is newer than `ingest_at`, whatever the hour. After every
+attempt `syncShop` writes `kv shop_sync_result` = `{at, ok, added, updated, removed, error?}` (the
+error passed through `scrub`). `kv shop_synced_at` is the last successful read.
+
+After a read that returns products, stored Shopify products the store no longer lists (deleted,
+archived, draft, unpublished) lose their `products` and `briefs` rows. Owner products (`own-` and
+`owner_products`) are never removed. A failed read removes nothing. An empty read removes nothing,
+logs a warning and alerts `shop_empty`: an empty store is more likely a broken read. Removal is based
+on the full list of handles: on the Admin API a second, cheap query (`products(first: 250, query:
+same filter) { nodes { handle } pageInfo { hasNextPage } }`); on the public feed the handles of the
+pages read (up to four pages of 250). When that list may go on (`hasNextPage`, or four full pages),
+nothing is removed. Only the first `MAX_PRODUCTS` (20) are stored; above that `kv shop_truncated` =
+`{at, total, kept}` is set and `shop_truncated` alerts, and the key is deleted when the store is back
+under the limit. The Admin filter is `status:active AND published_status:published`; Shopify's
+products query docs say "`published`/`visible`: Returns resources that are published to the online
+store." (https://shopify.dev/docs/api/admin-graphql/latest/queries/products, read 2026-11-19), which
+matches the public feed.
+
+When a product's brief changes, its active hooks that cite a fact the new brief dropped or reworded
+are retired (`hooks.status`). Each finished master stores `factTexts` = `{factId: text}` for the facts
+it cites: the script's beats and hook in `ad` mode; every brief fact in `ugc` mode, since a concept
+cites no ids. A stored script or clip is reused only when each of those ids is still in the current
+brief with the same text; a master without `factTexts` is never reused. Slots keep `product_handle`
+and their stored master, so a product that leaves only stops being picked for new slots.
+
+`kv slot_products` (`{"1": [handles], "2": [handles]}`) names the products of each daily post.
+`pickBrief(db, slot)` (`src/shopify/catalog.ts`) takes turns within the post's list by the number of
+earlier slots with the same index, so one product on both posts, or several taking turns day by day,
+both work. An empty list, a list whose products are all gone, a malformed value and manual slots use
+the previous rule: `products_active` (else every product) by global slot ordinal. `staleSelections`
+lists each non-empty post list or `products_active` that matches no stored brief; the producer alerts
+`selection_stale` for the slot's post (and for `products_active`) after `pickBrief`, rate-limited per
+choice. `staleSelections` is exported for the Products page.
+
+**Review fixes.** `ingest_at` is claimed atomically: a conditional `UPDATE kv ... WHERE value IS <the
+value read>` (an `INSERT ... DO NOTHING` when the key is missing), and only the process whose claim
+changes one row reads the store. A request (`ingest_requested`) still waits at least 60 s after the last
+attempt, and the admin keeps an existing request younger than 60 s instead of rewriting it. A Shopify
+product whose handle starts with `own-` is skipped with a warning, since that prefix belongs to owner
+products. `products.raw_json` carries `imagesSkipped` (photos the read could not download), so the
+Products page can say why a Shopify product has no photo; no schema change.
+
+**Alternatives.** Shopify webhooks: they need a public endpoint and a registered app. A per-day
+schedule table: more than the owner asked for. The admin reading the store itself: the admin has no
+network need beyond the owner's browser (D-32). Awaiting the read in the tick: a slow store delayed
+posts and the heartbeat by up to five minutes.
+
+**Cost.** No dependency. One store read an hour: three requests on the Admin API (token, products,
+handles), two on the public feed, plus photos only when new.
+
+## D-41 Plain admin pages; the settings block editor is removed (supersedes D-38) (2026-11-19, branch `dev`)
+
+**Chosen.** The admin is restyled for a shop owner who is not technical: sentence-case system fonts, a
+calm warm palette that meets 4.5:1 contrast in both colour schemes, six main nav items plus "More",
+local times, plain labels and status words, one flash pattern and one error pattern. Settings is one
+server-rendered form in five sections (When videos go out, Where videos go, Spending limits, Look and
+sound, Advanced), with post times as a Post 1 / Post 2 by platform grid. `/settings.js` and
+`/blocks.css` are removed; only Factory loads a script (D-37). Factory keeps its pixel look: the
+previous stylesheet is served unchanged as `/pixel.css` to that page alone, with rules for the new nav
+appended. URLs and form contracts are unchanged, with two exceptions on Products: each product has one
+choice ("Not used / Post 1 / Post 2 / Both posts / Any post", field `use.<handle>`) that the handler
+maps onto the D-40 kv format (`slot_products` and the `products_active` pool, unchanged; the old
+`sel` and `postN` fields are still read), and saving is accepted with an empty pool when a post has a
+product. "Get latest from Shopify" (`POST /products/sync`) no longer reads the store, since the admin
+container has no Shopify credentials (D-32): it writes `kv ingest_requested` and the page shows the last
+result from `kv shop_sync_result`, a cut-short store from `kv shop_truncated`, and stale selections.
+
+**Review fixes.** Each "Yes, remove/delete" button on Products and Music submits its own standalone
+form (`form="del-N"`, rendered after the select form, with the csrf field), so Enter in the select form
+always saves and never deletes. When products are set to "Any post" but every daily post has its own
+product, the page warns that daily posts never use them (only "Make a video now" does). A failed store
+read is shown in plain words (key refused, could not be reached, empty store, could not be read) with
+the scrubbed error under "Technical details". Pages with the sticky save bar set `scroll-padding-bottom`
+so keyboard focus is never scrolled under the bar.
+
+**Why.** The blocks hid fields behind metaphors ("Claim checker", "Inspection") and dialogs. The
+sticky bar took a fifth of a phone screen, the truck drag was not discoverable, and every save waited
+three seconds. Uppercase monospace at small sizes was the main readability loss. On Products, a
+"Make videos" tick and separate Post 1 and Post 2 ticks overlapped and confused the owner.
+
+**Alternatives.** Keep the blocks and restyle them: the hidden fields and the metaphors stay. Split
+Settings into several pages: each save would need partial-draft logic in draftFrom, against one review
+today. Keep only the shipping animation: a script for decoration.
+
+**What would change it.** The owner prefers the block editor after trying the plain form. Then restore
+`settings.client.js` against the new section ids, with the same no-fetch rules.
+
+**Cost.** No dependency. The owner loses the drag and the animation. A product that was both in the
+pool and on a post shows only its post choice; saving drops it from the pool.
+
+## D-42 Audit fixes: unsent clip jobs, publish timing, dead tier 1, model budget, prices in clips (2026-11-19, branch `dev`)
+
+**Chosen.**
+- A clip request that fails before the paid `generate_video` call (balance read, `media_upload`, the
+  image PUTs, `media_confirm`, a quote that answered without a usable number, a limit refusal) throws
+  `NotSentError`. Its ledger row is kept as `failed` with `quoted_usd = 0` and an error starting
+  `not sent:`; that prefix, not the price, keeps it out of `maxJobsPerSlot`, so a real job quoted at 0
+  credits still counts. A limit refusal sends the same daily `clip_refused` alert as the first check;
+  any other unsent failure sends the slot back to `planned` while `attempt < render.maxAttempts`, in
+  `ugc` and `ad` mode alike. The quote call with images is not "not sent" when it fails in transit or
+  answers with a job: it may have started one, so the row stays `failed` at its reserved price.
+- `publish.timeoutMinutes` is 10 (was 20) and the bridge upload is cut off at 6 minutes. The config
+  check requires `watchdogMinutes >= 4 x publish.timeoutMinutes + 5` (45 >= 45 with the defaults). A
+  tick may hold more than four due rows (several slots, stale rows), so `publishDue` also stops
+  claiming once the tick has run `watchdogMinutes - timeoutMinutes - 2` minutes; the rest wait for the
+  next tick.
+- Tier 1 (`tiers.t1`, `mix.t1`, `capsUsd.t1`) and `llm.models.escalation` / `llm.escalationEnabled`
+  are removed: nothing used them. A stored settings version that still names them loads with those
+  keys dropped.
+- A model call is refused when the month's spend plus the call's most possible cost would pass
+  `llm.monthlyCapUsd`, not only once the cap is reached. A `ugc` slot needs $0.05 of model budget left
+  before it pays for a clip.
+- A `ugc` caption or spoken line with a currency sign, or the shop's currency code, next to a digit is
+  refused: a clip is posted again for weeks, and a price in it would go stale.
+
+Smaller fixes in the same pass: fallback copy takes no hashtags from Shopify tags (a tag like `sale`
+failed every platform after the clip was paid for); producer children read `--now` from the override
+clock when they start; claims, published times and retry times come from the clock, not the tick
+start; stale recovery no longer counts an attempt for a row it returns to `pending`; stale render
+staging folders are swept; upload leftovers are swept by wall-clock file age, so a `--now` override
+cannot remove an upload in progress; `src/publish/registry.ts` is folded into `bridge.ts`.
+
+**Why.** An audit found each of these could double-spend, waste a paid clip, trip the watchdog
+mid-post, or carry a claim the brief does not hold.
+
+**Alternatives.** Delete the unsent ledger row instead of zeroing it: the row is the only record that
+the provider was contacted. Keep `publish.timeoutMinutes` at 20 and raise the watchdog to 85: a hung
+tick would then hold every other job for over an hour.
+
+**Cost.** No dependency. Old `config_versions` rows keep the removed keys in their JSON; they are
+ignored.
+
+## D-43 A pixel-art town square at /town (2026-11-19, branch `dev`)
+
+**Chosen.** The owner asked for a game-like page like the central town of an MMO, and later asked that it be
+merged with the plain admin of D-41 without losing either. `/town` draws a pixel-art town on one canvas
+(`/town.js`), with the Factory's stylesheet (`/pixel.css`). Each admin page is a building: Factory, Market
+(Products), Post office (Videos), Town hall (Settings), Music hall, Wizard tower (Video models), Library
+(Writing instructions), Notice board (Activity log) and Archive (Change history). The owner's character
+walks with the arrow keys or WASD; at a door E or Enter, or walking up into it, goes in. Clicking a building
+walks there and goes in; clicking the ground walks there. A building that needs the owner carries a quest
+marker. Around the canvas a game HUD shows the factory and budget as bars, gold spent this month, a quest
+log, today's counts and a town chat of recent posts, finished videos, scraps and alerts, refreshed from
+`/town.json` every 15 s. Villagers wander, the clock shows the viewer's time and the town darkens at night.
+
+**Merge with D-41.** Where both changes did the same job, D-41 is kept: Home stays the plain overview, the
+header keeps its six items plus More (the town adds a seventh, Town), and the settings form stays plain. The
+town's own slim header and its move of the technical table were dropped. The town's building signs use
+D-41's page names.
+
+**Security.** Like D-37: only this page's CSP adds `script-src 'self'; connect-src 'self'`. The script builds
+nodes with `createElement` and `textContent` only and fetches only `/town.json` (behind the session,
+read-only); a test checks both. The page also lists every building as plain links.
+
+**Alternatives.** Making the town the home page: D-41 made Home the plain overview for a non-technical
+owner. A game engine: a dependency and a build step.
+
+**Cost.** No dependency. About 600 lines of client script, with drawing helpers copied from the Factory's.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

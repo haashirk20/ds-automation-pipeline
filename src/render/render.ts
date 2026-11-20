@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +6,7 @@ import { bundle } from '@remotion/bundler';
 import { makeCancelSignal, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import { env, type Config, type PlatformName } from '../config/index.ts';
 import { Edl, type RenderProps } from '../contracts.ts';
+import { safeRemove } from '../ops/housekeeping.ts';
 import { ff } from './ffmpeg.ts';
 import { probeVideo } from './probe.ts';
 
@@ -26,10 +27,24 @@ function sourceHash(): string {
   return h.digest('hex').slice(0, 16);
 }
 
+// Removes staged folders under <bundle>/public/s/ older than maxAgeMs: a render killed at its timeout never cleans up.
+export function sweepStaged(bundleDir: string, maxAgeMs: number, nowMs: number): number {
+  const root = path.join(bundleDir, 'public', 's');
+  let n = 0;
+  for (const e of existsSync(root) ? readdirSync(root) : []) {
+    try {
+      if (nowMs - lstatSync(path.join(root, e)).mtimeMs > maxAgeMs && safeRemove(path.join(root, e), root)) n++;
+    } catch { /* removed meanwhile */ }
+  }
+  return n;
+}
+
 let bundled: Promise<string> | null = null;
+let swept = false;
 // One bundle per template version, kept in a stable cache directory (BUNDLE_CACHE_DIR; the Docker image
 // builds it ahead of time) and shared by every process. Renders add their files under <bundle>/public/.
-export function getBundle(): Promise<string> {
+// With staleMs, the first call in a process also sweeps staged folders older than that.
+export function getBundle(staleMs?: number): Promise<string> {
   bundled ??= (async () => {
     const root = process.env.BUNDLE_CACHE_DIR || path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'ad-pipeline');
     const dir = path.join(root, `bundle-${sourceHash()}`);
@@ -48,7 +63,10 @@ export function getBundle(): Promise<string> {
     bundled = null;
     throw e;
   });
-  return bundled;
+  if (staleMs === undefined || swept) return bundled;
+  swept = true;
+  // File ages are wall-clock mtimes, so they are compared with the system clock, not the pipeline's.
+  return bundled.then((dir) => (sweepStaged(dir, staleMs, Date.now()), dir));
 }
 
 // Every file the EDL references, each mapped to a generated name under s/<id>/. Pure.
@@ -109,9 +127,9 @@ export async function normalizeLoudness(inFile: string, outFile: string): Promis
 }
 
 // Stages files under <bundle>/public/s/<id>/, renders one composition, loudness-normalises into outFile, and always cleans up.
-async function renderStaged(o: { composition: string; id: string; files: { from: string; to: string }[]; inputProps: Record<string, unknown>; outFile: string; signal?: AbortSignal }): Promise<void> {
+async function renderStaged(o: { composition: string; id: string; files: { from: string; to: string }[]; inputProps: Record<string, unknown>; outFile: string; config: Config; signal?: AbortSignal }): Promise<void> {
   const { composition: compositionId, id, inputProps, outFile } = o;
-  const serveUrl = await getBundle();
+  const serveUrl = await getBundle(o.config.render.produceTimeoutMinutes * 60000);
   const stagedDir = path.join(serveUrl, 'public', 's', id);
   mkdirSync(path.dirname(outFile), { recursive: true });
   const raw = outFile + '.raw.mp4';
@@ -137,7 +155,7 @@ export async function renderEdl(opts: { edl: Edl; platform: PlatformName; config
   const id = randomBytes(6).toString('hex');
   const plan = planStaging(edl, id);
   const inputProps: RenderProps = { edl: plan.edl, platform: opts.platform, safe: p.safe, cta: p.cta };
-  await renderStaged({ composition: 'Ad', id, files: plan.files, inputProps, outFile, signal: opts.signal });
+  await renderStaged({ composition: 'Ad', id, files: plan.files, inputProps, outFile, config: opts.config, signal: opts.signal });
 }
 
 export const UGC_MIN_SECONDS = 14;
@@ -169,7 +187,7 @@ export async function renderUgc(opts: { clip: string; caption: string; config: C
     music = { src: `s/${id}/music.m4a`, ...mix };
   }
   const inputProps = { clipSrc: to, caption: opts.caption, top: ugcTop(opts.config), fontPx: opts.config.ugc.captionPx, durationMs, music };
-  await renderStaged({ composition: 'Ugc', id, files, inputProps, outFile, signal: opts.signal });
+  await renderStaged({ composition: 'Ugc', id, files, inputProps, outFile, config: opts.config, signal: opts.signal });
 }
 
 // Lays out already-extracted 270x480 PNGs 4x2 in one 1080x960 PNG using the "Sheet" composition.

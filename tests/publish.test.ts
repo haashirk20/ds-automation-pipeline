@@ -93,7 +93,7 @@ test('crash recovery: uploading without handle resets to pending, then publishes
   db.prepare("UPDATE publications SET state = 'uploading', attempt = 1, claimed_at = '2026-11-12T16:00:00.000Z' WHERE slot_id = ? AND platform = 'youtube'").run(SLOT);
   const { publishers, calls } = fakePublishers();
   await publishDue(db, config, publishers, AT_SLOT1);
-  assert.equal(rows(db)[0].state, 'published');
+  assert.deepEqual([rows(db)[0].state, rows(db)[0].attempt], ['published', 2]); // the crashed try and this post: two, not three
   assert.equal((calls[0] as any).handle, null);
 });
 
@@ -139,7 +139,7 @@ test('failed slot: publications skipped, one alert', async () => {
   assert.equal(calls.length, 0); // slot 2 is not yet due; slot 1 was never called
 });
 
-for (const [name, tier, tier0, expected] of [['t0, tier0 on', 't0', true, true], ['t0, tier0 off', 't0', false, false], ['t1', 't1', false, true]] as const) {
+for (const [name, tier, tier0, expected] of [['t0, tier0 on', 't0', true, true], ['t0, tier0 off', 't0', false, false], ['t2', 't2', false, true]] as const) {
   test(`aiDisclosure: ${name}`, async () => {
     const db = await readyDb();
     db.prepare('UPDATE slots SET tier = ?').run(tier);
@@ -247,7 +247,43 @@ test('recovery: not late without handle -> pending, even when the render is miss
   db.prepare("DELETE FROM renders WHERE slot_id = ? AND platform = 'youtube'").run(SLOT);
   await publishDue(db, config, fakePublishers().publishers, AT_SLOT1);
   const r = row(db, 'youtube');
-  assert.deepEqual([r.state, r.claimed_at, r.attempt], ['pending', null, 2]);
+  assert.deepEqual([r.state, r.claimed_at, r.attempt], ['pending', null, 1]); // recovery gives the attempt back
+});
+
+test('a slow tick stops claiming before the watchdog: rows left over wait for the next tick', async () => {
+  const db = await readyDb();
+  // Slot 2's rows due at the same time: 8 due rows; each publish takes 10 minutes of clock.
+  db.prepare("UPDATE publications SET scheduled_at = (SELECT scheduled_at FROM publications WHERE slot_id = ? LIMIT 1) WHERE slot_id = '2026-11-12#2'").run(SLOT);
+  let t = AT_SLOT1.getTime();
+  const clock = () => new Date(t);
+  const { publishers, calls } = fakePublishers(async () => { t += 10 * 60000; return { postId: 'p', postUrl: null }; });
+  await publishDue(db, config, publishers, AT_SLOT1, clock);
+  // Budget 45 - 10 - 2 = 33 minutes: claims at 0, 10, 20 and 30 minutes, none at 40.
+  assert.equal(calls.length, 4);
+  const n = (state: string) => (db.prepare('SELECT COUNT(*) AS n FROM publications WHERE state = ?').get(state) as any).n;
+  assert.equal(n('published'), 4);
+  assert.equal(n('uploading'), 0);
+  await publishDue(db, config, publishers, clock(), clock);
+  assert.equal(calls.length, 8);
+});
+
+test('claims, publish time and backoff come from the clock, not the tick start: the second row is claimed later', async () => {
+  const db = await readyDb();
+  let t = AT_SLOT1.getTime();
+  const clock = () => new Date((t += 60_000));
+  const seen: string[] = [];
+  const { publishers } = fakePublishers(async (i) => {
+    const [slot, platform] = i.idempotencyKey.split(':');
+    seen.push((db.prepare('SELECT claimed_at FROM publications WHERE slot_id = ? AND platform = ?').get(slot, platform) as any).claimed_at);
+    if (platform === 'youtube') throw new RetryableError('boom');
+    return { postId: 'p', postUrl: null };
+  });
+  await publishDue(db, config, publishers, AT_SLOT1, clock);
+  assert.ok(seen[1] > seen[0], JSON.stringify(seen));
+  const tt = row(db, 'tiktok');
+  assert.ok(tt.published_at > AT_SLOT1.toISOString());
+  const yt = row(db, 'youtube');
+  assert.ok(Date.parse(yt.next_attempt_at) > AT_SLOT1.getTime() + config.publish.retryMinutes[0] * 60000);
 });
 
 test('recovery: too many attempts -> needs_attention', async () => {

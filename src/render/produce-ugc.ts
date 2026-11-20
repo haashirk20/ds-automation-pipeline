@@ -6,21 +6,24 @@ import { UgcConcept, type Brief } from '../contracts.ts';
 import { aboutConcept } from '../creative/copy.ts';
 import { buildClipPrompt, conceptProblems, productLook } from '../creative/ugc.ts';
 import type { Db } from '../db/index.ts';
-import { RetryableLlmError } from '../llm/client.ts';
+import { RetryableLlmError, monthSpend } from '../llm/client.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { pickTrack, musicGainDb } from '../music/tracks.ts';
 import { chooseTier, generateClip, rejectClip } from '../router/index.ts';
-import { ClipPendingError } from '../router/errors.ts';
-import { ClaimLostError, DeferSlotError, before, commitSlot, ensureIngest, getCopy, holdOf, pickBrief, yearsOf, type ProduceDeps, type Slot } from './produce.ts';
-import { assertInside } from './render.ts';
+import { ClipPendingError, NotSentError } from '../router/errors.ts';
+import { ClaimLostError, DeferSlotError, commitSlot, factTextsOf, factsUnchanged, getCopy, holdOf, yearsOf, type FactTexts, type ProduceDeps, type Slot } from './produce.ts';
+import { UGC_MIN_SECONDS, UGC_MIN_SHORT_SIDE, assertInside } from './render.ts';
+import { alertStaleSelection, brandLogoFile, pickBrief } from '../shopify/catalog.ts';
+import { ensureIngest } from '../shopify/index.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const RECENT = 20;
+const MIN_LLM_USD = 0.05; // the model budget a new clip needs left for its frame check and copy
 
-type Rendered = { concept: UgcConcept; clipFile: string; file: string; qa: unknown };
+type Rendered = { concept: UgcConcept; clipFile: string; file: string; qa: unknown; factTexts?: FactTexts };
 
 const storedConcept = (json: string | null): UgcConcept | null => {
   if (!json) return null;
@@ -32,32 +35,34 @@ const storedConcept = (json: string | null): UgcConcept | null => {
 // A finished clip of this product that is old enough to post again, with the concept it was made from.
 // The oldest last use wins, then the path. `localDate` is the day of the slot being produced.
 // A stored concept must still pass every check against the current brief: its spoken line is in the clip and cannot change.
-export function pickStoredClip(db: Db, config: Config, brief: Brief, now: Date, localDate = localDateOf(now, config.timezone)): { clipFile: string; concept: UgcConcept; slotId: string } | null {
+// It must also cite no fact that was edited since (factTexts); a clip stored without factTexts is never reused.
+export function pickStoredClip(db: Db, config: Config, brief: Brief, now: Date, localDate = localDateOf(now, config.timezone)): { clipFile: string; concept: UgcConcept; slotId: string; factTexts: FactTexts } | null {
   const rows = db.prepare("SELECT id, local_date, master_json FROM slots WHERE status IN ('ready','done') AND (hold IS NULL OR hold = 'approved') AND product_handle = ? AND master_json IS NOT NULL ORDER BY local_date, idx").all(brief.product.handle) as { id: string; local_date: string; master_json: string }[];
   const dataDir = path.resolve(env.dataDir());
   const years = yearsOf(config, now);
-  const byFile = new Map<string, { lastUse: string; concept: UgcConcept; slotId: string }>();
+  const byFile = new Map<string, { lastUse: string; concept: UgcConcept; slotId: string; factTexts: FactTexts }>();
   for (const r of rows) {
     const concept = storedConcept(r.master_json);
-    const stored: unknown = concept && JSON.parse(r.master_json).clipFile;
-    if (!concept || typeof stored !== 'string') continue;
+    const m = concept && JSON.parse(r.master_json);
+    const stored: unknown = m?.clipFile;
+    if (!concept || typeof stored !== 'string' || !factsUnchanged(brief, m.factTexts)) continue;
     const clipFile = path.resolve(dataDir, stored); // an old absolute value stays as it is
     try { assertInside(clipFile, path.join(dataDir, 'clips')); } catch { continue; } // the value comes from the database
     if (!existsSync(clipFile) || conceptProblems(brief, concept, config.tiers.clipSeconds, [], years).length) continue;
-    byFile.set(clipFile, { lastUse: r.local_date, concept, slotId: r.id }); // rows are in order, so the last write is the latest use
+    byFile.set(clipFile, { lastUse: r.local_date, concept, slotId: r.id, factTexts: m.factTexts }); // rows are in order, so the last write is the latest use
   }
   const cutoff = addDays(localDate, -config.ugc.reuseAfterDays);
   const eligible = [...byFile].filter(([, v]) => v.lastUse <= cutoff).sort(([fa, a], [fb, b]) => a.lastUse.localeCompare(b.lastUse) || fa.localeCompare(fb));
-  return eligible.length ? { clipFile: eligible[0][0], concept: eligible[0][1].concept, slotId: eligible[0][1].slotId } : null;
+  return eligible.length ? { clipFile: eligible[0][0], ...eligible[0][1] } : null;
 }
 
 export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string, token: string, now: Date, d: ProduceDeps): Promise<void> {
   const t0 = Date.now();
   const hold = holdOf(db, slot, token, d);
   await ensureIngest(db, now, d);
-  const ordinal = (db.prepare(`SELECT COUNT(*) AS n FROM slots WHERE ${before}`).get(slot.local_date, slot.local_date, slot.idx) as { n: number }).n;
-  const brief = pickBrief(db, ordinal);
+  const brief = pickBrief(db, slot);
   const handle = brief.product.handle;
+  await alertStaleSelection(db, slot, handle, now);
   const work = path.join(dir, `attempt-${Date.parse(token)}`, 'work');
   mkdirSync(work, { recursive: true });
   const attemptDir = path.dirname(work);
@@ -114,6 +119,12 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         rejectClip(db, slot.id, now, why);
         recent.unshift({ caption: concept.caption, setting: concept.setting });
       };
+      // The frame check and the copy run after the paid clip: without model budget left for them, no new job is paid for.
+      if (!jobMade && config.llm.monthlyCapUsd - monthSpend(db, now) < MIN_LLM_USD) {
+        log.warn('model budget too low for the frame check and the copy, no new clip', { slot: slot.id });
+        why = 'the model budget is too low for the frame check and the copy';
+        break;
+      }
 
       // Reference images: the product in the concept's colour, then the logo.
       const colour = brief.shots.filter((s) => s.variant?.toLowerCase() === concept.color.toLowerCase());
@@ -126,14 +137,14 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
           await d.prepareImage(path.resolve(env.dataDir(), s.file), s.crop, jpg);
           images.push(jpg);
         }
-        const logoFile = config.brand.logo ? path.resolve(ROOT, config.brand.logo) : null;
+        const logoFile = brandLogoFile(db, config, ROOT);
         const logo = !!logoFile && existsSync(logoFile);
         if (logo) images.push(logoFile!);
         const { prompt, shots } = buildClipPrompt(brief, concept, refShots.map((s) => s.note), { look: productLook(handle), brand: brief.shop.name, logo });
         hold();
         ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, images, prompt, shots, outFile: clipFile, signal }, now);
       } catch (e) {
-        if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError) throw e;
+        if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError || e instanceof NotSentError) throw e;
         log.warn('clip step failed, no new clip', { slot: slot.id, error: String(e) });
       }
       if (!ok) { why = 'the clip step gave no clip'; break; }
@@ -141,7 +152,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
 
       const info = await d.probeClip(clipFile).catch(() => null); // a corrupt download counts as a rejected clip
       why = 'every clip was rejected';
-      if (!info || info.seconds < 14 || Math.min(info.width, info.height) < 480) {
+      if (!info || info.seconds < UGC_MIN_SECONDS || Math.min(info.width, info.height) < UGC_MIN_SHORT_SIDE) {
         reject('clip failed the size or length check');
         continue;
       }
@@ -197,7 +208,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
     await alert(db, 'degraded', slot.id, `${slot.id} posts the clip of ${old.slotId} again: ${why}`, now);
     const qa = await render(old.clipFile, old.concept.caption, old.concept.line, old.concept.shots[0].seconds);
     if (!qa) throw new Error(`QA failed on the reused clip from ${old.slotId}`);
-    made = { concept: old.concept, clipFile: old.clipFile, file: ugcOut, qa };
+    made = { concept: old.concept, clipFile: old.clipFile, file: ugcOut, qa, factTexts: old.factTexts };
     reusedFrom = old.slotId;
   }
   hold();
@@ -207,7 +218,8 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
   const platforms = enabledPlatforms(config) as PlatformName[];
   for (const p of platforms) copyFileSync(made.file, path.join(attemptDir, `${p}.mp4`));
   commitSlot(db, slot, dir, attemptDir, token, {
-    handle, hookId: null, tier: reusedFrom ? 't0' : tier, master: JSON.stringify({ mode: 'ugc', concept: made.concept, clipFile: path.relative(path.resolve(env.dataDir()), made.clipFile), reusedFrom, music: mixed && track ? { sha256: track.sha256, name: track.name } : null }),
+    // A concept cites no fact ids, so every fact of the brief counts as cited; a reused clip keeps the facts it was checked against.
+    handle, hookId: null, tier: reusedFrom ? 't0' : tier, master: JSON.stringify({ mode: 'ugc', concept: made.concept, factTexts: made.factTexts ?? factTextsOf(brief, brief.facts.map((f) => f.id)), clipFile: path.relative(path.resolve(env.dataDir()), made.clipFile), reusedFrom, music: mixed && track ? { sha256: track.sha256, name: track.name } : null }),
     platforms, qaOf: Object.fromEntries(platforms.map((p) => [p, made.qa])), ai: { visuals: true, voice: true, music: false }, copy,
     hold: slot.kind === 'manual' ? 'waiting' : null, heldAt: slot.kind === 'manual' ? (d.clock?.() ?? now).toISOString() : null, musicSha: mixed ? track?.sha256 ?? null : null,
   });

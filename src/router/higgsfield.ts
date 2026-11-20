@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import type { ClipJob, ClipProvider } from './index.ts';
-import { JobEndedError } from './errors.ts';
+import { JobEndedError, NotSentError } from './errors.ts';
 import { MCP_URL, NeedsSignInError, accessToken, refresh } from './higgsfield-auth.ts';
 import { McpAuthError, openMcp, type McpSession } from './mcp.ts';
 
@@ -22,6 +22,8 @@ const MAX_VIDEO = 300 * 1024 * 1024;
 const TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 const IMAGE_MS = 2 * 60_000;
 const VIDEO_MS = 10 * 60_000;
+// A quote call that answered with a job, or failed in transit, may have started a paid one: never counted as not sent.
+class QuoteStartedJobError extends Error {}
 const defaultSleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => { const t = setTimeout(r, ms); signal?.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
 
 type Gen = { results?: { id?: string }[]; cost?: { credits?: number; credits_exact?: number } };
@@ -30,8 +32,7 @@ export function higgsfieldProvider(db: Db, config: Config, deps: HiggsDeps): Cli
   const f = deps.fetch ?? fetch;
   const sleep = deps.sleep ?? defaultSleep;
   const open = deps.open ?? ((token, signal) => openMcp({ url: MCP_URL, token, fetch: f, signal }));
-  // Tier 2 is the Higgsfield tier; if both tiers name it, t2 wins.
-  const t = [config.tiers.t2, config.tiers.t1].find((x) => x.provider === 'higgsfield') ?? config.tiers.t2;
+  const t = config.tiers.t2; // tier 2 is the Higgsfield tier
 
   // A session that refreshes the token once and retries on a 401. `once` calls are never retried.
   async function connect(signal?: AbortSignal) {
@@ -57,7 +58,8 @@ export function higgsfieldProvider(db: Db, config: Config, deps: HiggsDeps): Cli
   // The quote must be a number above zero and the answer must not hold a started job. Anything else stops clips.
   const priced = (g: Gen): number => {
     const q = g.cost?.credits_exact ?? g.cost?.credits;
-    if (g.results?.length || typeof q !== 'number' || !Number.isFinite(q) || q <= 0) throw new Error('the quote call did not return a quote: clips are stopped');
+    if (g.results?.length) throw new QuoteStartedJobError('the quote call did not return a quote: clips are stopped');
+    if (typeof q !== 'number' || !Number.isFinite(q) || q <= 0) throw new Error('the quote call did not return a quote: clips are stopped');
     return q;
   };
   const balanceOf = (b: { credits?: unknown }): number => {
@@ -90,22 +92,35 @@ export function higgsfieldProvider(db: Db, config: Config, deps: HiggsDeps): Cli
     },
 
     async submit(job) {
-      const c = await connect(job.signal);
-      const credits = balanceOf(await c.call('balance', {})); // also proves the token works, so the paid call below is sent once with a good one
-      const files = job.images.map((p) => ({ filename: path.basename(p), content_type: TYPES[path.extname(p).toLowerCase()] ?? '' }));
-      const bad = files.find((x) => !x.content_type);
-      if (bad) throw new Error('unsupported image type: ' + bad.filename);
-      const up = (await c.call('media_upload', { files })) as { uploads?: { upload_url: string; media_id: string; content_type?: string }[] };
-      if (up.uploads?.length !== files.length) throw new Error('media_upload returned the wrong number of uploads');
-      for (const [i, u] of up.uploads.entries()) {
-        if (!u.upload_url?.startsWith('https://')) throw new Error('upload URL is not https');
-        const r = await f(u.upload_url, { method: 'PUT', headers: { 'content-type': files[i].content_type }, body: await openAsBlob(job.images[i]), signal: AbortSignal.any([job.signal, AbortSignal.timeout(IMAGE_MS)]) });
-        if (!r.ok) throw new Error(`image upload answered ${r.status}`);
+      // Before the paid generate_video call: a failure here sent nothing that costs, except a failed quote call (see QuoteStartedJobError).
+      let c: Awaited<ReturnType<typeof connect>>, exact: ReturnType<typeof params>, quote: number;
+      try {
+        c = await connect(job.signal);
+        const credits = balanceOf(await c.call('balance', {})); // also proves the token works, so the paid call below is sent once with a good one
+        const files = job.images.map((p) => ({ filename: path.basename(p), content_type: TYPES[path.extname(p).toLowerCase()] ?? '' }));
+        const bad = files.find((x) => !x.content_type);
+        if (bad) throw new Error('unsupported image type: ' + bad.filename);
+        const up = (await c.call('media_upload', { files })) as { uploads?: { upload_url: string; media_id: string; content_type?: string }[] };
+        if (up.uploads?.length !== files.length) throw new Error('media_upload returned the wrong number of uploads');
+        for (const [i, u] of up.uploads.entries()) {
+          if (!u.upload_url?.startsWith('https://')) throw new Error('upload URL is not https');
+          const r = await f(u.upload_url, { method: 'PUT', headers: { 'content-type': files[i].content_type }, body: await openAsBlob(job.images[i]), signal: AbortSignal.any([job.signal, AbortSignal.timeout(IMAGE_MS)]) });
+          if (!r.ok) throw new Error(`image upload answered ${r.status}`);
+        }
+        await c.call('media_confirm', { type: 'image', media_ids: up.uploads.map((u) => u.media_id) });
+        exact = params(job, { medias: up.uploads.map((u) => ({ role: 'image_references', value: u.media_id })) });
+        let answer: Gen;
+        try {
+          answer = (await c.call('generate_video', { params: { ...exact, get_cost: true } })) as Gen;
+        } catch (e) {
+          throw new QuoteStartedJobError('quote call failed, a job may exist: ' + (e instanceof Error ? e.message : String(e)));
+        }
+        quote = priced(answer);
+        try { limits(credits, quote); } catch (e) { const n = new NotSentError((e as Error).message); n.refused = true; throw n; } // the request as it is sent, images included
+      } catch (e) {
+        if (e instanceof NotSentError || e instanceof QuoteStartedJobError || job.signal.aborted) throw e;
+        throw new NotSentError(e instanceof Error ? e.message : String(e), { cause: e });
       }
-      await c.call('media_confirm', { type: 'image', media_ids: up.uploads.map((u) => u.media_id) });
-      const exact = params(job, { medias: up.uploads.map((u) => ({ role: 'image_references', value: u.media_id })) });
-      const quote = priced((await c.call('generate_video', { params: { ...exact, get_cost: true } })) as Gen);
-      limits(credits, quote); // the request as it is sent, images included
       const g = (await c.call('generate_video', { params: exact }, true)) as Gen;
       const id = g.results?.[0]?.id;
       if (!id || typeof id !== 'string') throw new Error('generate_video did not return a job: ' + JSON.stringify(g).slice(0, 200));

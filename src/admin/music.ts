@@ -12,7 +12,11 @@ import { ff } from '../render/ffmpeg.ts';
 import { safeEqual } from './auth.ts';
 import { html } from './html.ts';
 import { musicRoot } from './media.ts';
-import { csrfField, fmtTs, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { readMultipart } from './upload.ts';
+import fileConfig from '../../config/pipeline.config.ts';
+import { parseConfig } from '../config/index.ts';
+import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { confirmRemove, empty, flash, fmtLocal, formRow, toggle } from './ui.ts';
 
 export const MAX_FILE = 40 * 1024 * 1024;
 export const MAX_BODY = MAX_FILE + 64 * 1024;
@@ -24,17 +28,24 @@ type Row = { sha256: string; name: string; seconds: number; lufs: number; select
 
 export function musicPage(ctx: Ctx, error: string | null = null, status = 200): Res {
   const rows = ctx.db.prepare('SELECT sha256, name, seconds, lufs, selected, last_used_at FROM music_tracks WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as Row[];
+  const tz = (() => { try { return parseConfig(fileConfig).timezone; } catch { return 'UTC'; } })();
   const m = ctx.query.get('msg');
-  const flash = error ? html`<p class="error-box" role="alert">${error}</p>` : m === 'uploaded' ? html`<p class="notice" role="status">Uploaded.</p>` : m === 'saved' ? html`<p class="notice" role="status">Selection saved. It applies to the next video made.</p>` : m === 'deleted' ? html`<p class="notice" role="status">Deleted.</p>` : '';
+  const top = error ? flash('bad', 'Not added.', error) : m === 'uploaded' ? flash('ok', 'Track added.', 'Tick it below to use it.') : m === 'saved' ? flash('ok', 'Choices saved.', 'The next video made uses them.') : m === 'deleted' ? flash('ok', 'Track deleted.', 'Videos already made keep their music.') : '';
+  const len = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
   return {
-    ...layout(ctx, 'Music', '/music', html`${flash}<p class="banner">Only upload music you have the right to use in ads. YouTube, Facebook, Instagram and TikTok scan uploads for copyrighted music; a match can mute or block the post, hand its earnings to the rights holder, or strike the account. TikTok business accounts may use only its Commercial Music Library or audio you own.</p>
-<p>Ticked tracks take turns, the least recently used first. With none ticked, videos have no music.</p>
-<h2>Tracks</h2>${rows.length ? html`<form method="post" action="/music/select">${csrfField(ctx)}<div class="scroll"><table><thead><tr><th>Use</th><th>Name</th><th>Length</th><th>Loudness</th><th>Last used</th><th>Preview</th><th></th></tr></thead><tbody>${rows.map((r) => html`<tr><td><input type="checkbox" name="sel" value="${r.sha256}" aria-label="Use ${r.name}"${r.selected ? html` checked` : ''}></td><td>${r.name}</td><td>${Math.round(r.seconds)} s</td><td>${r.lufs.toFixed(1)} LUFS</td><td>${fmtTs(r.last_used_at)}</td><td><audio controls preload="none" src="/media/music?sha=${r.sha256}"></audio></td><td><button class="link" type="submit" formaction="/music/delete" name="sha" value="${r.sha256}">Delete</button></td></tr>`)}</tbody></table></div>
-<div class="actions"><button class="primary" type="submit">Save selection</button></div></form>` : html`<p class="muted">No tracks yet.</p>`}
-<h2>Upload</h2><form method="post" action="/music/upload" enctype="multipart/form-data">${csrfField(ctx)}
-<div class="field"><label for="file">Track</label><div><input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4"><span class="hint">Up to 40 MB. mp3, m4a, mp4 or wav; the picture of a video file is discarded.</span></div></div>
-<div class="field"><label for="ack">Rights</label><div><input id="ack" type="checkbox" name="ack" value="1"> I hold the rights to use this track in ads on these platforms.</div></div>
-<div class="actions"><button class="primary" type="submit">Upload</button></div></form>`),
+    ...layout(ctx, 'Music', '/music', html`${top}${flash('info', 'Only upload music you own or have licensed for ads.', html`Platforms mute or block posts with music they recognise.<details><summary>Why this matters</summary>YouTube, Facebook, Instagram and TikTok scan uploads for copyrighted music; a match can mute or block the post, hand its earnings to the rights holder, or strike the account. TikTok business accounts may use only its Commercial Music Library or audio you own.</details>`)}
+<section><h2>Your tracks</h2><p class="hint">Ticked tracks take turns, the least recently used first. With none ticked, videos have no music.</p>
+${rows.length ? html`<form method="post" action="/music/select">${csrfField(ctx)}<ul class="tracks card">${rows.map((r, i) => html`<li class="track">${toggle({ id: `t-${i}`, name: 'sel', value: r.sha256, checked: !!r.selected, label: `Use ${r.name}` })}
+<div><strong>${r.name}</strong><span class="hint">${len(r.seconds)} · ${r.last_used_at ? `Last used ${fmtLocal(r.last_used_at, tz)}` : 'Never used'}</span></div>
+${confirmRemove('Delete…', html`<button class="danger" type="submit" form="del-${i}">Yes, delete ${r.name}</button>`)}
+<audio controls preload="none" src="/media/music?sha=${r.sha256}" aria-label="Play ${r.name}"></audio>
+<details class="tech"><summary>Technical details</summary>Loudness ${r.lufs.toFixed(1)} LUFS (evened out when mixed).</details></li>`)}</ul>
+<div class="sticky-save"><button class="primary" type="submit">Save choices</button></div></form>
+${rows.map((r, i) => html`<form id="del-${i}" method="post" action="/music/delete">${csrfField(ctx)}<input type="hidden" name="sha" value="${r.sha256}"></form>`)}` : empty('No music yet. Without music, videos have none.')}</section>
+<section class="card"><h2>Upload a track</h2><form method="post" action="/music/upload" enctype="multipart/form-data">${csrfField(ctx)}
+${formRow({ id: 'file', label: 'Track', control: html`<input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4" required>`, hint: 'Up to 40 MB. mp3, m4a, mp4 or wav; the picture of a video file is dropped.' })}
+<label class="check" for="ack"><input id="ack" type="checkbox" name="ack" value="1" required> I own this track or hold the rights to use it in ads on these platforms.</label>
+<div class="actions"><button class="primary" type="submit">Upload track</button></div></form></section>`),
     status,
   };
 }
@@ -80,25 +91,11 @@ let busy = false;
 
 // Reads the form, streams the file to `incoming` while hashing, and lets go of the form, so the 40 MB it holds can be freed
 // before ffmpeg starts. Returns the fields the rest needs, or the response to send.
-async function stage(ctx: Ctx, req: IncomingMessage, ct: string, incoming: string): Promise<{ sha: string; name: string; d: 'mov' | 'wav' | 'mp3' } | Res> {
+async function stage(ctx: Ctx, req: IncomingMessage, incoming: string): Promise<{ sha: string; name: string; d: 'mov' | 'wav' | 'mp3' } | Res> {
   const fail = (status: number, msg: string): Res => ({ ...musicPage(ctx, msg, status), headers: status === 413 ? { connection: 'close' } : undefined });
-  let n = 0;
-  let capped = false;
-  const counter = new Transform({
-    transform(chunk: Buffer, _e, cb) {
-      n += chunk.length;
-      if (n > MAX_BODY) { capped = true; cb(new Error('too large')); } else cb(null, chunk);
-    },
-  });
-  req.pipe(counter);
-  req.on('error', (e) => counter.destroy(e));
-  let fd: FormData;
-  try {
-    fd = await new Request('http://x/', { method: 'POST', headers: { 'content-type': ct }, body: Readable.toWeb(counter) as ReadableStream, duplex: 'half' } as RequestInit).formData();
-  } catch {
-    req.unpipe(counter);
-    return capped ? fail(413, 'The upload is too large.') : fail(400, 'The upload could not be read.');
-  }
+  const r = await readMultipart(req, MAX_BODY);
+  if ('why' in r) return r.why === 'large' ? fail(413, 'The upload is too large.') : fail(400, 'The upload could not be read.');
+  const fd = r.fd;
   if (!safeEqual(String(fd.get('csrf') ?? ''), ctx.csrf ?? '')) return { status: 403, body: 'Forbidden', type: 'text/plain; charset=utf-8', headers: { connection: 'close' } };
   if (fd.get('ack') !== '1') return fail(422, 'Tick the box to confirm you hold the rights to this track.');
   const file = fd.get('file');
@@ -117,15 +114,10 @@ async function stage(ctx: Ctx, req: IncomingMessage, ct: string, incoming: strin
   return { sha: hash.digest('hex'), name, d };
 }
 
-// Steps 4 to 15 of the upload order. The caller has checked host, session, Origin and Sec-Fetch-Site.
+// Steps 4 to 15 of the upload order. The caller has checked host, session, Origin, Sec-Fetch-Site, content type and length.
 export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> {
   const fail = (status: number, msg: string): Res => ({ ...musicPage(ctx, msg, status), headers: status === 413 ? { connection: 'close' } : undefined });
   const plain = (status: number, text: string): Res => ({ status, body: text, type: 'text/plain; charset=utf-8' });
-  const ct = req.headers['content-type'] ?? '';
-  if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return plain(415, 'Unsupported media type');
-  const len = req.headers['content-length'];
-  if (len === undefined || !/^\d+$/.test(len)) return plain(411, 'Length required');
-  if (Number(len) > MAX_BODY) return { ...plain(413, 'Request too large'), headers: { connection: 'close' } };
   if (busy) return plain(429, 'Another upload is running');
   busy = true;
   let part: string | null = null;
@@ -133,7 +125,7 @@ export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> 
   const incoming = path.join(root, '.incoming', `${randomBytes(12).toString('hex')}.bin`);
   try {
     mkdirSync(path.join(root, '.incoming'), { recursive: true });
-    const st = await stage(ctx, req, ct, incoming);
+    const st = await stage(ctx, req, incoming);
     if ('status' in st) return st;
     const { sha, name, d } = st;
     const guard = ['-protocol_whitelist', 'file', '-format_whitelist', 'mov,wav,mp3', '-codec_whitelist', 'aac,mp3,mp3float,pcm_s16le,pcm_s24le,h264,mjpeg,png', '-f', d];

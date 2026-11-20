@@ -6,13 +6,17 @@ import { kvGet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
 import { clearCookie, clearLockout, cookieOf, COOKIE, createSession, destroySession, getSession, hostAllowed, isLocked, loginFailed, safeEqual, sessionCookie, verifyPassword } from './auth.ts';
+import * as factory from './factory.ts';
 import * as media from './media.ts';
 import * as models from './models.ts';
 import * as music from './music.ts';
 import * as pages from './pages.ts';
 import * as posts from './posts.ts';
+import * as products from './products.ts';
+import * as town from './town.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
+import { PIXEL_CSS } from './pixel.ts';
 
 const MAX_BODY = 256 * 1024;
 const MAX_PASSWORD = 1024;
@@ -28,36 +32,58 @@ const HEADERS: Record<string, string> = {
   'cross-origin-resource-policy': 'same-origin',
 };
 
-type Route = { auth: boolean; h: (c: Ctx) => Res | Promise<Res> };
+type Route = { h: (c: Ctx) => Res | Promise<Res> };
 const ROUTES: Record<string, Route> = {
-  'GET /': { auth: true, h: pages.overviewPage },
-  'GET /overview': { auth: true, h: pages.overviewPage },
-  'GET /settings': { auth: true, h: pages.settingsPage },
-  'POST /settings/preview': { auth: true, h: pages.settingsPreview },
-  'POST /settings/save': { auth: true, h: pages.settingsSave },
-  'GET /posts': { auth: true, h: posts.postsPage },
-  'POST /posts/new': { auth: true, h: posts.postNew },
-  'POST /posts/approve': { auth: true, h: posts.postApprove },
-  'POST /posts/discard': { auth: true, h: posts.postDiscard },
-  'GET /media/render': { auth: true, h: media.mediaRender },
-  'GET /media/music': { auth: true, h: media.mediaMusic },
-  'GET /music': { auth: true, h: (c) => music.musicPage(c) },
-  'POST /music/upload': { auth: true, h: () => pages.notFound(null) }, // handled before the body is read
-  'POST /music/select': { auth: true, h: music.musicSelect },
-  'POST /music/delete': { auth: true, h: music.musicDelete },
-  'GET /models': { auth: true, h: (c) => models.modelsPage(c) },
-  'POST /models/add': { auth: true, h: models.modelAdd },
-  'POST /models/remove': { auth: true, h: models.modelRemove },
-  'GET /prompts': { auth: true, h: pages.promptsPage },
-  'GET /prompts/view': { auth: true, h: pages.promptView },
-  'GET /prompts/edit': { auth: true, h: (c) => pages.promptEdit(c) },
-  'POST /prompts/preview': { auth: true, h: pages.promptPreview },
-  'POST /prompts/save': { auth: true, h: pages.promptSave },
-  'GET /prompts/history': { auth: true, h: pages.promptHistory },
-  'POST /prompts/activate': { auth: true, h: pages.promptActivate },
-  'GET /activity': { auth: true, h: pages.activityPage },
-  'GET /history': { auth: true, h: pages.historyPage },
-  'POST /history/activate': { auth: true, h: pages.historyActivate },
+  'GET /': { h: pages.overviewPage },
+  'GET /overview': { h: pages.overviewPage },
+  'GET /factory': { h: factory.factoryPage },
+  'GET /town': { h: town.townPage },
+  'GET /town.json': { h: town.townJson },
+  'GET /factory.json': { h: factory.factoryJson },
+  'GET /settings': { h: pages.settingsPage },
+  'POST /settings/preview': { h: pages.settingsPreview },
+  'POST /settings/save': { h: pages.settingsSave },
+  'GET /products': { h: (c) => products.productsPage(c) },
+  'GET /products/new': { h: (c) => products.productForm(c) },
+  'GET /products/edit': { h: (c) => products.productForm(c) },
+  'POST /products/save': { h: () => pages.notFound(null) }, // multipart, handled before the body is read
+  'POST /products/select': { h: products.productsSelect },
+  'POST /products/delete': { h: products.productsDelete },
+  'POST /products/sync': { h: products.productsSync },
+  'POST /brand/logo': { h: () => pages.notFound(null) }, // multipart
+  'POST /brand/logo/reset': { h: products.logoReset },
+  'GET /media/photo': { h: products.mediaPhoto },
+  'GET /media/logo': { h: (c) => products.mediaLogo(c) },
+  'GET /posts': { h: posts.postsPage },
+  'POST /posts/new': { h: posts.postNew },
+  'POST /posts/approve': { h: posts.postApprove },
+  'POST /posts/discard': { h: posts.postDiscard },
+  'GET /media/render': { h: media.mediaRender },
+  'GET /media/music': { h: media.mediaMusic },
+  'GET /music': { h: (c) => music.musicPage(c) },
+  'POST /music/upload': { h: () => pages.notFound(null) }, // handled before the body is read
+  'POST /music/select': { h: music.musicSelect },
+  'POST /music/delete': { h: music.musicDelete },
+  'GET /models': { h: (c) => models.modelsPage(c) },
+  'POST /models/add': { h: models.modelAdd },
+  'POST /models/remove': { h: models.modelRemove },
+  'GET /prompts': { h: pages.promptsPage },
+  'GET /prompts/view': { h: pages.promptView },
+  'GET /prompts/edit': { h: (c) => pages.promptEdit(c) },
+  'POST /prompts/preview': { h: pages.promptPreview },
+  'POST /prompts/save': { h: pages.promptSave },
+  'GET /prompts/history': { h: pages.promptHistory },
+  'POST /prompts/activate': { h: pages.promptActivate },
+  'GET /activity': { h: pages.activityPage },
+  'GET /history': { h: pages.historyPage },
+  'POST /history/activate': { h: pages.historyActivate },
+};
+
+// Multipart routes, each with its own body limit.
+const MULTIPART: Record<string, { max: number; h: (c: Ctx, req: IncomingMessage) => Promise<Res> }> = {
+  '/music/upload': { max: music.MAX_BODY, h: music.uploadMusic },
+  '/products/save': { max: products.MAX_PRODUCT_BODY, h: products.productSave },
+  '/brand/logo': { max: products.MAX_LOGO_BODY, h: products.logoUpload },
 };
 
 export type AdminOpts = { now: () => Date; hosts: string[] };
@@ -91,6 +117,11 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   const now = opts.now();
 
   if (method === 'GET' && path === '/style.css') return { status: 200, body: CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/factory.css') return { status: 200, body: factory.FACTORY_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/town.js') return { status: 200, body: town.TOWN_JS, type: 'text/javascript; charset=utf-8' };
+  if (method === 'GET' && path === '/town.css') return { status: 200, body: town.TOWN_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/pixel.css') return { status: 200, body: PIXEL_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();
@@ -110,13 +141,19 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
     return sfs === undefined || sfs === 'same-origin';
   };
 
-  // The one multipart route. The session is checked before any body is read; the csrf field is checked after parsing.
-  if (method === 'POST' && path === '/music/upload') {
+  // The multipart routes. The session is checked before any body is read; the csrf field is checked after parsing.
+  const upload = method === 'POST' ? MULTIPART[path] : undefined;
+  if (upload) {
     const s = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
     const close = (r: Res): Res => ({ ...r, headers: { ...r.headers, connection: 'close' } }); // the body is not read, so the connection must not be reused
     if (!s) return close(pages.redirect('/login'));
     if (!sameOrigin()) return close(plain(403, 'Forbidden'));
-    const r = await music.uploadMusic({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
+    const ct = req.headers['content-type'] ?? '';
+    if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return close(plain(415, 'Unsupported media type'));
+    const len = req.headers['content-length'];
+    if (len === undefined || !/^\d+$/.test(len)) return close(plain(411, 'Length required'));
+    if (Number(len) > upload.max) return close(plain(413, 'Request too large'));
+    const r = await upload.h({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
     return r.status === 303 || r.status === 403 ? close(r) : r;
   }
 
@@ -199,7 +236,7 @@ export function makeServer(db: Db, opts: AdminOpts): Server {
       });
   });
   server.maxConnections = 64;
-  server.requestTimeout = 180_000; // a 40 MB upload on a slow tunnel
+  server.requestTimeout = 300_000; // a 64 MB photo upload on a slow tunnel
   server.headersTimeout = 15_000;
   return server;
 }

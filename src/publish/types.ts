@@ -2,7 +2,6 @@
 // use `handle` first to find out what already happened. No handle must mean nothing was
 // posted. Pass `signal` to every fetch.
 export interface Publisher {
-  platform: string;
   publish(input: {
     filePath: string;
     title: string;
