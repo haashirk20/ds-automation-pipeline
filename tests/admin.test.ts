@@ -610,3 +610,38 @@ test('login with next=//evil.com goes to /overview', async () => {
   assert.equal(r.status, 303);
   assert.equal(r.headers.location, '/overview');
 });
+
+test('Stop and Start daily posts: CSRF checked, the key set and cleared, back to the page with a flash; Home shows both states', async () => {
+  const { cookie, csrf } = await login();
+  kvSet(db, 'heartbeat', clock.toISOString());
+  db.prepare("DELETE FROM kv WHERE key = 'auto_paused'").run();
+  const on = await req('GET', '/overview', { cookie });
+  assert.ok(on.text.includes('Daily posts are on</h2>') && on.text.includes('skipped posts are not sent later'));
+  assert.ok(formOf(on.text, '/auto/stop').get('csrf') === csrf && on.text.includes('>Stop daily posts</button>'));
+  // No or wrong CSRF: refused and nothing changes.
+  assert.equal((await req('POST', '/auto/stop', { cookie, form: {} })).status, 403);
+  assert.equal((await req('POST', '/auto/stop', { cookie, form: { csrf: 'x'.repeat(csrf.length) } })).status, 403);
+  assert.equal(kvGet(db, 'auto_paused'), undefined);
+
+  const stop = await req('POST', '/auto/stop', { cookie, form: { csrf }, headers: { referer: `http://127.0.0.1:${port}/posts?msg=made` } });
+  assert.equal(stop.status, 303);
+  assert.equal(stop.headers.location, '/posts?msg=auto-stopped');
+  assert.deepEqual(JSON.parse(kvGet(db, 'auto_paused')!), { at: clock.toISOString() });
+  const posts = await req('GET', '/posts?msg=auto-stopped', { cookie });
+  assert.ok(posts.text.includes('Daily posts stopped.</strong>') && posts.text.includes('>Start daily posts</button>'));
+  assert.ok(!(await req('GET', '/posts?msg=auto-started', { cookie })).text.includes('Daily posts are on again.')); // no false flash
+  const off = await req('GET', '/overview', { cookie });
+  assert.match(off.text, /<p>(Daily posts are stopped\.|\d+ things need you\.)<\/p>/);
+  assert.ok(!off.text.includes('The factory has'));
+  assert.match(off.text, /<section class="flash warn" aria-labelledby="auto-h">.*Daily posts are stopped \(since \w{3} \d+ \w{3}, \d\d:\d\d\)\./s);
+  assert.ok(off.text.includes('Make a video now and Post it still work.') && off.text.includes('Factory running · daily posts stopped'));
+  for (const p of ['/factory', '/town', '/activity']) assert.match((await req('GET', p, { cookie })).text, /Daily posts are stopped\. <a href="\/overview#auto">Start them on Home/, p);
+  assert.match((await req('GET', '/factory', { cookie })).text, /Start on Home/);
+
+  assert.equal((await req('POST', '/auto/start', { cookie, form: {} })).status, 403);
+  assert.ok(kvGet(db, 'auto_paused'));
+  const start = await req('POST', '/auto/start', { cookie, form: { csrf } }); // no referer: Home
+  assert.equal(start.headers.location, '/overview?msg=auto-started');
+  assert.equal(kvGet(db, 'auto_paused'), undefined);
+  assert.ok((await req('GET', '/overview?msg=auto-started', { cookie })).text.includes('Daily posts are on again.'));
+});

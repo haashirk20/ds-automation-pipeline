@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { env, type Config } from '../config/index.ts';
 import { resolveConfig } from '../config/overrides.ts';
-import { kvSet, type Db } from '../db/index.ts';
+import { autoPaused, kvSet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { housekeepingDaily } from '../ops/housekeeping.ts';
 import { log } from '../ops/log.ts';
@@ -86,8 +86,10 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   kvSet(db, 'heartbeat', now.toISOString()); // a tick that publishes can take minutes; health must still see the loop alive
   const today = localDateOf(now, config.timezone);
   const tomorrow = addDays(today, 1);
-  if (localHHMM(now, config.timezone) >= config.produceAt && !hasSlots(db, tomorrow)) planDay(db, config, tomorrow, now);
-  if (!hasSlots(db, today)) planDay(db, config, today, now);
+  // D-45: the owner stopped daily posts. Nothing new is planned and no daily post is produced; manual videos still are.
+  const paused = !!autoPaused(db);
+  if (!paused && localHHMM(now, config.timezone) >= config.produceAt && !hasSlots(db, tomorrow)) planDay(db, config, tomorrow, now);
+  if (!paused && !hasSlots(db, today)) planDay(db, config, today, now);
 
   const cutoff = new Date(now.getTime() - config.render.produceTimeoutMinutes * 60000).toISOString();
   const stuck = db.prepare("SELECT id, attempt FROM slots WHERE status = 'producing' AND updated_at < ?").all(cutoff) as { id: string; attempt: number }[];
@@ -100,25 +102,28 @@ export async function tick(deps: Deps, now: Date): Promise<void> {
   // Only slots that still have something to publish in time are worth producing.
   const lateBefore = new Date(now.getTime() - config.publish.maxLatenessMinutes * 60000).toISOString();
   const retryAfter = new Date(now.getTime() - RETRY_GAP_MINUTES * 60000).toISOString();
-  const planned: { id: string }[] = [];
-  for (const { id, error, updated_at } of db.prepare("SELECT id, error, updated_at FROM slots WHERE status = 'planned' ORDER BY kind = 'manual' DESC, id").all() as { id: string; error: string | null; updated_at: string }[]) {
+  const planned: { id: string; kind: string }[] = [];
+  for (const { id, kind, error, updated_at } of db.prepare("SELECT id, kind, error, updated_at FROM slots WHERE status = 'planned' ORDER BY kind = 'manual' DESC, id").all() as { id: string; kind: string; error: string | null; updated_at: string }[]) {
+    const held = paused && kind === 'planned';
     const open = db.prepare("SELECT platform FROM publications WHERE slot_id = ? AND state = 'pending' AND scheduled_at >= ?").all(id, lateBefore) as { platform: string }[];
     if (open.length) {
       // Every platform switched off (paused): leave the slot planned and spend nothing; turning one back on in time resumes it.
-      const paused = !open.some((o) => (config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled);
-      if (!paused && (error === null || updated_at <= retryAfter)) planned.push({ id });
+      const off = !open.some((o) => (config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled);
+      if (!off && !held && (error === null || updated_at <= retryAfter)) planned.push({ id, kind });
     } else {
-      // Past lateness with every pending row on a platform that is switched off: failed quietly as 'paused'.
+      // Past lateness while daily posts are stopped, or with every pending row on a platform that is switched off: failed quietly as 'paused'.
       const rows = db.prepare("SELECT platform FROM publications WHERE slot_id = ? AND state = 'pending'").all(id) as { platform: string }[];
-      const paused = rows.length > 0 && rows.every((o) => !(config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled);
-      db.prepare("UPDATE slots SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'planned'").run(paused ? 'paused' : 'too late', now.toISOString(), id);
-      if (paused) continue;
+      const quiet = held || (rows.length > 0 && rows.every((o) => !(config.platforms as Record<string, { enabled: boolean }>)[o.platform]?.enabled));
+      db.prepare("UPDATE slots SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'planned'").run(quiet ? 'paused' : 'too late', now.toISOString(), id);
+      if (quiet) continue;
       await alert(db, 'produce_failed', id, `${id} was not produced: too late`, now);
     }
   }
   // Production runs in a child process so publishing continues meanwhile. `wait` (run --once) drains every planned slot first.
-  if (deps.wait) for (const { id } of planned) await deps.producer.start(id, now);
-  else if (planned.length && !deps.producer.busy()) void deps.producer.start(planned[0].id, now);
+  // Stop is read again right before each paid start, so pressing it during this tick prevents the spawn (D-45).
+  const mayStart = (s: { kind: string }) => s.kind !== 'planned' || !autoPaused(db);
+  if (deps.wait) for (const s of planned) { if (mayStart(s)) await deps.producer.start(s.id, now); }
+  else if (planned.length && !deps.producer.busy() && mayStart(planned[0])) void deps.producer.start(planned[0].id, now);
 
   await holdsTick(db, config, now);
   await publishDue(db, config, deps.publishers, now, deps.clock);

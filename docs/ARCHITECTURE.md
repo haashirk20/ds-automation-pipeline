@@ -42,7 +42,8 @@ The whole flow, top to bottom. Text boxes name the config key of the model that 
  admin container -- no API keys, read-only root, own network, 127.0.0.1:8080 only
    pages: Overview  Factory  Settings  Prompts  Posts  Music  Models  Activity  History
    writes: config_versions, text_versions (house video ugc copy hooks script note:*),
-           manual slots and hold decisions, music_tracks + data/music/*.m4a, video_models
+           manual slots and hold decisions, music_tracks + data/music/*.m4a, video_models,
+           kv auto_paused (Stop / Start daily posts, D-45)
    reads:  out/ renders (read-only) for the preview player; runs ffmpeg on uploads
    |
    v  SQLite data/pipeline.db (WAL): the only channel; the pipeline rereads it every tick
@@ -50,6 +51,7 @@ The whole flow, top to bottom. Text boxes name the config key of the model that 
  pipeline container -- one process, one tick every 60 s (src/scheduler/loop.ts)
    1 config = file + active override; prompts = files + active versions
    2 plan tomorrow's slots at produceAt      3 start one producer child (manual first)
+     (2 and 3 skip daily posts while kv auto_paused is set; manual slots still run)
    4 holds: alert waiting, expire old        5 publishDue
    6 snapshot, housekeeping, daily summary, heartbeat, healthchecks.io ping
    |
@@ -221,6 +223,7 @@ override clock when the child starts, so a later child of `run --once` never run
 
 | Step in the tick | Does |
 |---|---|
+| Stopped by the owner | `autoPaused(db)` (`kv auto_paused`, D-45) is read at the start of the tick and of `publishDue`. While it is set: no planning, no production of `kind='planned'` slots (manual ones still run), a planned slot past lateness fails quietly as `paused`, and `publishDue` claims no new row of a planned slot. A row with a stored handle still runs and stale recovery is unchanged, so an earlier attempt is always reconciled. Overdue rows of planned slots without a handle are skipped quietly as `paused`. Holds, snapshot, housekeeping, summary, ingest and heartbeat run as usual. The stop is read live before each claim and each producer start. On Start the key is deleted and planning resumes on the next tick; held rows still within lateness go out, ones already past it were ended as `paused` |
 | Plan | Creates slot and publication rows as described above |
 | Stale recovery | A `producing` slot not touched for `render.produceTimeoutMinutes` (90) goes back to `planned`, or fails with an alert once `attempt` reaches `render.maxAttempts` (2) |
 | Produce | Starts one child process for the oldest planned slot if none is running, a manual slot first. A planned slot that has an error waits 10 minutes after the attempt ended (not after it was claimed). A planned slot with no pending publication inside the lateness window fails as "too late" |

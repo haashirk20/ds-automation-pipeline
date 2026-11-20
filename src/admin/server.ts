@@ -31,7 +31,8 @@ const HEADERS: Record<string, string> = {
   'cross-origin-resource-policy': 'same-origin',
 };
 
-type Route = { h: (c: Ctx) => Res | Promise<Res> };
+// `back` is the page to return to (see `back` in handle()), for buttons that sit on several pages.
+type Route = { h: (c: Ctx, back: string) => Res | Promise<Res> };
 const ROUTES: Record<string, Route> = {
   'GET /': { h: pages.overviewPage },
   'GET /overview': { h: pages.overviewPage },
@@ -78,6 +79,8 @@ const ROUTES: Record<string, Route> = {
   'GET /activity': { h: pages.activityPage },
   'GET /history': { h: pages.historyPage },
   'POST /history/activate': { h: pages.historyActivate },
+  'POST /auto/stop': { h: pages.autoStop },
+  'POST /auto/start': { h: pages.autoStart },
 };
 
 // Multipart routes, each with its own body limit.
@@ -208,7 +211,7 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
       return { status: 303, headers: { location: '/login?msg=out', 'set-cookie': clearCookie() } };
     }
   }
-  return route!.h({ db, now, method, path, query: url.searchParams, form, csrf: session.csrf, range: (req.headers.range as string | undefined) ?? null });
+  return route!.h({ db, now, method, path, query: url.searchParams, form, csrf: session.csrf, range: (req.headers.range as string | undefined) ?? null }, back.href);
 }
 
 // secure: the login came with an https Origin (Tailscale serve); the Origin header is the only signal trusted.

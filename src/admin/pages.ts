@@ -1,7 +1,7 @@
 import raw from '../../config/pipeline.config.ts';
 import { parseConfig, type Config } from '../config/index.ts';
-import { activateConfig, effectiveConfig, limits, loadEffectiveConfig, saveConfig } from '../config/overrides.ts';
-import { kvGet, migrate, type Db } from '../db/index.ts';
+import { activateConfig, audit, effectiveConfig, limits, loadEffectiveConfig, saveConfig } from '../config/overrides.ts';
+import { autoPaused, kvGet, kvSet, migrate, type Db } from '../db/index.ts';
 import { loadCustomModels, type TierDef } from '../config/models.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { activateText, EDITABLE_TEXT, fileText as promptFile, isEditable, loadPrompts, saveText, systemPrompt, usePrompts } from '../llm/prompts.ts';
@@ -13,7 +13,7 @@ import { addDays, localDateOf } from '../scheduler/time.ts';
 import type { Brief } from '../contracts.ts';
 import { foldDiff, lineDiff } from './diff.ts';
 import { html, raw as rawHtml, Raw } from './html.ts';
-import { badge, confirmRemove, empty, errSummary, flash, fmtDate, fmtLocal, formRow, money, toggle, type FieldErr } from './ui.ts';
+import { badge, confirmRemove, empty, errSummary, flash, fmtDate, fmtLocal, formRow, money, notice, toggle, type FieldErr } from './ui.ts';
 
 export type Ctx = {
   db: Db;
@@ -60,8 +60,14 @@ export function layout(ctx: Ctx | null, title: string, active: string, body: Raw
 <div class="nav-wide">${PRIMARY.map(link)}<details class="more"><summary>More</summary><div class="drop">${MORE.map(link)}<hr>${logout}</div></details></div>
 <details class="menu"><summary>Menu</summary><div class="drop">${PRIMARY.map(link)}<hr>${MORE.map(link)}<hr>${logout}</div></details></nav></header>`
     : '';
+  // D-45: the flash after Stop or Start shows only while it is still true, so a reload never claims a stale change.
+  const paused = ctx?.csrf ? !!autoPaused(ctx.db) : false;
+  const m = ctx?.csrf ? ctx.query.get('msg') : null;
+  const autoMsg = m === 'auto-stopped' && paused ? flash('ok', 'Daily posts stopped.') : m === 'auto-started' && ctx?.csrf && !paused ? flash('ok', 'Daily posts are on again.') : '';
+  // Home and Videos carry the full control; every other page gets one line.
+  const autoLine = paused && active !== '/overview' && active !== '/posts' ? html`<p class="flash warn"><span class="icon" aria-hidden="true">!</span><span>Daily posts are stopped. <a href="/overview#auto">Start them on Home</a>.</span></p>` : '';
   const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|Add|History of|Check)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
-  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad factory</title><link rel="stylesheet" href="/style.css">${head}</head><body><a class="skip" href="#main">Skip to content</a>${nav}<main id="main" tabindex="-1">${opts.h1 === false ? '' : html`<h1>${title}</h1>`}${help}${body}</main></body></html>`);
+  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad factory</title><link rel="stylesheet" href="/style.css">${head}</head><body><a class="skip" href="#main">Skip to content</a>${nav}<main id="main" tabindex="-1">${opts.h1 === false ? '' : html`<h1>${title}</h1>`}${help}${autoMsg}${autoLine}${body}</main></body></html>`);
 }
 
 export const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
@@ -697,7 +703,8 @@ export async function overviewPage(ctx: Ctx): Promise<Res> {
   try { st = JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}'); } catch { /* none */ }
   const hb = kvGet(ctx.db, 'heartbeat');
   const age = hb ? Math.round((ctx.now.getTime() - Date.parse(hb)) / 1000) : null;
-  const next = ctx.db.prepare("SELECT slot_id, platform, scheduled_at FROM publications WHERE state = 'pending' AND scheduled_at > ? ORDER BY scheduled_at LIMIT 1").get(ctx.now.toISOString()) as { slot_id: string; platform: string; scheduled_at: string } | undefined;
+  const paused = autoPaused(ctx.db);
+  const next = nextPost(ctx.db, ctx.now, !!paused);
   const attention = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const cv = st.configVersion;
   const refused = typeof cv === 'string' && cv.startsWith('refused');
@@ -711,15 +718,17 @@ export async function overviewPage(ctx: Ctx): Promise<Res> {
   const alive = age !== null && age <= 300;
   // A factory that is not running needs the owner too; the headline says so, and the badge only shows when all is running.
   const down = age === null ? 'has not started yet' : !alive ? 'has stopped' : null;
-  const needs = attention + waiting + (down ? 1 : 0);
-  const headline = down ? `The factory ${down}.` : needs ? `${needs} thing${needs === 1 ? ' needs' : 's need'} you.` : 'All good.';
+  // Stopped by the owner counts as something to look at, but it is not the factory being down.
+  const needs = attention + waiting + (down ? 1 : 0) + (paused ? 1 : 0);
+  const headline = down ? `The factory ${down}.` : paused && needs === 1 ? 'Daily posts are stopped.' : needs ? `${needs} thing${needs === 1 ? ' needs' : 's need'} you.` : 'All good.';
   const tile = (cls: string, label: string, value: string, sub: string, href: string) => html`<a class="tile ${cls}" href="${href}"><span class="tile-l">${label}</span><span class="tile-v">${value}</span><span class="tile-s">${sub}</span></a>`;
   return layout(ctx, 'Home', '/overview', html`${st.dryRun ? flash('warn', 'Practice mode is on.', 'Videos are made, and paid clips still cost money, but nothing is posted.') : ''}
 ${refused ? flash('bad', 'Your saved settings could not be used, so the defaults are running.', html`Open <a href="/history">Change history</a>.`) : ''}
-<div class="headline"><p>${headline}</p>${alive ? badge('ok', 'Factory running') : ''}</div>
+<div class="headline"><p>${headline}</p>${alive ? (paused ? badge('warn', 'Factory running · daily posts stopped') : badge('ok', 'Factory running')) : ''}</div>
+${autoControl(ctx, tz)}
 <div class="tiles">
-${tile(attention || (age !== null && !alive) ? 'bad' : waiting || down ? 'warn' : 'ok', 'Needs you', needs ? String(needs) : 'Nothing', attention ? `${attention} post${attention === 1 ? '' : 's'} need checking` : down ? `The factory ${down}` : waiting ? `${waiting} video${waiting === 1 ? '' : 's'} waiting for Post it or Discard` : 'All clear', attention ? '/activity' : waiting ? '/posts' : down ? '/factory' : '/posts')}
-${tile('', 'Next post', next ? fmtLocal(next.scheduled_at, tz) : 'None', next ? (PNAME[next.platform] ?? next.platform) : 'Nothing is scheduled', '/activity')}
+${tile(attention || (age !== null && !alive) ? 'bad' : waiting || down || paused ? 'warn' : 'ok', 'Needs you', needs ? String(needs) : 'Nothing', (attention ? `${attention} post${attention === 1 ? '' : 's'} need checking` : down ? `The factory ${down}` : waiting ? `${waiting} video${waiting === 1 ? '' : 's'} waiting for Post it or Discard` : paused ? 'Daily posts stopped' : 'All clear') + (paused && (attention || down || waiting) ? ' · Daily posts stopped' : ''), attention ? '/activity' : waiting ? '/posts' : down ? '/factory' : paused ? '#auto' : '/posts')}
+${tile('', 'Next post', next ? fmtLocal(next.scheduled_at, tz) : 'None', next ? (PNAME[next.platform] ?? next.platform) : paused ? 'Daily posts are stopped' : 'Nothing is scheduled', '/activity')}
 ${tile('', 'Today', `${made} made · ${posted} posted`, 'Videos made, posts sent', '/activity')}
 ${tile(llm + clips > 0.9 * (cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2) ? 'warn' : '', 'Spent this month', `${money(llm + clips)} of $${cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2}`, `AI writing ${money(llm)} · Video clips ${money(clips)}`, '/activity')}
 </div>
@@ -739,6 +748,45 @@ ${tile(llm + clips > 0.9 * (cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2) ? 'war
 <tr><th scope="row">Needs attention</th><td>${attention ? html`${badge('bad', String(attention))} <a href="/activity">See Activity log</a>` : '0'}</td></tr>
 <tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
 </tbody></table></div></details>`);
+}
+
+// ---------- stop and start daily posts (D-45) ----------
+
+// The next publication still going out: while stopped, only "Make a video now" videos post.
+export function nextPost(db: Db, now: Date, paused: boolean) {
+  return db.prepare(`SELECT p.slot_id, p.platform, p.scheduled_at FROM publications p JOIN slots s ON s.id = p.slot_id WHERE p.state = 'pending' AND p.scheduled_at > ?${paused ? " AND s.kind = 'manual'" : ''} ORDER BY p.scheduled_at LIMIT 1`).get(now.toISOString()) as { slot_id: string; platform: string; scheduled_at: string } | undefined;
+}
+
+// The on/off control for the daily posts. Home shows it as a card; Videos passes compact.
+export function autoControl(ctx: Ctx, tz: string, compact = false): Raw {
+  const paused = autoPaused(ctx.db);
+  if (paused) {
+    const since = fmtLocal(paused.at, tz);
+    return html`<div id="auto">${notice('auto-h', `Daily posts are stopped${since ? ` (since ${since})` : ''}.`, html`Post 1 and Post 2 are not made or posted. Make a video now and Post it still work. Posts due while stopped are skipped, not sent later.<div class="actions"><form method="post" action="/auto/start">${csrfField(ctx)}<button class="primary" type="submit">Start daily posts</button></form></div>`)}</div>`;
+  }
+  const text = 'Stopping skips Post 1 and Post 2 until you start again; skipped posts are not sent later.';
+  const form = html`<form method="post" action="/auto/stop">${csrfField(ctx)}<button type="submit">Stop daily posts</button></form>`;
+  return compact ? html`<div id="auto" class="actions auto-compact"><span><strong>Daily posts are on.</strong> ${text}</span>${form}</div>` : html`<section id="auto" class="card" aria-labelledby="auto-h"><h2 id="auto-h">Daily posts are on</h2><p>${text}</p><div class="actions">${form}</div></section>`;
+}
+
+// Back to the page the button was on, with the flash. `back` is the server's safe same-site path.
+const withMsg = (back: string, msg: string): string => {
+  const u = new URL(back, 'http://x');
+  u.searchParams.set('msg', msg);
+  return u.pathname + u.search;
+};
+
+export function autoStop(ctx: Ctx, back = '/overview'): Res {
+  if (!autoPaused(ctx.db)) {
+    kvSet(ctx.db, 'auto_paused', JSON.stringify({ at: ctx.now.toISOString() }));
+    audit(ctx.db, 'admin', 'auto.stop', 'auto_paused', {}, ctx.now);
+  }
+  return redirect(withMsg(back, 'auto-stopped'));
+}
+
+export function autoStart(ctx: Ctx, back = '/overview'): Res {
+  if (ctx.db.prepare("DELETE FROM kv WHERE key = 'auto_paused'").run().changes) audit(ctx.db, 'admin', 'auto.start', 'auto_paused', {}, ctx.now);
+  return redirect(withMsg(back, 'auto-started'));
 }
 
 // ---------- activity log ----------
@@ -771,11 +819,13 @@ export async function activityPage(ctx: Ctx): Promise<Res> {
     else lateBy.set(p.slot_id, { p, platforms: [PNAME[p.platform] ?? p.platform] });
   }
   const late = [...lateBy.values()];
+  const paused = !!autoPaused(ctx.db);
   const hb = kvGet(ctx.db, 'heartbeat');
   const factoryUp = !!hb && ctx.now.getTime() - Date.parse(hb) <= 300_000;
   const problems = pubQ("p.state = 'needs_attention'", 'p.scheduled_at DESC', 30);
   const posted = pubQ("p.state = 'published' AND p.published_at >= ?", 'p.published_at DESC', 50, weekAgo);
-  const failed = slots.filter((s) => s.status === 'failed');
+  // 'paused': not made because the owner stopped daily posts or switched every platform off, which is not a problem.
+  const failed = slots.filter((s) => s.status === 'failed' && s.error !== 'paused');
   const pubs = ctx.db.prepare("SELECT slot_id, platform, state, scheduled_at, post_url, error FROM publications ORDER BY (state = 'needs_attention') DESC, scheduled_at DESC LIMIT 60").all() as { slot_id: string; platform: string; state: string; scheduled_at: string; post_url: string | null; error: string | null }[];
   const events = ctx.db.prepare('SELECT ts, kind, key, message, delivered FROM events ORDER BY id DESC LIMIT 50').all() as { ts: string; kind: string; key: string; message: string; delivered: number }[];
   const t2n = (ctx.db.prepare("SELECT COUNT(*) AS n FROM spend WHERE tier = 't2' AND state != 'rejected' AND created_at >= ?").get(new Date(Date.UTC(ctx.now.getUTCFullYear(), ctx.now.getUTCMonth(), 1)).toISOString()) as { n: number }).n;
@@ -784,10 +834,10 @@ export async function activityPage(ctx: Ctx): Promise<Res> {
   const problemRows = [
   ...problems.map((p) => ({ t: p.scheduled_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${PNAME[p.platform] ?? p.platform}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('bad', 'Needs you')}</td><td data-label="To do">Check the post on ${PNAME[p.platform] ?? p.platform}; if it is not there, ask for help. It is never re-posted automatically.${raw(p.error)}</td></tr>` })),
   ...failed.map((s) => ({ t: s.updated_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(s.updated_at, tz)}</td><td data-label="What">${postName(s.kind, s.idx)} video</td><td data-label="Status">${badge('bad', 'Failed')}</td><td data-label="To do">The video could not be made, so nothing was posted. Nothing to do unless it keeps happening.${raw(s.error)}</td></tr>` })),
-  ...late.map(({ p, platforms }) => ({ t: p.scheduled_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${platforms.join(', ')}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('warn', 'Late: not sent yet')}</td><td data-label="To do">${factoryUp ? html`This post was due and has not gone out. The factory sends it on its next check; if it is still here in an hour, ask for help.` : html`This post was due, and the factory is not running. Start the factory (see <a href="/overview">Home</a>), then ask for help if it is still here.`}</td></tr>` })),
+  ...late.map(({ p, platforms }) => ({ t: p.scheduled_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${platforms.join(', ')}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('warn', 'Late: not sent yet')}</td><td data-label="To do">${paused && p.kind === 'planned' ? html`Held because daily posts are stopped. Start them on <a href="/overview#auto">Home</a>; if it is too late by then, it is skipped, not sent later.` : factoryUp ? html`This post was due and has not gone out. The factory sends it on its next check; if it is still here in an hour, ask for help.` : html`This post was due, and the factory is not running. Start the factory (see <a href="/overview">Home</a>), then ask for help if it is still here.`}</td></tr>` })),
   ].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
   return layout(ctx, 'Activity log', '/activity', html`
-<section><h2>Coming up</h2>${upcoming.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th><th scope="col">Product</th></tr></thead><tbody>${upcoming.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${postName(p.kind, p.idx)}</td><td data-label="Product">${p.title ?? ''}</td></tr>`)}</tbody></table></div>` : empty(`Nothing is scheduled yet. Tomorrow's videos are made at ${cfg.produceAt}.`)}</section>
+<section><h2>Coming up</h2>${paused ? html`<p class="hint">Post 1 and Post 2 below do not go out while daily posts are stopped.</p>` : ''}${upcoming.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th><th scope="col">Product</th></tr></thead><tbody>${upcoming.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${postName(p.kind, p.idx)}</td><td data-label="Product">${p.title ?? ''}</td></tr>`)}</tbody></table></div>` : empty(`Nothing is scheduled yet. Tomorrow's videos are made at ${cfg.produceAt}.`)}</section>
 <section><h2>Problems</h2>${problems.length || failed.length || late.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Status</th><th scope="col">What to do</th></tr></thead><tbody>
 ${problemRows.map((r) => r.row)}
 </tbody></table></div>` : empty('No problems this week.')}</section>

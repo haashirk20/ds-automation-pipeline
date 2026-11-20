@@ -7,7 +7,7 @@ import { audit, loadEffectiveConfig } from '../config/overrides.ts';
 import { approveHold, discardHold, manualToday, planManual } from '../scheduler/holds.ts';
 import { html, raw } from './html.ts';
 import { inside, SLOT_ID } from './media.ts';
-import { csrfField, dryRunOn, layout, PNAME, redirect, type Ctx, type Res } from './pages.ts';
+import { autoControl, csrfField, dryRunOn, layout, PNAME, redirect, type Ctx, type Res } from './pages.ts';
 import { badge, confirmRemove, empty, flash, fmtLocal, formRow, money, type Kind } from './ui.ts';
 
 const VIS: Record<string, string> = { public: 'everyone', private: 'only me' };
@@ -70,7 +70,7 @@ export async function postsPage(ctx: Ctx): Promise<Res> {
   // Reloading while a video is waiting would cut off someone watching it, and a dead factory would reload forever: refresh only when nothing waits and the factory is alive.
   const head = inFlight && !waiting.length && alive ? raw('<meta http-equiv="refresh" content="30;url=/posts">') : '';
   const refreshLink = inFlight && (waiting.length || !alive) ? html`<p class="hint">${!alive ? 'Your video is queued. The factory is not running, so it will start when the factory does.' : msg === 'made' ? 'Your video is queued.' : 'A video is being made.'} <a href="/posts">Refresh</a> to check on it.</p>` : '';
-  return layout(ctx, 'Videos', '/posts', html`${top}${refreshLink}${dry ? flash('warn', 'Practice mode is on.', 'The clip is still made and paid for, but Post it sends nothing.') : ''}
+  return layout(ctx, 'Videos', '/posts', html`${top}${refreshLink}${dry ? flash('warn', 'Practice mode is on.', 'The clip is still made and paid for, but Post it sends nothing.') : ''}${autoControl(ctx, tz, true)}
 <section><h2>Waiting for you</h2>${waiting.length ? waiting.map((s) => html`<div class="card media-row"><video controls preload="metadata" playsinline src="/media/render?slot=${encodeURIComponent(s.id)}"></video>
 <div>${s.product ? html`<p><strong>${s.product}</strong></p>` : ''}<p>${caption(s.master_json)}</p>
 <p class="hint">Made ${fmtLocal(s.held_at, tz)}. Thrown away automatically after ${cfg.approval.expireHours} hours if you do nothing.</p>

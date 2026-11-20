@@ -102,6 +102,7 @@ button.link.danger,.btn.link.danger{color:var(--danger);background:none}
 button:disabled{opacity:.55;cursor:not-allowed;filter:none}
 .actions{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;margin-top:var(--space-4)}
 .actions form{margin:0}
+.auto-compact{margin-bottom:var(--space-6)}
 .apart{margin-left:auto}
 
 /* confirmation for destructive actions: open the details, then press the real button */

@@ -49,3 +49,16 @@ export function kvGet(db: Db, key: string): string | undefined {
 export function kvSet(db: Db, key: string, value: string): void {
   db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
 }
+
+// D-45: the owner pressed "Stop daily posts" on the admin. Absent means running. A value that does not
+// parse still counts as stopped, so a damaged key never starts posting.
+export function autoPaused(db: Db): { at: string } | null {
+  const v = kvGet(db, 'auto_paused');
+  if (v === undefined) return null;
+  try {
+    const at = JSON.parse(v)?.at;
+    return { at: typeof at === 'string' ? at : '' };
+  } catch {
+    return { at: '' };
+  }
+}

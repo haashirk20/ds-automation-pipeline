@@ -2,13 +2,13 @@
 // pipeline's state as a game would (a quest log, gold spent, a chat feed). The page reads the database only.
 import { readFileSync } from 'node:fs';
 import { loadEffectiveConfig } from '../config/overrides.ts';
-import { kvGet, type Db } from '../db/index.ts';
+import { autoPaused, kvGet, type Db } from '../db/index.ts';
 import { monthSpend } from '../llm/client.ts';
 import { monthSpendUsd } from '../router/index.ts';
 import { localDateOf } from '../scheduler/time.ts';
 import { activeHandles } from '../shopify/catalog.ts';
 import { html, type Raw } from './html.ts';
-import { layout, PNAME, type Ctx, type Res } from './pages.ts';
+import { layout, nextPost, PNAME, type Ctx, type Res } from './pages.ts';
 import { fmtLocal } from './ui.ts';
 
 export type ChatLine = { ts: string; who: string; text: string; kind: 'post' | 'make' | 'scrap' | 'alert' };
@@ -43,7 +43,7 @@ export async function townState(db: Db, now: Date): Promise<TownState> {
   const hb = kvGet(db, 'heartbeat');
   const age = hb ? Math.round((now.getTime() - Date.parse(hb)) / 1000) : null;
   const one = (sql: string, ...a: string[]) => (db.prepare(sql).get(...a) as { n: number }).n;
-  const nextRow = db.prepare("SELECT platform, scheduled_at FROM publications WHERE state = 'pending' AND scheduled_at > ? ORDER BY scheduled_at LIMIT 1").get(now.toISOString()) as { platform: string; scheduled_at: string } | undefined;
+  const nextRow = nextPost(db, now, !!autoPaused(db)); // as on Home: while stopped, only manual videos go out
   const attention = one("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'");
   const waiting = one("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'");
   const today = localDateOf(now, cfg.timezone);
@@ -61,6 +61,7 @@ export async function townState(db: Db, now: Date): Promise<TownState> {
   if (refused) quests.push({ text: 'The town hall refused the saved settings: pick a version in the archive', href: '/history', urgent: true });
   if (!handles.length) quests.push({ text: 'Stock the market: add a product', href: '/products', urgent: true });
   if (!alive) quests.push({ text: age === null ? 'The factory has not run yet. Ask whoever set it up to start it.' : 'The factory has stopped. Ask whoever set it up to restart it.', href: null, urgent: true });
+  if (autoPaused(db)) quests.push({ text: 'Daily posts are stopped: start them again at home', href: '/overview#auto', urgent: false });
   if (!platforms.length) quests.push({ text: 'Open a shipping route: switch a platform on at the town hall', href: '/settings', urgent: false });
   if (!quests.length) quests.push({ text: 'Make a video now at the post office', href: '/posts', urgent: false });
 
@@ -134,6 +135,7 @@ ${bar('hp', 'Factory', s.alive ? 100 : 15, s.age === null ? 'Not started yet' : 
 ${bar('mp', 'Budget', 100 - pct(spent, cap), `${money(cap - spent)} left`)}</div></div>
 <div class="hud hud-gold" title="Spent this month on writers and clips"><span class="coin" aria-hidden="true"></span><b data-gold>${money(spent)}</b><small>of ${money(cap)}</small></div>
 ${s.dryRun ? html`<div class="hud hud-mode">Practice mode: nothing is published</div>` : ''}
+${autoPaused(ctx.db) ? html`<div class="hud hud-mode">Daily posts: stopped by you</div>` : ''}
 </div>
 <canvas id="town" class="tw" width="544" height="320" tabindex="0" role="img" aria-label="The town square seen from above. Each building is a page: walk your character to a door, or click a building, to go in. The list of buildings below the town has the same places." data-state="${JSON.stringify(s)}">The town needs JavaScript and canvas. Use the list of buildings below.</canvas>
 <p class="town-hint" data-hint>Walk with the arrow keys or WASD. Press E at a door to go in, or just click a building. The list of buildings below has the same places.</p>

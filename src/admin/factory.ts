@@ -1,12 +1,12 @@
 // The Factory page: the pipeline drawn as a factory floor. Each slot is a crate that rides a conveyor
 // belt from station to station. The page reads the database only; it never writes and never calls out.
 import { readFileSync } from 'node:fs';
-import { kvGet, type Db } from '../db/index.ts';
+import { autoPaused, kvGet, type Db } from '../db/index.ts';
 import { loadEffectiveConfig } from '../config/overrides.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import { html } from './html.ts';
 import { layout, PNAME, type Ctx, type Res } from './pages.ts';
-import { fmtLocal } from './ui.ts';
+import { badge, fmtLocal } from './ui.ts';
 
 export const STAGES = ['dock', 'design', 'foundry', 'inspect', 'paint', 'label', 'gate', 'shipping'] as const;
 export type Stage = (typeof STAGES)[number] | 'shipped' | 'scrap';
@@ -134,11 +134,13 @@ export const FACTORY_CSP = "default-src 'none'; script-src 'self'; connect-src '
 export async function factoryPage(ctx: Ctx): Promise<Res> {
   const st = await factoryState(ctx.db, ctx.now);
   const demo = ctx.query.get('demo') === '1';
+  const paused = !!autoPaused(ctx.db);
   const active = st.slots.filter((s) => s.stage !== 'shipped' && s.stage !== 'scrap').sort((a, b) => (a.when ?? '').localeCompare(b.when ?? ''));
   const name = (s: Stage) => (s === 'shipped' ? 'Shipped' : s === 'scrap' ? 'Thrown away' : STATION[s].name);
   const count = (k: Stage) => st.slots.filter((s) => s.stage === k).length;
   const body = html`<div class="f-bar">
 <span class="f-hb" data-hb>${st.heartbeatAge === null ? 'Factory not started yet' : st.heartbeatAge > 300 ? 'Factory stopped: no sign of life for a while' : 'Factory running'}</span>
+${paused ? html`${badge('warn', 'Daily posts stopped by you')}<a class="btn" href="/overview#auto">Start on Home</a>` : ''}
 <span class="f-up muted" data-updated>Updated ${fmtLocal(st.now, st.tz).slice(-5)}</span>
 <button type="button" class="f-still" data-still aria-pressed="false" hidden>Pause animation</button>
 ${demo ? html`<a class="btn primary f-demo" href="/factory">Demo running: show the real floor</a>` : html`<a class="btn f-demo" href="/factory?demo=1">Run a demo shift</a>`}
@@ -154,7 +156,7 @@ ${STAGES.map((k) => html`<li data-station="${k}"${count(k) ? html` class="busy"`
 <div class="card inspector" data-inspector aria-live="polite"><p class="muted">Click a crate, a machine or a truck on the floor to see what is happening there.</p></div>
 <h2>On the line</h2>
 <div class="scroll"><table><thead><tr><th>Video</th><th>Station</th><th>Caption</th><th>Platforms</th></tr></thead><tbody data-board>
-${active.length ? active.map((s) => html`<tr><td class="nw">${s.name}</td><td>${name(s.stage)}</td><td>${s.caption}</td><td>${s.pubs.map((p) => `${PNAME[p.p] ?? p.p}: ${PUB_WORD[p.s] ?? p.s}`).join(', ')}</td></tr>`) : html`<tr><td colspan="4" class="muted">The line is empty. Nothing is planned or in production.</td></tr>`}
+${active.length ? active.map((s) => html`<tr><td class="nw">${s.name}</td><td>${paused && s.kind === 'planned' && s.stage === 'dock' ? 'Held: stopped by you' : name(s.stage)}</td><td>${s.caption}</td><td>${s.pubs.map((p) => `${PNAME[p.p] ?? p.p}: ${PUB_WORD[p.s] ?? p.s}`).join(', ')}</td></tr>`) : html`<tr><td colspan="4" class="muted">The line is empty. Nothing is planned or in production.</td></tr>`}
 </tbody></table></div>`;
   const r = layout(ctx, 'Factory', '/factory', body, html`<link rel="stylesheet" href="/factory.css"><script src="/factory.js" defer></script>`);
   return { ...r, headers: { ...r.headers, 'content-security-policy': FACTORY_CSP } };

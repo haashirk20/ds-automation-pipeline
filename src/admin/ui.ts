@@ -11,6 +11,11 @@ export function flash(kind: Kind, title: string, detail?: string | Raw | null): 
   return html`<div class="flash ${kind}" role="${role}"><span class="icon" aria-hidden="true">${ICON[kind]}</span><div><strong>${title}</strong>${detail ? html` ${detail}` : ''}</div></div>`;
 }
 
+// A standing warning that is part of the page, not news: flash styling with no live-region role.
+export function notice(id: string, title: string, detail?: string | Raw | null): Raw {
+  return html`<section class="flash warn" aria-labelledby="${id}"><span class="icon" aria-hidden="true">!</span><div><strong id="${id}">${title}</strong>${detail ? html` ${detail}` : ''}</div></section>`;
+}
+
 export type FieldErr = { id?: string; label?: string; msg: string };
 
 // "Not saved. Fix N thing(s):" with a link to each field that has an id.

@@ -1,16 +1,16 @@
-import type { Db } from '../db/index.ts';
+import { autoPaused, type Db } from '../db/index.ts';
 import { env, type Config } from '../config/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log, scrub } from '../ops/log.ts';
 import { Edl } from '../contracts.ts';
 import { AmbiguousError, ClaimLostError, PermanentError, RetryableError, type Publisher } from './types.ts';
 
-type Row = { slot_id: string; platform: string; scheduled_at: string; attempt: number; handle_json: string | null; claimed_at: string | null; file_path: string | null; tier: string | null; title: string | null; caption: string | null; ai_json: string | null };
+type Row = { slot_id: string; kind: string | null; platform: string; scheduled_at: string; attempt: number; handle_json: string | null; claimed_at: string | null; file_path: string | null; tier: string | null; title: string | null; caption: string | null; ai_json: string | null };
 
 // The claim time is the fencing token: every write after a claim must carry it.
 const COLS = new Set(['error', 'post_id', 'post_url', 'published_at', 'next_attempt_at', 'handle_json', 'claimed_at', 'attempt']);
 
-const SELECT = `SELECT p.slot_id, p.platform, p.scheduled_at, p.attempt, p.handle_json, p.claimed_at, r.file_path, s.tier, r.title, r.caption, r.ai_json
+const SELECT = `SELECT p.slot_id, s.kind, p.platform, p.scheduled_at, p.attempt, p.handle_json, p.claimed_at, r.file_path, s.tier, r.title, r.caption, r.ai_json
   FROM publications p
   LEFT JOIN slots s ON s.id = p.slot_id
   LEFT JOIN renders r ON r.slot_id = p.slot_id AND r.platform = p.platform AND r.qa_pass = 1`;
@@ -121,20 +121,28 @@ export async function publishDue(db: Db, config: Config, publishers: Record<stri
   }
 
   // Skip overdue rows and rows of failed slots, one alert per slot.
-  const doomed = db.prepare(`SELECT p.slot_id, p.platform, p.handle_json, CASE WHEN s.status = 'failed' THEN 'slot failed' ELSE 'too late' END AS why
+  const doomed = db.prepare(`SELECT p.slot_id, p.platform, p.handle_json, s.kind, s.error AS serror, CASE WHEN s.status = 'failed' THEN 'slot failed' ELSE 'too late' END AS why
     FROM publications p LEFT JOIN slots s ON s.id = p.slot_id
-    WHERE p.state = 'pending' AND COALESCE(s.hold, '') != 'waiting' AND NOT (s.kind = 'manual' AND s.status IN ('planned','producing')) AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; handle_json: string | null; why: string }[];
+    WHERE p.state = 'pending' AND COALESCE(s.hold, '') != 'waiting' AND NOT (s.kind = 'manual' AND s.status IN ('planned','producing')) AND (p.scheduled_at < ? OR s.status = 'failed')`).all(lateBefore) as { slot_id: string; platform: string; handle_json: string | null; kind: string | null; serror: string | null; why: string }[];
   for (const d of doomed) {
     const state = d.handle_json ? 'needs_attention' : 'skipped';
-    const why = d.handle_json ? `${d.why}, a post request may have been sent` : d.why;
+    // Held by the owner's stop until too late (or its slot failed quietly as 'paused'): nothing was sent, so it ends quietly.
+    // A slot that failed for a real reason keeps its error and alert. The stop is read live (D-45).
+    const held = !d.handle_json && ((d.why === 'too late' && d.kind === 'planned' && !!autoPaused(db)) || d.serror === 'paused');
+    const why = d.handle_json ? `${d.why}, a post request may have been sent` : held ? 'paused' : d.why;
     if (db.prepare("UPDATE publications SET state = ?, error = ? WHERE slot_id = ? AND platform = ? AND state = 'pending'").run(state, why, d.slot_id, d.platform).changes !== 1) continue;
     if (d.handle_json) await alert(db, 'publish_needs_attention', `${d.slot_id}/${d.platform}`, `${d.slot_id} ${d.platform} needs_attention: ${why}`, now);
+    else if (held) log.info('row skipped, daily posts stopped', { slot: d.slot_id, platform: d.platform });
     else if (!config.platforms[d.platform as keyof Config['platforms']]?.enabled) log.info('row skipped, platform disabled', { slot: d.slot_id, platform: d.platform, why: d.why });
     else await alert(db, 'publish_skipped', d.slot_id, `${d.slot_id} skipped: ${d.why}`, now);
   }
 
   const due = db.prepare(SELECT + " WHERE s.status = 'ready' AND r.file_path IS NOT NULL AND COALESCE(s.hold, 'none') IN ('none', 'approved') AND p.state = 'pending' AND p.scheduled_at <= ? AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ?) ORDER BY p.scheduled_at, p.platform").all(ts, ts) as Row[];
   for (const p of due) {
+    // D-45: while the owner has stopped daily posts, daily-post rows are not claimed; manual videos still go out.
+    // A row with a stored handle (an earlier attempt that may have posted) still runs, so it is reconciled. No handle:
+    // nothing was sent, so holding it is safe. Read live per row, so Stop pressed mid-tick holds the rest.
+    if (p.kind === 'planned' && !p.handle_json && autoPaused(db)) continue;
     // Switched off after planning: nothing was sent for this row, so it is skipped. A row with a handle resumes.
     if (!platformCfg(p).enabled && !p.handle_json) {
       db.prepare("UPDATE publications SET state = 'skipped', error = 'platform disabled' WHERE slot_id = ? AND platform = ? AND state = 'pending' AND handle_json IS NULL").run(p.slot_id, p.platform);

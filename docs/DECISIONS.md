@@ -1037,6 +1037,41 @@ pixel style: D-41 chose a plain look for a non-technical owner.
 
 **Cost.** No dependency. About 180 fewer lines of CSS.
 
+## D-45 Owner can stop and start automatic runs (2026-11-19)
+
+**Chosen.** Home has a "Stop daily posts" button (and Videos a compact copy) that writes
+`kv auto_paused` = `{"at": ISO}`; "Start daily posts" deletes the key. `POST /auto/stop` and
+`POST /auto/start` are CSRF-checked like every POST and go back to the page they were pressed on with a
+flash. `autoPaused(db)` in `src/db/index.ts` is the one reader; a value that does not parse counts as
+stopped. While stopped the tick plans nothing and produces no daily post; "Make a video now" still makes
+and posts. `publishDue` claims no new row of a `kind='planned'` slot. It still runs a row that carries a
+stored handle (a stale `uploading` row or a `pending` retry), because that attempt may already have
+posted and must be reconciled; holding rows with no handle is safe, since no handle means nothing was
+sent. A production already running (or already spawned) when Stop is pressed finishes and its posts wait.
+The stop is read live before each claim and before each producer start, so Stop pressed mid-tick holds
+the remaining rows and spawns. Daily posts that
+pass `maxLatenessMinutes` while stopped end quietly with error `paused` and no alert: the slot `failed`
+if it was never made, its rows `skipped`. A row with a handle still goes to `needs_attention` with an
+alert. On Start, held rows still within `maxLatenessMinutes` go out; rows already past it were ended as
+`paused` and are not posted. The owner-facing words are "Daily posts are on" and "Daily posts are
+stopped (since ...)": Post 1 and Post 2 are not made or posted, Make a video now and Post it still work,
+and posts due while stopped are skipped, not sent later. Home puts the control under the headline and
+counts "Daily posts stopped" as one thing needing the owner, apart from "the factory has stopped". The
+stopped banner is a plain labelled section (no live-region role); the flash after pressing is one
+status line shown only while it is still true. Every other page except Videos, which has its own compact
+control, shows one line linking to Home. Factory marks waiting daily posts "Held: stopped by you", Town
+uses Home's next-post logic, and Activity no longer lists `paused` slots as problems.
+
+**Alternatives.** A config flag in the settings form: it goes through the versioned override,
+draft and review flow for what is a one-press, reversible switch, and rolling back an old version would
+silently start or stop posting. Switching every platform off: it also blocks "Make a video now" (the
+button is refused with no platform on), and the owner has to remember which platforms were on.
+
+**Why kv.** One row the admin can write and the tick already rereads every minute, with no
+schema change, no config version and no restart.
+
+**Cost.** No dependency. About 60 lines of code.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).
