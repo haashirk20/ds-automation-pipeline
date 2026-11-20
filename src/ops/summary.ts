@@ -55,7 +55,7 @@ export function buildSummary(db: Db, config: Config, now: Date): string {
 
   const spendLine = (label: string, d: Date, caps: boolean) => {
     const of = (cap: number) => (caps ? ` of $${cap}` : '');
-    return `${label}: model calls $${monthSpend(db, d).toFixed(2)}${of(config.llm.monthlyCapUsd)}, t1 $${monthSpendUsd(db, 't1', d).toFixed(2)}${of(config.tiers.capsUsd.t1)}, t2 $${monthSpendUsd(db, 't2', d).toFixed(2)}${of(config.tiers.capsUsd.t2)}`;
+    return `${label}: model calls $${monthSpend(db, d).toFixed(2)}${of(config.llm.monthlyCapUsd)}, t2 $${monthSpendUsd(db, 't2', d).toFixed(2)}${of(config.tiers.capsUsd.t2)}`;
   };
   L.push(spendLine('Spend this month', now, true));
   if (today.endsWith('-01')) L.push(spendLine('Spend last month', new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15)), false));

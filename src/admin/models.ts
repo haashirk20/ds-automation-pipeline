@@ -4,7 +4,8 @@ import { parseConfig } from '../config/index.ts';
 import { CUSTOM_PARAM_KEYS, customModelProblems, modelInUse, type VideoModelRow } from '../config/models.ts';
 import { audit } from '../config/overrides.ts';
 import { html } from './html.ts';
-import { csrfField, fmtTs, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { csrfField, layout, redirect, type Ctx, type Res } from './pages.ts';
+import { badge, confirmRemove, empty, errSummary, flash, fmtLocal, formRow } from './ui.ts';
 
 type Draft = { name: string; model: string; options: string; maxCredits: string; keepCredits: string };
 
@@ -28,18 +29,20 @@ export function modelsPage(ctx: Ctx, draft: Draft = { name: '', model: '', optio
   const file = parseConfig(raw);
   const rows = ctx.db.prepare('SELECT * FROM video_models ORDER BY id DESC').all() as VideoModelRow[];
   const m = ctx.query.get('msg');
-  const flash = m === 'added' ? html`<p class="notice" role="status">Model added. Try it in a test post on the Posts page.</p>` : m === 'removed' ? html`<p class="notice" role="status">Model removed.</p>` : ctx.query.get('refused') ? html`<p class="error-box" role="alert">Not removed: ${ctx.query.get('refused')!.slice(0, 200)}</p>` : '';
+  const refused = ctx.query.get('refused');
+  const top = m === 'added' ? flash('ok', 'Model added.', 'Try it with "Make a video now" on Videos. Once you post a video made with it, it can be chosen in Settings.') : m === 'removed' ? flash('ok', 'Model removed.', 'Videos already made are not changed.') : refused ? flash('bad', 'Not removed.', refused.slice(0, 200)) : '';
+  const state = (r: VideoModelRow) => (r.removed_at ? badge('neutral', `Removed ${fmtLocal(r.removed_at, file.timezone)}`) : r.approved_at ? badge('ok', 'Ready for Settings') : badge('warn', 'Not tried yet'));
   return {
-    ...layout(ctx, 'Models', '/models', html`${flash}<p>A new model is quoted live before its first job and refused above your limit. Use it in a test post first; after you press Post on one, it can be chosen in Settings.</p>
-<h2>Added models</h2>${rows.length ? html`<div class="scroll"><table><thead><tr><th>Id</th><th>Name</th><th>Model</th><th>Options</th><th>Most credits</th><th>Keep credits</th><th>State</th><th></th></tr></thead><tbody>${rows.map((r) => html`<tr><td>custom:${r.id}</td><td>${r.name}</td><td>${r.model}</td><td><code>${r.params_json}</code></td><td>${r.max_credits}</td><td>${r.keep_credits}</td><td>${r.removed_at ? `removed ${fmtTs(r.removed_at)}` : r.approved_at ? 'approved' : 'untested'}</td><td>${r.removed_at ? '' : html`<form method="post" action="/models/remove">${csrfField(ctx)}<input type="hidden" name="id" value="${r.id}"><button type="submit">Remove</button></form>`}</td></tr>`)}</tbody></table></div>` : html`<p class="muted">None yet.</p>`}
-<h2>Add a model</h2>${errors.length ? html`<div class="error-box" role="alert"><strong>Not added.</strong><ul>${errors.map((e) => html`<li>${e}</li>`)}</ul></div>` : ''}
+    ...layout(ctx, 'Video models (advanced)', '/models', html`${top}<p>A new model's price is checked live before its first clip, and refused above your limit. Try it with "Make a video now" first; after you post a video made with it, it can be chosen in Settings.</p>
+<section><h2>Added models</h2>${rows.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Name</th><th scope="col">Model</th><th scope="col">Options</th><th scope="col">Most credits</th><th scope="col">Keep credits</th><th scope="col">State</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>${rows.map((r) => html`<tr><td data-label="Name">${r.name}</td><td data-label="Model"><code>${r.model}</code></td><td data-label="Options"><code>${r.params_json}</code></td><td data-label="Most credits" class="num">${r.max_credits}</td><td data-label="Keep" class="num">${r.keep_credits}</td><td data-label="State">${state(r)}</td><td>${r.removed_at ? '' : confirmRemove('Remove…', html`<form method="post" action="/models/remove">${csrfField(ctx)}<input type="hidden" name="id" value="${r.id}"><button class="danger" type="submit">Yes, remove ${r.name}</button></form>`)}</td></tr>`)}</tbody></table></div>` : empty('No models added yet. The models from the config file are always available.')}</section>
+<section class="card"><h2>Add a model</h2>${errSummary(errors.map((msg) => ({ msg })), 'Not added.')}
 <form method="post" action="/models/add">${csrfField(ctx)}
-<div class="field"><label for="n">Name</label><div><input id="n" type="text" name="name" value="${draft.name}" maxlength="40"></div></div>
-<div class="field"><label for="m">Higgsfield model id</label><div><input id="m" type="text" name="model" value="${draft.model}"><span class="hint">Lower case letters, digits and underscores, such as wan3_0.</span></div></div>
-<div class="field"><label for="o">Options</label><div><textarea id="o" name="options" class="short" rows="4">${draft.options}</textarea><span class="hint">One key=value per line. Allowed keys: ${CUSTOM_PARAM_KEYS.join(', ')} (at most 6). The clip must keep its sound.</span></div></div>
-<div class="field"><label for="x">Most credits for one clip</label><div><input id="x" type="text" name="maxCredits" value="${draft.maxCredits}" inputmode="decimal"><span class="hint">Above 0 and at most ${file.tiers.customMaxCredits}.</span></div></div>
-<div class="field"><label for="k">Credits to keep in the account</label><div><input id="k" type="text" name="keepCredits" value="${draft.keepCredits}" inputmode="decimal"><span class="hint">At least ${file.tiers.t2.keepCredits}.</span></div></div>
-<div class="actions"><button class="primary" type="submit">Add model</button></div></form>`),
+${formRow({ id: 'n', label: 'Name', control: html`<input id="n" type="text" name="name" value="${draft.name}" maxlength="40">`, hint: 'Your own name for it.' })}
+${formRow({ id: 'm', label: 'Higgsfield model id', control: html`<input id="m" type="text" name="model" value="${draft.model}">`, hint: 'Lower case letters, digits and underscores, such as wan3_0.' })}
+${formRow({ id: 'o', label: 'Options', control: html`<textarea id="o" name="options" class="short" rows="4">${draft.options}</textarea>`, hint: `One key=value per line. Allowed keys: ${CUSTOM_PARAM_KEYS.join(', ')} (at most 6). The clip must keep its sound.` })}
+${formRow({ id: 'x', label: 'Most credits for one clip', control: html`<input id="x" type="text" name="maxCredits" value="${draft.maxCredits}" inputmode="decimal">`, hint: `Above 0 and at most ${file.tiers.customMaxCredits}.` })}
+${formRow({ id: 'k', label: 'Credits to keep in the account', control: html`<input id="k" type="text" name="keepCredits" value="${draft.keepCredits}" inputmode="decimal">`, hint: `At least ${file.tiers.t2.keepCredits}.` })}
+<div class="actions"><button class="primary" type="submit">Add model</button></div></form></section>`),
     status: errors.length ? 422 : 200,
   };
 }

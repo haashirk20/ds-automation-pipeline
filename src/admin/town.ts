@@ -103,14 +103,14 @@ export const TOWN_CSP = "default-src 'none'; script-src 'self'; connect-src 'sel
 // The buildings, in the order the map lists them. The script draws them; this list is also the page's text.
 export const PLACES: { href: string; place: string; page: string; what: string }[] = [
   { href: '/factory', place: 'Factory', page: 'Factory', what: 'Watch each video move down the line, live.' },
-  { href: '/products', place: 'Market', page: 'Products', what: 'Choose what gets videos, add products, set the logo.' },
-  { href: '/posts', place: 'Post office', page: 'Posts', what: 'Make a video now; Post or Discard it.' },
+  { href: '/products', place: 'Market', page: 'Products', what: 'Pick which products get videos and which daily post they go in.' },
+  { href: '/posts', place: 'Post office', page: 'Videos', what: 'Approve videos before they go out, or make one now.' },
   { href: '/settings', place: 'Town hall', page: 'Settings', what: 'Times, platforms and budget, as blocks.' },
   { href: '/music', place: 'Music hall', page: 'Music', what: 'Upload and pick background music.' },
-  { href: '/models', place: 'Wizard tower', page: 'Models', what: 'The video models the factory may use.' },
-  { href: '/prompts', place: 'Library', page: 'Prompts', what: 'What the writers are told, and how each product looks.' },
-  { href: '/activity', place: 'Notice board', page: 'Activity', what: 'Everything made, posted or stuck this week.' },
-  { href: '/history', place: 'Archive', page: 'History', what: 'Earlier settings and a log of every change.' },
+  { href: '/models', place: 'Wizard tower', page: 'Video models', what: 'The video models the factory may use.' },
+  { href: '/prompts', place: 'Library', page: 'Writing instructions', what: 'What the writers are told, and how each product looks.' },
+  { href: '/activity', place: 'Notice board', page: 'Activity log', what: 'Everything made, posted or stuck this week.' },
+  { href: '/history', place: 'Archive', page: 'Change history', what: 'Earlier settings and a log of every change.' },
 ];
 
 const money = (n: number) => '$' + n.toFixed(2);
@@ -130,7 +130,7 @@ ${bar('mp', 'Budget', 100 - pct(spent, cap), `${money(cap - spent)} left`)}</div
 <div class="hud hud-gold" title="Spent this month on writers and clips"><span class="coin" aria-hidden="true"></span><b data-gold>${money(spent)}</b><small>of ${money(cap)}</small></div>
 ${s.dryRun ? html`<div class="hud hud-mode">Practice mode: nothing is published</div>` : ''}
 </div>
-<canvas id="town" class="tw" width="544" height="320" tabindex="0" role="img" aria-label="The town square seen from above. Each building is a page: walk your character to a door, or click a building, to go in. The map in the header lists the same places." data-state="${JSON.stringify(s)}">The town needs JavaScript and canvas. Use the Map in the header, or the list below.</canvas>
+<canvas id="town" class="tw" width="544" height="320" tabindex="0" role="img" aria-label="The town square seen from above. Each building is a page: walk your character to a door, or click a building, to go in. The list of buildings below the town has the same places." data-state="${JSON.stringify(s)}">The town needs JavaScript and canvas. Use the list of buildings below.</canvas>
 <p class="town-hint" data-hint>Walk with the arrow keys or WASD. Press E at a door to go in, or just click a building.</p>
 </div>
 <aside class="town-side">
@@ -143,6 +143,6 @@ ${s.dryRun ? html`<div class="hud hud-mode">Practice mode: nothing is published<
 </aside>
 </div>
 <nav class="town-dir" aria-label="Buildings"><h2>Buildings</h2><ul>${PLACES.map((p) => html`<li><a href="${p.href}"><b>${p.place}</b> <span class="muted">${p.page}</span><small>${p.what}</small></a></li>`)}</ul></nav>`;
-  const r = layout(ctx, 'Town square', '/overview', body, html`<link rel="stylesheet" href="/town.css"><script src="/town.js" defer></script>`);
+  const r = layout(ctx, 'Town square', '/town', body, html`<link rel="stylesheet" href="/town.css"><script src="/town.js" defer></script>`);
   return { ...r, headers: { ...r.headers, 'content-security-policy': TOWN_CSP } };
 }

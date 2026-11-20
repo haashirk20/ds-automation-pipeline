@@ -24,7 +24,7 @@ const LOCKED: [string, string][] = [
   ['publish', 'Retry and timeout rules keep posts from doubling.'], ['disclosure', 'AI disclosure follows the platform rules.'], ['DRY_RUN', 'Set in the environment.'],
   ['timezone', 'Slot times and the database use it.'], ['render', 'The timeouts are tied to the video job limits.'], ['watchdogMinutes', 'Tied to the tick length.'],
   ['creative.mode', 'Changes the whole pipeline.'], ['tiers.clipSeconds', 'Tied to the concept and the model.'], ['tiers.t2.params', 'Free-form model parameters are not checked.'],
-  ['tiers.t1', 'No provider exists for it.'], ['tiers.capsUsd.t1', 'No provider exists for it.'], ['brand', 'Brand name and logo are set in the file.'],
+  ['brand', 'Brand name and logo are set in the file.'],
   ['approval.expireHours', 'Held clips are paid for; the expiry is set in the file.'], ['tiers.usdPerCredit', 'The plan price per credit is set in the file.'], ['tiers.customMaxCredits', 'The ceiling for added models is set in the file.'],
   ['photo-tags.json', 'Set in the file.'], ...PLATFORMS.map((p): [string, string] => [`platforms.${p}.handle`, 'The account name at the bridge.']),
 ];
@@ -74,8 +74,8 @@ export function effectiveConfig(fileRaw: unknown, o: Record<string, unknown>, cu
     merged.tiers.t2 = structuredClone(custom ? customs[preset] : merged.tiers.t2Presets[preset]);
   }
   for (const [p, v] of Object.entries(o)) if (p !== 'tiers.t2Preset') setPath(merged, p, v);
-  // The GUI sets the share of reused clips; the rest is tier 2 and tier 1 stays off.
-  if (typeof o['tiers.mix.t0'] === 'number') Object.assign(merged.tiers.mix, { t1: 0, t2: 1 - o['tiers.mix.t0'] });
+  // The GUI sets the share of reused clips; the rest is tier 2.
+  if (typeof o['tiers.mix.t0'] === 'number') merged.tiers.mix.t2 = 1 - o['tiers.mix.t0'];
 
   let c: Config;
   try {
@@ -112,9 +112,12 @@ const activeId = (db: Db): number | null => {
   const v = kvGet(db, 'config_active');
   return v === undefined ? null : Number(v);
 };
+// Config keys that were removed (D-42). A stored version may still name them; they are dropped on load.
+const REMOVED = ['tiers.t1', 'tiers.mix.t1', 'tiers.capsUsd.t1', 'llm.models.escalation', 'llm.escalationEnabled'];
 const overridesOf = (db: Db, id: number | null): Record<string, unknown> => {
   const r = id === null ? undefined : (db.prepare('SELECT overrides_json FROM config_versions WHERE id = ?').get(id) as { overrides_json: string } | undefined);
-  return r ? JSON.parse(r.overrides_json) : {};
+  const o: Record<string, unknown> = r ? JSON.parse(r.overrides_json) : {};
+  return Object.fromEntries(Object.entries(o).filter(([k]) => !REMOVED.some((x) => k === x || k.startsWith(x + '.'))));
 };
 const setActive = (db: Db, id: number | null) => {
   if (id === null) db.prepare("DELETE FROM kv WHERE key = 'config_active'").run();

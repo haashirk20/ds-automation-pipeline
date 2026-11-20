@@ -12,8 +12,8 @@ import { monthSpendUsd } from '../router/index.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import type { Brief } from '../contracts.ts';
 import { foldDiff, lineDiff } from './diff.ts';
-import { activeHandles } from '../shopify/catalog.ts';
 import { html, raw as rawHtml, Raw } from './html.ts';
+import { badge, confirmRemove, empty, errSummary, flash, fmtDate, fmtLocal, formRow, money, toggle, type FieldErr } from './ui.ts';
 
 export type Ctx = {
   db: Db;
@@ -33,48 +33,55 @@ const fileRaw = raw as unknown as Record<string, any>;
 
 // ---------- layout ----------
 
-// Every page is a place in the town. The header names where you are, links back to the town square and
-// opens a map of the rest: one bar instead of a row of tabs.
-const NAV: [string, string, string][] = [['/factory', 'Factory', 'Factory'], ['/products', 'Market', 'Products'], ['/posts', 'Post office', 'Posts'], ['/settings', 'Town hall', 'Settings'], ['/music', 'Music hall', 'Music'], ['/models', 'Wizard tower', 'Models'], ['/prompts', 'Library', 'Prompts'], ['/activity', 'Notice board', 'Activity'], ['/history', 'Archive', 'History']];
+const PRIMARY: [string, string][] = [['/overview', 'Home'], ['/town', 'Town'], ['/posts', 'Videos'], ['/products', 'Products'], ['/music', 'Music'], ['/settings', 'Settings'], ['/factory', 'Factory']];
+const MORE: [string, string][] = [['/activity', 'Activity log'], ['/history', 'Change history'], ['/prompts', 'Writing instructions'], ['/models', 'Video models']];
 
 // One plain sentence under each page title: what the page is for.
 const HELP: Record<string, string> = {
+  '/overview': 'How things are going, and what needs you.',
   '/factory': 'Watch every video move down the line, live.',
-  '/products': 'Choose which products get videos, add your own, and set the logo.',
-  '/posts': 'Make a video right now and decide whether it goes out.',
-  '/settings': 'When videos are made and posted, where they go, and how much may be spent.',
-  '/music': 'Background music for the videos. Ticked tracks take turns.',
-  '/models': 'The video models the clip foundry may use.',
-  '/prompts': 'The instructions the writers follow, and what each product looks like.',
-  '/activity': 'Everything made, posted or gone wrong in the last week.',
-  '/history': 'Earlier settings you can go back to, and a log of every change.',
+  '/town': 'Walk around town: every building is a page.',
+  '/products': 'Pick which products get videos and which daily post they go in.',
+  '/posts': 'Approve videos before they go out, or make one now.',
+  '/settings': 'When videos are posted, where they go, and how much may be spent.',
+  '/music': 'Background music for your videos. Ticked tracks take turns.',
+  '/models': 'Video models the factory may use for clips.',
+  '/prompts': 'Advanced: the instructions the AI writers follow.',
+  '/activity': 'What was made, posted, or went wrong this week.',
+  '/history': 'Go back to earlier settings, and see every change made.',
 };
 
 export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
+  const link = ([h, t]: [string, string]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`;
+  const logout = ctx?.csrf ? html`<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form>` : '';
   const nav = ctx?.csrf
     ? html`<header class="top"><nav aria-label="Main"><a class="brand" href="/overview">Ad factory</a>
-${active === '/overview' ? html`<span class="here">Town square</span>` : html`<a class="back" href="/overview">Town</a>${NAV.find((n) => n[0] === active) ? html`<span class="here">${NAV.find((n) => n[0] === active)![1]}</span>` : ''}`}
-<details class="map"><summary>Map</summary><ul>${NAV.map(([h, place, page]) => html`<li><a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}><b>${place}</b> <span>${page}</span></a></li>`)}</ul></details>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form></nav></header>`
+<div class="nav-wide">${PRIMARY.map(link)}<details class="more"><summary>More</summary><div class="drop">${MORE.map(link)}<hr>${logout}</div></details></div>
+<details class="menu"><summary>Menu</summary><div class="drop">${PRIMARY.map(link)}<hr>${MORE.map(link)}<hr>${logout}</div></details></nav></header>`
     : '';
-  const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|History of)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
-  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad pipeline admin</title><link rel="stylesheet" href="/style.css">${head}</head><body>${nav}<main><h1>${title}</h1>${help}${body}</main></body></html>`);
+  const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|History of|Check)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
+  // Factory and the town square keep the pixel-art stylesheet (D-41, D-43); every other page uses the plain one.
+  const css = active === '/factory' || active === '/town' ? '/pixel.css' : '/style.css';
+  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad factory</title><link rel="stylesheet" href="${css}">${head}</head><body>${nav}<main><h1>${title}</h1>${help}${body}</main></body></html>`);
 }
 
 export const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
+// UTC, for the technical tables only. Owner-facing times use fmtLocal.
 export const fmtTs = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '');
-const json = (v: unknown) => (v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
 
 // ---------- login ----------
 
 export function loginPage(msg: string | null, hasPassword: boolean): Res {
-  return layout(null, 'Sign in', '', html`<form class="panel login" method="post" action="/login">
-${msg ? html`<p class="error-box" role="alert">${msg}</p>` : ''}
-${hasPassword ? '' : html`<p class="error-box">No password is set. Run <code>node src/cli.ts admin password</code> first.</p>`}
-<div class="field"><label for="u">Username</label><div><input id="u" type="text" name="username" value="admin" readonly autocomplete="username"></div></div>
-<div class="field"><label for="p">Password</label><div><input id="p" type="password" name="password" autocomplete="current-password" required autofocus></div></div>
-<div class="actions"><button class="primary" type="submit">Sign in</button></div></form>`);
+  return layout(null, 'Sign in', '', html`<div class="card login">
+${msg ? flash('bad', msg) : ''}
+${hasPassword ? '' : flash('bad', 'No password is set.', html`Run <code>node src/cli.ts admin password</code> on the server first.`)}
+<form method="post" action="/login">
+${formRow({ id: 'u', label: 'Username', control: html`<input id="u" type="text" name="username" value="admin" readonly autocomplete="username">`, hint: 'There is one account, admin.' })}
+${formRow({ id: 'p', label: 'Password', control: html`<input id="p" type="password" name="password" autocomplete="current-password" required autofocus>` })}
+<div class="actions"><button class="primary" type="submit">Sign in</button></div></form></div>`);
 }
+
+export const notFound = (ctx: Ctx | null): Res => ({ ...layout(ctx, 'Not found', '', html`<p>Page not found.</p><p><a class="btn" href="/overview">Go to Home</a></p>`), status: 404 });
 
 // ---------- shared reads ----------
 
@@ -96,6 +103,7 @@ function activeOverrides(db: Db): { id: number | null; o: Record<string, unknown
 
 const getPath = (o: any, p: string): unknown => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+export const dryRunOn = (db: Db): boolean => { try { return !!JSON.parse(kvGet(db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } };
 
 // The prompt file for a key; product notes come from the notes file.
 function fileText(key: string): string {
@@ -120,76 +128,70 @@ const idOrNull = (s: string | null): number | null => (s && /^\d{1,9}$/.test(s) 
 
 // ---------- settings ----------
 
-type Kind = 'text' | 'int' | 'num' | 'bool' | 'select' | 'times';
-type Field = { path: string; label: string; stage: string; kind: Kind; hint?: string };
+type Kind = 'time' | 'int' | 'num' | 'bool' | 'select' | 'times';
+// when / where / money / look are the visible sections; models, safe and house sit under Advanced.
+type Sec = 'when' | 'where' | 'money' | 'look' | 'models' | 'safe' | 'house';
+type Field = { path: string; label: string; sec: Sec; kind: Kind; unit?: string; hint?: string };
 const PLATFORMS = ['youtube', 'facebook', 'instagram', 'tiktok'] as const;
-const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
-const S = ['Schedule and timing', 'Platforms', 'Concept writing', 'Claim checks', 'Video generation', 'Music', 'Frame check', 'Budget', 'Ops'] as const;
-// The block each group becomes in the settings editor (/settings.js).
-const BLOCK: Record<string, string> = { [S[0]]: 'schedule', [S[1]]: 'platforms', [S[2]]: 'concept', [S[3]]: 'claims', [S[4]]: 'clips', [S[5]]: 'music', [S[6]]: 'inspect', [S[7]]: 'budget', [S[8]]: 'ops' };
-
-// The settings pages load one same-origin script, /settings.js, that turns the form into blocks and plays the
-// shipping animation on save. Without it the plain form works the same. Every other page keeps the no-script CSP.
-export const SETTINGS_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
-const BLOCKS_HEAD = html`<link rel="stylesheet" href="/blocks.css"><script src="/settings.js" defer></script>`;
-const withBlocks = (r: Res): Res => ({ ...r, headers: { ...r.headers, 'content-security-policy': SETTINGS_CSP } });
+export const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
+const EDGES = ['top', 'bottom', 'left', 'right'] as const;
+const VIS: Record<string, string> = { public: 'Everyone', private: 'Only me' };
 
 const FIELDS: Field[] = [
-  { path: 'produceAt', label: 'Produce tomorrow\'s slots at (HH:MM local)', stage: S[0], kind: 'text' },
-  ...PLATFORMS.map((p): Field => ({ path: `platforms.${p}.slots`, label: `${PNAME[p]} slot times`, stage: S[0], kind: 'times', hint: 'HH:MM, comma separated. New times apply from the first unplanned day.' })),
-  { path: 'ops.summaryAt', label: 'Daily summary at (HH:MM)', stage: S[0], kind: 'text' },
-  { path: 'ops.snapshotAt', label: 'Nightly snapshot at (HH:MM)', stage: S[0], kind: 'text' },
+  { path: 'produceAt', label: "Make tomorrow's videos at", sec: 'when', kind: 'time' },
+  ...PLATFORMS.map((p): Field => ({ path: `platforms.${p}.slots`, label: `${PNAME[p]} post times`, sec: 'when', kind: 'times' })),
   ...PLATFORMS.flatMap((p): Field[] => [
-    { path: `platforms.${p}.enabled`, label: `${PNAME[p]}: enabled`, stage: S[1], kind: 'bool', hint: 'Turning every platform off pauses the pipeline.' },
-    { path: `platforms.${p}.visibility`, label: `${PNAME[p]}: visibility`, stage: S[1], kind: 'select', hint: p === 'instagram' ? 'Instagram has no private mode.' : undefined },
-    ...(['top', 'bottom', 'left', 'right'] as const).map((e): Field => ({ path: `platforms.${p}.safe.${e}`, label: `${PNAME[p]}: safe zone ${e} (px)`, stage: S[1], kind: 'int' })),
+    { path: `platforms.${p}.enabled`, label: `${PNAME[p]}: posting`, sec: 'where', kind: 'bool' },
+    { path: `platforms.${p}.visibility`, label: `${PNAME[p]}: who can see posts`, sec: 'where', kind: 'select', hint: p === 'instagram' ? 'Instagram has no "Only me": choose Everyone, or turn Instagram off.' : undefined },
   ]),
-  { path: 'llm.models.script', label: 'Concept writer model', stage: S[2], kind: 'select', hint: 'Used for ugc; hooks and script in ad mode.' },
-  { path: 'ugc.reuseAfterDays', label: 'Reuse a stored clip after (days)', stage: S[2], kind: 'int' },
-  { path: 'ugc.captionPx', label: 'Caption size (px)', stage: S[2], kind: 'int' },
-  { path: 'llm.models.copy', label: 'Claim judge, copy writer and copy judge model', stage: S[3], kind: 'select' },
-  { path: 'tiers.t2Preset', label: 'Clip model preset', stage: S[4], kind: 'select' },
-  { path: 'tiers.t2.maxCredits', label: 'Most credits for one clip', stage: S[4], kind: 'num' },
-  { path: 'tiers.t2.keepCredits', label: 'Credits to keep in the account', stage: S[4], kind: 'num' },
-  { path: 'tiers.capsUsd.t2', label: 'Monthly clip cap (USD)', stage: S[4], kind: 'num' },
-  { path: 'tiers.mix.t0', label: 'Share of slots that reuse a stored clip (0 to 1)', stage: S[4], kind: 'num', hint: 'The rest make a new clip (t2). t1 stays 0.' },
-  { path: 'tiers.maxJobsPerSlot', label: 'Most paid jobs per slot', stage: S[4], kind: 'int' },
-  { path: 'ugc.music.volumeDb', label: 'Music level (dB, relative to the -14 LUFS mix)', stage: S[5], kind: 'num', hint: 'Music is mixed in from the Music page; with no track ticked there is none.' },
-  { path: 'ugc.music.duckDb', label: 'Music dip while the spoken line plays (dB)', stage: S[5], kind: 'num' },
-  { path: 'llm.models.qa', label: 'Frame check model', stage: S[6], kind: 'select', hint: 'Calibrated on claude-haiku-5-5 at low effort (D-28); other models are unchecked.' },
-  { path: 'approval.manualPerDay', label: 'Most Post-button videos a day (0 turns it off)', stage: S[7], kind: 'int', hint: 'More posts a day raise the repetitive-content risk on every platform.' },
-  { path: 'llm.monthlyCapUsd', label: 'Monthly model-call cap (USD)', stage: S[7], kind: 'num' },
-  { path: 'ops.keepDays', label: 'Keep renders and failed attempts (days)', stage: S[8], kind: 'int' },
-  { path: 'ops.diskAlertPercent', label: 'Alert when a disk is fuller than (%)', stage: S[8], kind: 'int' },
+  { path: 'tiers.capsUsd.t2', label: 'Most to spend on video clips each month', sec: 'money', kind: 'num', unit: 'USD' },
+  { path: 'llm.monthlyCapUsd', label: 'Most to spend on AI writing each month', sec: 'money', kind: 'num', unit: 'USD' },
+  { path: 'approval.manualPerDay', label: '"Make a video now" uses per day', sec: 'money', kind: 'int', hint: '0 turns the button off. More videos a day can look repetitive to the platforms.' },
+  { path: 'tiers.maxJobsPerSlot', label: 'Tries per video if the quality check fails', sec: 'money', kind: 'int', hint: 'Each try is a new paid clip.' },
+  { path: 'tiers.t2.maxCredits', label: 'Most credits for one clip', sec: 'money', kind: 'num', unit: 'credits' },
+  { path: 'tiers.t2.keepCredits', label: 'Always leave this many credits in the account', sec: 'money', kind: 'num', unit: 'credits' },
+  { path: 'ugc.captionPx', label: 'Caption text size', sec: 'look', kind: 'int', unit: 'px' },
+  { path: 'ugc.music.volumeDb', label: 'Music volume', sec: 'look', kind: 'num', unit: 'dB', hint: 'Closer to 0 is louder; −20 is quiet. Music comes from the Music page.' },
+  { path: 'ugc.music.duckDb', label: 'Lower the music while someone speaks by', sec: 'look', kind: 'num', unit: 'dB' },
+  { path: 'ugc.reuseAfterDays', label: 'Reuse an earlier clip after', sec: 'look', kind: 'int', unit: 'days' },
+  { path: 'tiers.mix.t0', label: 'Share of videos that reuse an earlier clip', sec: 'look', kind: 'num', hint: '0 = always a new clip, 1 = always reuse.' },
+  { path: 'tiers.t2Preset', label: 'Video model', sec: 'models', kind: 'select' },
+  { path: 'llm.models.script', label: 'Script writer', sec: 'models', kind: 'select' },
+  { path: 'llm.models.copy', label: 'Fact checker and caption writer', sec: 'models', kind: 'select' },
+  { path: 'llm.models.qa', label: 'Quality check', sec: 'models', kind: 'select', hint: 'Tested on claude-haiku-5-5 at low effort (D-28); other models are untested.' },
+  ...PLATFORMS.flatMap((p) => EDGES.map((e): Field => ({ path: `platforms.${p}.safe.${e}`, label: `${PNAME[p]} text safe zone, ${e}`, sec: 'safe', kind: 'int', unit: 'px' }))),
+  { path: 'ops.summaryAt', label: 'Daily summary at', sec: 'house', kind: 'time' },
+  { path: 'ops.snapshotAt', label: 'Nightly backup snapshot at', sec: 'house', kind: 'time' },
+  { path: 'ops.keepDays', label: 'Keep old videos for', sec: 'house', kind: 'int', unit: 'days' },
+  { path: 'ops.diskAlertPercent', label: 'Warn me when the disk is fuller than', sec: 'house', kind: 'int', unit: '%' },
+];
+const fieldOf = (p: string) => FIELDS.find((f) => f.path === p);
+const labelOf = (p: string) => fieldOf(p)?.label ?? p;
+const ADVANCED: Sec[] = ['models', 'safe', 'house'];
+
+const LOCKED: { label: string; value: (c: Config, dry: boolean) => unknown; reason: string }[] = [
+  { label: 'Time zone', value: (c) => c.timezone, reason: 'Changing it moves every post time.' },
+  { label: 'Practice mode', value: (_c, dry) => (dry ? 'on' : 'off'), reason: 'Set where the factory is started (DRY_RUN), not here.' },
+  { label: 'Account names', value: (c) => PLATFORMS.map((p) => `${PNAME[p]}: ${c.platforms[p].handle}`).join(', '), reason: 'They name the real accounts.' },
+  { label: 'Publishing timing and retries', value: (c) => c.publish, reason: 'They guard against double posting.' },
+  { label: 'AI disclosure', value: (c) => c.disclosure, reason: 'A legal label.' },
+  { label: 'Creative mode', value: (c) => c.creative.mode, reason: 'It changes the whole production path.' },
+  { label: 'Brand', value: (c) => c.brand, reason: 'Brand name and logo file; the logo can be uploaded on Products.' },
+  { label: 'Rule checks', value: () => 'claims, caption check, frame check', reason: 'They enforce the advertising rules; see Writing instructions (read only).' },
+  { label: 'Clip length (seconds)', value: (c) => c.tiers.clipSeconds, reason: 'Tied to the 14 to 16 second rule.' },
+  { label: 'Clip model parameters', value: (c) => c.tiers.t2.params, reason: 'Free-form values; pick a video model instead.' },
+  { label: 'Frame check effort and photo tags', value: () => 'low; config/photo-tags.json', reason: 'Calibrated together with the model.' },
+  { label: 'Waiting-video expiry, credit price, added-model ceiling', value: (c) => `${c.approval.expireHours} h, ${c.tiers.usdPerCredit.toFixed(4)} USD per credit, ${c.tiers.customMaxCredits} credits`, reason: 'They guard spend and stale posts.' },
+  { label: 'Render timeouts and attempts', value: (c) => c.render, reason: 'Tied to the tries per video and the clip timeout.' },
+  { label: 'Watchdog (minutes)', value: (c) => c.watchdogMinutes, reason: 'Tied to the one-minute tick.' },
 ];
 
-const LOCKED: { stage: string; label: string; value: (c: Config, dry: boolean) => unknown; reason: string }[] = [
-  { stage: S[0], label: 'Time zone', value: (c) => c.timezone, reason: 'Changing it moves every slot; edit the file.' },
-  { stage: S[1], label: 'Account handles', value: (c) => PLATFORMS.map((p) => `${p}: ${c.platforms[p].handle}`).join(', '), reason: 'They name real accounts at the bridge; edit the file.' },
-  { stage: S[1], label: 'Publishing: lateness, retries, timeouts', value: (c) => c.publish, reason: 'They guard against double posting; edit the file.' },
-  { stage: S[1], label: 'Disclosure', value: (c) => c.disclosure, reason: 'A legal label; edit the file.' },
-  { stage: S[1], label: 'DRY_RUN', value: (_c, dry) => (dry ? 'on' : 'off'), reason: 'It is an environment value of the pipeline, not a setting.' },
-  { stage: S[2], label: 'Creative mode', value: (c) => c.creative.mode, reason: 'It changes the whole production path; edit the file.' },
-  { stage: S[2], label: 'Brand', value: (c) => c.brand, reason: 'Brand name and logo; edit the file.' },
-  { stage: S[2], label: 'Claim, copy-check and frame-check prompts', value: () => 'claims.md, copycheck.md, vision.md', reason: 'They enforce the advertising rules; see Prompts (read only).' },
-  { stage: S[4], label: 'Clip length (seconds)', value: (c) => c.tiers.clipSeconds, reason: 'Tied to the 14 to 16 second rule; edit the file.' },
-  { stage: S[4], label: 'Clip model parameters', value: (c) => c.tiers.t2.params, reason: 'Free-form values the clip service interprets; pick a preset instead.' },
-  { stage: S[4], label: 'Tier 1 (open-weight clips)', value: (c) => `share ${c.tiers.mix.t1}, cap $${c.tiers.capsUsd.t1}`, reason: 'No provider exists for it yet.' },
-  { stage: S[6], label: 'Frame check effort and photo tags', value: () => 'low; config/photo-tags.json', reason: 'Calibrated together with the model; edit the file.' },
-  { stage: S[7], label: 'Hold expiry, credit price, custom model ceiling', value: (c) => `${c.approval.expireHours} h, ${c.tiers.usdPerCredit.toFixed(4)} USD per credit, ${c.tiers.customMaxCredits} credits`, reason: 'They guard spend and stale posts; edit the file.' },
-  { stage: S[8], label: 'Render timeouts and attempts', value: (c) => c.render, reason: 'Tied to maxJobsPerSlot and the clip timeout; edit the file.' },
-  { stage: S[8], label: 'Watchdog (minutes)', value: (c) => c.watchdogMinutes, reason: 'Edit the file.' },
-];
-
-function limitText(l: { min?: number; max?: number; choices?: string[]; reason?: string } | undefined): string {
+function limitText(l: { min?: number; max?: number } | undefined): string {
   if (!l) return '';
-  const p: string[] = [];
-  if (l.min !== undefined && l.max !== undefined) p.push(`${l.min} to ${l.max}`);
-  else if (l.max !== undefined) p.push(`≤ ${l.max}`);
-  else if (l.min !== undefined) p.push(`≥ ${l.min}`);
-  if (l.choices) p.push(`one of ${l.choices.join(', ')}`);
-  if (l.reason) p.push(l.reason);
-  return p.join('; ');
+  if (l.min !== undefined && l.max !== undefined) return `${l.min} to ${l.max}`;
+  if (l.max !== undefined) return `up to ${l.max}`;
+  if (l.min !== undefined) return `at least ${l.min}`;
+  return '';
 }
 
 type Customs = Record<string, TierDef>;
@@ -203,6 +205,7 @@ function fileDefault(f: Field, preset?: string, customs: Customs = {}): unknown 
   if (f.path.startsWith('tiers.t2.') && preset && fileRaw.tiers.t2Presets?.[preset]) return getPath(fileRaw.tiers.t2Presets[preset], f.path.slice('tiers.t2.'.length));
   return getPath(fileRaw, f.path);
 }
+const presetField = FIELDS.find((x) => x.path === 'tiers.t2Preset')!;
 
 function currentValue(f: Field, cfg: Config, o: Record<string, unknown>): unknown {
   if (f.path === 'tiers.t2Preset') return o[f.path] ?? fileDefault(f);
@@ -217,38 +220,93 @@ function choicesOf(f: Field, lim: Record<string, any>, customs: Customs): string
 }
 
 const show = (v: unknown) => (Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'on' : 'off') : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? ''));
+// A value as the owner reads it: On/Off, Everyone/Only me, model names, units.
+function showVal(f: Field | undefined, v: unknown, names: Map<string, string> = new Map()): string {
+  if (!f) return show(v);
+  if (f.kind === 'bool') return v ? 'On' : 'Off';
+  if (f.path.endsWith('.visibility')) return VIS[String(v)] ?? show(v);
+  if (f.kind === 'times') return Array.isArray(v) && v.length ? v.join(', ') : 'none';
+  if (f.kind === 'select') return names.get(String(v)) ?? show(v);
+  return f.unit ? `${show(v)} ${f.unit}` : show(v);
+}
+const modelNames = (db: Db) => new Map((db.prepare('SELECT id, name FROM video_models').all() as { id: number; name: string }[]).map((r) => [`custom:${r.id}`, `${r.name} (added)`]));
+const fid = (p: string) => 'f-' + p.replace(/\./g, '-');
+const errId = (f: Field) => (f.kind === 'times' ? `${fid(f.path)}-0` : fid(f.path));
+const stripPath = (path: string, m: string) => (m.startsWith(`${path}: `) ? m.slice(path.length + 2) : m);
 
 function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeId: number | null, submitted: URLSearchParams | null, errs: Map<string, string[]>, other: string[]): Raw {
-  const preset = String(o['tiers.t2Preset'] ?? fileDefault(FIELDS.find((x) => x.path === 'tiers.t2Preset')!));
+  const preset = String(o['tiers.t2Preset'] ?? fileDefault(presetField));
   const customs = customsOf(ctx.db);
   const lim = limits(fileRaw, preset, customs) as Record<string, any>;
-  // Custom presets show their name; the value stays 'custom:<id>'.
-  const names = new Map((ctx.db.prepare('SELECT id, name FROM video_models').all() as { id: number; name: string }[]).map((r) => [`custom:${r.id}`, `${r.name} (custom)`]));
-  const dry = (() => { try { return !!JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}').dryRun; } catch { return false; } })();
-  const stages = S.map((st) => {
-    const rows = FIELDS.filter((f) => f.stage === st).map((f) => {
-      const cur = currentValue(f, cfg, o);
-      const val = submitted ? (submitted.get(f.path) ?? '') : f.kind === 'times' ? (cur as string[]).join(', ') : f.kind === 'bool' ? '' : String(cur ?? '');
-      const checked = submitted ? submitted.has(f.path) : cur === true;
-      const e = errs.get(f.path);
-      const id = 'f-' + f.path.replace(/\./g, '-');
-      const input =
-        f.kind === 'bool'
-          ? html`<input id="${id}" type="checkbox" name="${f.path}" value="1"${checked ? rawHtml(' checked') : ''}${e ? rawHtml(' aria-invalid="true"') : ''}>`
-          : f.kind === 'select'
-            ? html`<select id="${id}" name="${f.path}"${e ? rawHtml(' aria-invalid="true"') : ''}>${choicesOf(f, lim, customs).map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${names.get(c) ?? c}</option>`)}</select>`
-            : html`<input id="${id}" type="text" name="${f.path}" value="${val}" inputmode="${f.kind === 'int' || f.kind === 'num' ? 'decimal' : 'text'}"${e ? rawHtml(' aria-invalid="true"') : ''}>`;
-      const fd = fileDefault(f, submitted ? (submitted.get('tiers.t2Preset') ?? preset) : preset, customs);
-      const lt = limitText(lim[f.path]);
-      return html`<div class="field${e ? ' has-error' : ''}"><label for="${id}">${f.label}</label><div>${input}
-<span class="hint">Current: ${show(cur)}. File default: ${show(fd)}.${lt ? ` Limit: ${lt}.` : ''}${f.hint ? ' ' + f.hint : ''}</span>${(e ?? []).map((m) => html`<span class="err" role="alert">${m}</span>`)}</div></div>`;
-    });
-    const locked = LOCKED.filter((l) => l.stage === st).map((l) => html`<div class="field"><span class="lbl">${l.label}</span><div><code>${show(l.value(cfg, dry))}</code><span class="hint">Read only. ${l.reason}</span></div></div>`);
-    return html`<fieldset data-block="${BLOCK[st]}"${FIELDS.some((f) => f.stage === st && errs.has(f.path)) ? rawHtml(' data-error="1"') : ''}><legend>${st}</legend>${rows}${locked}</fieldset>`;
+  // Added models show their name; the value stays 'custom:<id>'.
+  const names = modelNames(ctx.db);
+  const dry = dryRunOn(ctx.db);
+  const fdPreset = submitted ? (submitted.get('tiers.t2Preset') ?? preset) : preset;
+  const errsOf = (f: Field) => (errs.get(f.path) ?? []).map((m) => stripPath(f.path, m));
+  const invalid = (f: Field) => (errs.has(f.path) ? rawHtml(' aria-invalid="true"') : '');
+
+  const control = (f: Field, id = fid(f.path)): Raw => {
+    const cur = currentValue(f, cfg, o);
+    const val = submitted ? (submitted.get(f.path) ?? '') : String(cur ?? '');
+    if (f.kind === 'bool') return toggle({ id, name: f.path, checked: submitted ? submitted.has(f.path) : cur === true, label: f.label, invalid: errs.has(f.path) });
+    if (f.kind === 'select') return html`<select id="${id}" name="${f.path}"${invalid(f)}>${choicesOf(f, lim, customs).map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${f.path.endsWith('.visibility') ? VIS[c] : (names.get(c) ?? c)}</option>`)}</select>`;
+    if (f.kind === 'time') return html`<input id="${id}" type="time" name="${f.path}" value="${val}"${invalid(f)}>`;
+    return html`<input id="${id}" type="text" name="${f.path}" value="${val}" inputmode="decimal"${invalid(f)}>`;
+  };
+  const hintOf = (f: Field, extra = ''): string => {
+    const cur = currentValue(f, cfg, o);
+    const fd = fileDefault(f, fdPreset, customs);
+    const lt = f.kind === 'select' || f.kind === 'bool' ? '' : limitText(lim[f.path]);
+    return [extra, f.hint, lt && `Allowed: ${lt}${f.unit ? ` ${f.unit}` : ''}.`, !same(cur, fd) && fd !== undefined && `Default: ${showVal(f, fd, names)}.`].filter(Boolean).join(' ');
+  };
+  const row = (f: Field, extra = '') => formRow({ id: fid(f.path), label: f.label, control: control(f), unit: f.kind === 'int' || f.kind === 'num' ? f.unit : undefined, hint: hintOf(f, extra), err: errsOf(f) });
+  const rows = (s: Sec) => FIELDS.filter((f) => f.sec === s).map((f) => row(f));
+  const errLines = (fs: Field[]) => fs.flatMap((f) => errsOf(f).map((m) => html`<span class="err">${f.label}: ${m}</span>`));
+
+  // Post times: one row per daily post, one column per platform. Each cell is its own input with the platform's name.
+  const timeFields = FIELDS.filter((f) => f.kind === 'times');
+  const nPosts = Math.max(2, ...PLATFORMS.map((p) => (fileRaw.platforms?.[p]?.slots ?? []).length));
+  const timeVal = (f: Field, i: number) => (submitted ? (submitted.getAll(f.path)[i] ?? '') : (((currentValue(f, cfg, o) as string[]) ?? [])[i] ?? ''));
+  const times = html`<h3>Post times</h3><p class="hint">Each day makes Post 1 and Post 2. Each one goes out to every platform that is on, at the time in its column. Leave Post 2 empty for one post a day.</p>
+<div class="scroll"><table class="times"><thead><tr><th scope="col"><span class="vh">Daily post</span></th>${PLATFORMS.map((p) => html`<th scope="col">${PNAME[p]}</th>`)}</tr></thead><tbody>
+${Array.from({ length: nPosts }, (_, i) => html`<tr><th scope="row" class="nw">Post ${i + 1}</th>${timeFields.map((f, k) => html`<td><label class="vh" for="${fid(f.path)}-${i}">${PNAME[PLATFORMS[k]]}, Post ${i + 1} time</label><input id="${fid(f.path)}-${i}" type="time" name="${f.path}" value="${timeVal(f, i)}"${invalid(f)}></td>`)}</tr>`)}
+</tbody></table></div>${errLines(timeFields)}`;
+
+  const where = PLATFORMS.map((p) => {
+    const en = fieldOf(`platforms.${p}.enabled`)!;
+    const vis = fieldOf(`platforms.${p}.visibility`)!;
+    return html`<div class="form-row${errs.has(en.path) || errs.has(vis.path) ? ' has-error' : ''}" role="group" aria-labelledby="g-${p}"><span class="lbl" id="g-${p}">${PNAME[p]}</span><div class="ctl">${control(en)}
+<label for="${fid(vis.path)}" class="hint">Who can see posts</label>${control(vis)}${vis.hint ? html`<span class="hint">${vis.hint}</span>` : ''}${errLines([en, vis])}</div></div>`;
   });
-  return html`${other.length ? html`<div class="error-box" role="alert"><strong>Not saved.</strong><ul>${other.map((m) => html`<li>${m}</li>`)}</ul></div>` : ''}
-<form method="post" action="/settings/preview" data-blocks>${csrfField(ctx)}<input type="hidden" name="base_id" value="${activeId ?? ''}">${stages}
-<div class="actions"><button class="primary" type="submit">Review changes</button></div></form>`;
+
+  const safeFields = FIELDS.filter((f) => f.sec === 'safe');
+  const safe = html`<h3>Text safe zones</h3><p class="hint">Pixels kept clear of each platform's buttons, so captions are not hidden. Allowed: 0 to 960.</p>
+<div class="scroll"><table class="safe"><thead><tr><th scope="col">Platform</th>${EDGES.map((e) => html`<th scope="col">${e[0].toUpperCase() + e.slice(1)}</th>`)}</tr></thead><tbody>
+${PLATFORMS.map((p) => html`<tr><th scope="row">${PNAME[p]}</th>${EDGES.map((e) => {
+    const f = fieldOf(`platforms.${p}.safe.${e}`)!;
+    return html`<td><label class="vh" for="${fid(f.path)}">${PNAME[p]}, ${e} (pixels)</label>${control(f)}</td>`;
+  })}</tr>`)}
+</tbody></table></div>${errLines(safeFields)}`;
+
+  const advOpen = FIELDS.some((f) => ADVANCED.includes(f.sec) && errs.has(f.path));
+  const summary: FieldErr[] = [
+    ...FIELDS.filter((f) => errs.has(f.path)).flatMap((f) => errsOf(f).map((msg) => ({ id: errId(f), label: f.label, msg }))),
+    ...other.map((msg) => ({ msg })),
+  ];
+  return html`${errSummary(summary)}
+<form method="post" action="/settings/preview">${csrfField(ctx)}<input type="hidden" name="base_id" value="${activeId ?? ''}">
+<section class="card" id="when"><h2>When videos go out</h2>${row(fieldOf('produceAt')!, `Time zone: ${cfg.timezone}.`)}${times}</section>
+<section class="card" id="where"><h2>Where videos go</h2><p class="hint">Turning every platform off pauses the factory.</p>${where}</section>
+<section class="card" id="money"><h2>Spending limits</h2>${rows('money')}</section>
+<section class="card" id="look"><h2>Look and sound</h2>${rows('look')}</section>
+<details class="card" id="advanced"${advOpen ? rawHtml(' open') : ''}><summary>Advanced</summary>
+<h3>AI and video models</h3><p class="hint">Models added on <a href="/models">Video models</a> appear here once they have made a video you posted.</p>${rows('models')}
+${safe}
+<h3>Housekeeping</h3>${rows('house')}
+<details class="plain"><summary>Set in the config file</summary><div class="scroll"><table class="stack"><thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Why it is not here</th></tr></thead><tbody>
+${LOCKED.map((l) => html`<tr><td data-label="Setting">${l.label}</td><td data-label="Value"><code>${show(l.value(cfg, dry))}</code></td><td data-label="Why">${l.reason}</td></tr>`)}
+</tbody></table></div></details></details>
+<div class="sticky-save"><button class="primary" type="submit">Review changes</button><span class="muted">Nothing is saved until you check and confirm.</span></div></form>`;
 }
 
 // First local date whose slots are not planned yet.
@@ -258,23 +316,18 @@ function firstUnplanned(db: Db, now: Date, tz: string): string {
   return last && last >= today ? addDays(last, 1) : today;
 }
 
-function flash(ctx: Ctx, cfg: Config): Raw | '' {
-  const saved = idOrNull(ctx.query.get('saved'));
-  if (saved !== null) {
-    const prev = idOrNull(ctx.query.get('prev'));
-    return html`<p class="notice" role="status">Saved as v${saved}. Takes effect at the next tick (within 1 minute). A slot in production finishes on ${prev === null ? 'the file settings' : `v${prev}`}. New slot times apply from ${firstUnplanned(ctx.db, ctx.now, cfg.timezone)}.</p>`;
-  }
-  const m = ctx.query.get('ok');
-  if (m === 'file') return html`<p class="notice" role="status">Now using the file settings. Takes effect at the next tick.</p>`;
-  const act = idOrNull(ctx.query.get('active'));
-  if (act !== null) return html`<p class="notice" role="status">Version ${act} is active. Takes effect at the next tick.</p>`;
+const TAKES = 'The factory picks up the change within a minute. Videos already being made finish with the old settings.';
+function settingsFlash(ctx: Ctx, cfg: Config): Raw | '' {
+  if (idOrNull(ctx.query.get('saved')) !== null) return flash('ok', 'Saved.', `${TAKES} New post times start on ${fmtDate(firstUnplanned(ctx.db, ctx.now, cfg.timezone))}.`);
+  if (ctx.query.get('ok') === 'file') return flash('ok', 'Back to the defaults.', TAKES);
+  if (idOrNull(ctx.query.get('active')) !== null) return flash('ok', 'Earlier settings are in use again.', TAKES);
   return '';
 }
 
 export async function settingsPage(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const { id, o } = activeOverrides(ctx.db);
-  return withBlocks(layout(ctx, 'Settings', '/settings', html`${flash(ctx, cfg)}<p class="muted bl-plain">Changes are saved as versions and take effect at the next tick (within a minute). The config file holds the defaults and the limits. Products and the logo are on <a href="/products">Products</a>; prompt texts on <a href="/prompts">Prompts</a>.</p>${settingsForm(ctx, cfg, o, id, null, new Map(), [])}`, BLOCKS_HEAD));
+  return layout(ctx, 'Settings', '/settings', html`${settingsFlash(ctx, cfg)}<p class="muted">Products and the logo are on <a href="/products">Products</a>. Every saved change is kept on <a href="/history">Change history</a>.</p>${settingsForm(ctx, cfg, o, id, null, new Map(), [])}`);
 }
 
 function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>): unknown {
@@ -282,7 +335,12 @@ function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>
   const bad = (m: string) => (errs.set(f.path, [m]), undefined);
   switch (f.kind) {
     case 'bool': return form.has(f.path);
-    case 'times': return v.split(/[\s,]+/).filter(Boolean);
+    case 'times': {
+      // One input per daily post, in order. A comma list in one input is read the same way.
+      const all = form.getAll(f.path).map((s) => s.trim());
+      if (all.length > 1 && !all[0] && all.slice(1).some(Boolean)) return bad('Fill in Post 1 first.');
+      return all.flatMap((s) => s.split(/[\s,]+/)).filter(Boolean);
+    }
     case 'int': case 'num': {
       const n = Number(v);
       if (v === '' || !Number.isFinite(n)) return bad('must be a number');
@@ -297,7 +355,7 @@ function draftFrom(form: URLSearchParams, active: Record<string, unknown>, errs:
   const draft = { ...active };
   const preset = form.get('tiers.t2Preset') ?? undefined;
   // The form shows the old preset's caps. Switching preset must not carry them over as overrides of the new one.
-  const oldPreset = String(active['tiers.t2Preset'] ?? fileDefault(FIELDS.find((x) => x.path === 'tiers.t2Preset')!));
+  const oldPreset = String(active['tiers.t2Preset'] ?? fileDefault(presetField));
   for (const f of FIELDS) {
     delete draft[f.path];
     const v = parseField(f, form, errs);
@@ -331,28 +389,32 @@ export async function settingsPreview(ctx: Ctx): Promise<Res> {
     if ('errors' in r) other = matchErrors(r.errors, errs);
     else next = r.config;
   }
-  if (!next) return { ...withBlocks(layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, ctx.form, errs, other), BLOCKS_HEAD)), status: 422 };
+  if (!next) return { ...layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, ctx.form, errs, other)), status: 422 };
 
-  const paths = [...new Set([...Object.keys(o), ...Object.keys(draft)])].filter((p) => !same(o[p], draft[p])).sort();
-  if (!paths.length) return layout(ctx, 'Settings', '/settings', html`<p class="notice">No changes.</p><p><a href="/settings">Back to settings</a></p>`);
+  const paths = [...new Set([...Object.keys(o), ...Object.keys(draft)])].filter((p) => !same(o[p], draft[p])).sort((a, b) => FIELDS.findIndex((f) => f.path === a) - FIELDS.findIndex((f) => f.path === b));
+  if (!paths.length) return layout(ctx, 'Settings', '/settings', html`${flash('info', 'No changes.', 'Every value is the same as now.')}<p><a class="btn" href="/settings">Back to Settings</a></p>`);
   const pub = newlyPublic(cfg, next);
-  const label = (p: string) => FIELDS.find((f) => f.path === p)?.label ?? p;
-  return withBlocks(layout(ctx, 'Review changes', '/settings', html`<p>These values change. Nothing is saved until you press the button.</p>
-<div class="scroll"><table data-changes><thead><tr><th>Setting</th><th>File default</th><th>Now</th><th>New</th></tr></thead><tbody>
-${paths.map((p) => html`<tr data-label="${label(p)}"><td>${label(p)}<br><code>${p}</code></td><td>${show(fileDefault(FIELDS.find((f) => f.path === p)!, String(draft['tiers.t2Preset'] ?? '') || undefined, customs))}</td><td>${p in o ? show(o[p]) : 'file'}</td><td>${p in draft ? show(draft[p]) : 'file'}</td></tr>`)}
+  const names = modelNames(ctx.db);
+  const preset = String(draft['tiers.t2Preset'] ?? '') || undefined;
+  const cell = (p: string, src: Record<string, unknown>) => {
+    const f = fieldOf(p);
+    return p in src ? showVal(f, src[p], names) : `Default (${f ? showVal(f, fileDefault(f, preset, customs), names) : ''})`;
+  };
+  return layout(ctx, 'Check your changes', '/settings', html`<p>Nothing is saved until you press <strong>Save changes</strong>.</p>
+<div class="scroll"><table class="stack"><thead><tr><th scope="col">Setting</th><th scope="col">Now</th><th scope="col">New</th></tr></thead><tbody>
+${paths.map((p) => html`<tr data-path="${p}"><td data-label="Setting">${labelOf(p)}</td><td data-label="Now">${cell(p, o)}</td><td data-label="New"><strong>${cell(p, draft)}</strong></td></tr>`)}
 </tbody></table></div>
-<form method="post" action="/settings/save" data-ship>${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
-${pub.length ? html`<div class="field"><label for="cp">Confirm public posting</label><div><input id="cp" type="checkbox" name="confirm_public" value="1"> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</div></div>` : ''}
-<div class="field"><label for="note">Note (optional)</label><div><input id="note" type="text" name="note" maxlength="200"></div></div>
-<div class="actions"><button class="primary" type="submit" data-version="${db_nextId(ctx.db, 'config_versions')}">Pack and send to the factory (version ${db_nextId(ctx.db, 'config_versions')})</button><a href="/settings">Cancel</a></div></form>`, BLOCKS_HEAD));
+<form method="post" action="/settings/save" class="card">${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
+${pub.length ? html`<div class="form-row"><span class="lbl">Public posts</span><div class="ctl"><label class="check" for="cp"><input id="cp" type="checkbox" name="confirm_public" value="1"> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</label></div></div>` : ''}
+${formRow({ id: 'note', label: 'Note for yourself (optional)', control: html`<input id="note" type="text" name="note" maxlength="200">`, hint: 'Shown on Change history, to remember why.' })}
+<div class="actions"><button class="primary" type="submit">Save changes</button><a href="/settings">Go back</a></div></form>`);
 }
 
-const db_nextId = (db: Db, table: string): number => ((db.prepare(`SELECT COALESCE(MAX(id), 0) + 1 AS n FROM ${table}`).get() as { n: number }).n);
 
 const baseOf = (form: URLSearchParams) => idOrNull(form.get('base_id') || null);
 
 export async function settingsSave(ctx: Ctx): Promise<Res> {
-  const fail = (m: string[]): Res => ({ ...layout(ctx, 'Not saved', '/settings', html`<div class="error-box" role="alert"><ul>${m.map((x) => html`<li>${x}</li>`)}</ul></div><p><a href="/settings">Back to settings</a></p>`), status: 422 });
+  const fail = (m: string[]): Res => ({ ...layout(ctx, 'Not saved', '/settings', html`${errSummary(m.map((msg) => ({ msg })))}<p><a class="btn" href="/settings">Back to Settings</a></p>`), status: 422 });
   let draft: unknown;
   try {
     draft = JSON.parse(ctx.form.get('draft') ?? '');
@@ -371,39 +433,43 @@ export async function settingsSave(ctx: Ctx): Promise<Res> {
   return redirect(`/settings?saved=${res.id}${prev === null ? '' : `&prev=${prev}`}`);
 }
 
-// ---------- prompts ----------
+// ---------- writing instructions (prompts) ----------
 
-const TEXT_STAGE: Record<string, string> = { ugc: 'Concept writing', hooks: 'Concept writing (ad mode)', script: 'Concept writing (ad mode)', copy: 'Claim checks', video: 'Video generation', house: 'All writers' };
-const LOCKED_PROMPTS: [string, string][] = [['claims', 'Enforces that ad claims come from the brief.'], ['copycheck', 'Judges the copy against the brief.'], ['vision', 'Frame check; calibrated with its model (D-28).']];
+const TEXT_NAME: Record<string, string> = { ugc: 'Video script', hooks: 'Opening lines (ad mode)', script: 'Ad script (ad mode)', copy: 'Captions and titles', video: 'Scene description for the video model', house: 'House style (all writers)' };
+const TEXT_USE: Record<string, string> = { ugc: 'Writing what each video shows and says', hooks: 'Ad mode only: the first line of an ad', script: 'Ad mode only: the ad script', copy: 'Checking facts, and writing captions and titles', video: 'What the video model is asked to film', house: 'Added before every writer' };
+const LOCKED_PROMPTS: [string, string, string][] = [['claims', 'Claim check', 'Makes sure ads claim only what the product facts say.'], ['copycheck', 'Caption check', 'Checks captions and titles against the product facts.'], ['vision', 'Frame check', 'Compares the video with the product photos; tested with its model (D-28).']];
+
+const productTitle = (db: Db, handle: string): string => (db.prepare('SELECT title FROM products WHERE handle = ?').get(handle) as { title: string } | undefined)?.title ?? handle;
+const textName = (db: Db, key: string) => (key.startsWith('note:') ? `Look of ${productTitle(db, key.slice(5))}` : (TEXT_NAME[key] ?? key));
+const textUse = (key: string) => (key.startsWith('note:') ? 'How the product looks in the video' : (TEXT_USE[key] ?? ''));
+const inUse = (id: number | null) => (id === null ? 'Built-in' : `Your version ${id}`);
 
 export function promptsPage(ctx: Ctx): Res {
-  const text = (key: string, label: string, stage: string) => {
-    const a = activeText(ctx.db, key);
-    return html`<tr><td><a href="/prompts/edit?key=${encodeURIComponent(key)}">${label}</a></td><td>${stage}</td><td>${a.id === null ? 'file' : `v${a.id}`}</td><td><a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></td></tr>`;
-  };
-  return layout(ctx, 'Prompts', '/prompts', html`<h2>Editable texts</h2><div class="scroll"><table><thead><tr><th>Text</th><th>Stage</th><th>Active</th><th></th></tr></thead><tbody>${EDITABLE_TEXT.filter((k) => !k.startsWith('note:')).map((k) => text(k, k, TEXT_STAGE[k] ?? ''))}</tbody></table></div>
-<h2>Product notes</h2>${handles(ctx.db).length ? html`<div class="scroll"><table><thead><tr><th>Product</th><th>Stage</th><th>Active</th><th></th></tr></thead><tbody>${handles(ctx.db).map((h) => text(`note:${h}`, h, 'Concept writing'))}</tbody></table></div>` : html`<p class="muted">No products stored yet.</p>`}
-<h2>Read only</h2><div class="scroll"><table><thead><tr><th>Text</th><th>Why locked</th></tr></thead><tbody>${LOCKED_PROMPTS.map(([k, why]) => html`<tr><td><a href="/prompts/view?key=${k}">${k}</a></td><td>${why}</td></tr>`)}</tbody></table></div>`);
+  const links = (key: string) => html`<a href="/prompts/edit?key=${encodeURIComponent(key)}">Edit</a> · <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a>`;
+  const hs = handles(ctx.db);
+  return layout(ctx, 'Writing instructions', '/prompts', html`${flash('info', 'Most owners never need this page.', html`To describe how a product looks, use <a href="/products">Products</a>.`)}
+<section><h2>Texts the writers follow</h2><div class="scroll"><table class="stack"><thead><tr><th scope="col">Text</th><th scope="col">Used for</th><th scope="col">In use</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
+${EDITABLE_TEXT.map((k) => html`<tr><td data-label="Text">${TEXT_NAME[k]}</td><td data-label="Used for">${TEXT_USE[k]}</td><td data-label="In use">${inUse(activeText(ctx.db, k).id)}</td><td class="nw">${links(k)}</td></tr>`)}</tbody></table></div></section>
+<section><h2>Product looks</h2>${hs.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Product</th><th scope="col">In use</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>${hs.map((h) => html`<tr><td data-label="Product">${productTitle(ctx.db, h)}</td><td data-label="In use">${inUse(activeText(ctx.db, `note:${h}`).id)}</td><td class="nw">${links(`note:${h}`)}</td></tr>`)}</tbody></table></div>` : empty('No products yet.', html`<a class="btn" href="/products">Go to Products</a>`)}</section>
+<details class="tech"><summary>Rule checks (read only)</summary><div class="scroll"><table class="stack"><thead><tr><th scope="col">Text</th><th scope="col">What it does</th></tr></thead><tbody>${LOCKED_PROMPTS.map(([k, name, why]) => html`<tr><td data-label="Text"><a href="/prompts/view?key=${k}">${name}</a></td><td data-label="Does">${why}</td></tr>`)}</tbody></table></div></details>`);
 }
 
 export function promptView(ctx: Ctx): Res {
   const k = ctx.query.get('key');
   const l = LOCKED_PROMPTS.find(([n]) => n === k);
   if (!l) return notFound(ctx);
-  return layout(ctx, `${l[0]} (read only)`, '/prompts', html`<p class="muted">${l[1]}</p><pre>${fileText(l[0])}</pre><p><a href="/prompts">Back to prompts</a></p>`);
+  return layout(ctx, `${l[1]} (read only)`, '/prompts', html`<p class="muted">${l[2]}</p><pre>${fileText(l[0])}</pre><p><a href="/prompts">Back to Writing instructions</a></p>`);
 }
-
-export const notFound = (ctx: Ctx | null): Res => ({ ...layout(ctx, 'Not found', '', html`<p>No such page.</p>`), status: 404 });
 
 export function promptEdit(ctx: Ctx, key: string | null = ctx.query.get('key'), body: string | null = null, errors: string[] = []): Res {
   if (!validKey(ctx.db, key)) return notFound(ctx);
   const a = activeText(ctx.db, key);
-  return { ...layout(ctx, `Edit ${key}`, '/prompts', html`<p class="muted">Stage: ${key.startsWith('note:') ? 'Concept writing' : TEXT_STAGE[key]}. Active: ${a.id === null ? 'file' : `v${a.id}`}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
-${errors.length ? html`<div class="error-box" role="alert"><ul>${errors.map((m) => html`<li>${m}</li>`)}</ul></div>` : ''}
+  return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, '/prompts', html`<p class="muted">Used for: ${textUse(key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
+${errSummary(errors.map((msg) => ({ id: 'body', msg })))}
 <form method="post" action="/prompts/preview">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}">
-<p class="muted">House, video and note texts are checked: prices, discounts and links are refused, even in an instruction not to use them.</p>
-<div class="field${errors.length ? ' has-error' : ''}"><label for="body">Text</label><div><textarea id="body" name="body" rows="24">${body ?? a.body}</textarea></div></div>
-<div class="actions"><button class="primary" type="submit">Preview</button><a href="/prompts">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
+<p class="hint">House style, scene and product look texts are checked: prices, discounts and links are refused, even in an instruction not to use them.</p>
+<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">Text</label><div class="ctl"><textarea id="body" name="body" rows="24">${body ?? a.body}</textarea></div></div>
+<div class="actions"><button class="primary" type="submit">Preview changes</button><a href="/prompts">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
 }
 
 // Runs saveText's own checks without touching the real tables: a scratch database holds a copy of the briefs.
@@ -435,6 +501,8 @@ function renderedSystem(db: Db, key: string, draft: string): string | null {
   }
 }
 
+const diffView = (d: ReturnType<typeof lineDiff>) => html`<div class="diff" aria-label="Changes">${foldDiff(d).map((x) => html`<div class="${x.op === '+' ? 'add' : x.op === '-' ? 'del' : ''}">${x.op} ${x.text}</div>`)}</div>`;
+
 export async function promptPreview(ctx: Ctx): Promise<Res> {
   const key = ctx.form.get('key');
   if (!validKey(ctx.db, key)) return notFound(ctx);
@@ -449,12 +517,12 @@ export async function promptPreview(ctx: Ctx): Promise<Res> {
   const price = PRICES[model]?.cacheWrite;
   const sys = renderedSystem(ctx.db, key, body);
   const changed = diff.some((d) => d.op !== ' ');
-  return layout(ctx, `Review ${key}`, '/prompts', html`<p>About ${tokens} tokens (characters / 4). ${price === undefined ? '' : `First call after a change writes the prompt cache at ${model} price: about $${((tokens * price) / 1e6).toFixed(4)}.`}</p>
-<h2>Changes against the active text</h2>${changed ? html`<div class="diff panel" aria-label="Diff">${foldDiff(diff).map((d) => html`<div class="${d.op === '+' ? 'add' : d.op === '-' ? 'del' : ''}">${d.op} ${d.text}</div>`)}</div>` : html`<p class="notice">No changes.</p>`}
-<h2>Text the model receives</h2>${sys ? html`<pre>${sys}</pre>` : html`<p class="muted">${(WRITERS as readonly string[]).includes(key) || key === 'house' ? 'No product brief is stored yet, so the full text cannot be shown.' : 'This text is added to another prompt at run time; see the diff above.'}</p>`}
-${changed ? html`<form method="post" action="/prompts/save">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}"><input type="hidden" name="body" value="${body}">
-<div class="field"><label for="note">Note (optional)</label><div><input id="note" type="text" name="note" maxlength="200"></div></div>
-<div class="actions"><button class="primary" type="submit">Save as version ${db_nextId(ctx.db, 'text_versions')}</button><a href="/prompts">Cancel</a></div></form>` : ''}`);
+  return layout(ctx, `Review: ${textName(ctx.db, key)}`, '/prompts', html`<section><h2>Changes against the text in use</h2>${changed ? diffView(diff) : flash('info', 'No changes.', 'The text is the same as the one in use.')}</section>
+<section><h2>Text the AI receives</h2>${sys ? html`<pre>${sys}</pre>` : html`<p class="muted">${(WRITERS as readonly string[]).includes(key) || key === 'house' ? 'No product is stored yet, so the full text cannot be shown.' : 'This text is added to another instruction when a video is made; see the changes above.'}</p>`}</section>
+<details class="tech"><summary>Technical details</summary><p>About ${tokens} tokens (characters / 4). ${price === undefined ? '' : `The first AI call after a change costs about ${money((tokens * price) / 1e6)} extra at ${model} prices.`}</p></details>
+${changed ? html`<form method="post" action="/prompts/save" class="card">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}"><input type="hidden" name="body" value="${body}">
+${formRow({ id: 'note', label: 'Note for yourself (optional)', control: html`<input id="note" type="text" name="note" maxlength="200">` })}
+<div class="actions"><button class="primary" type="submit">Save this text</button><a href="/prompts/edit?key=${encodeURIComponent(key)}">Go back</a></div></form>` : html`<p><a class="btn" href="/prompts/edit?key=${encodeURIComponent(key)}">Go back</a></p>`}`);
 }
 
 export function promptSave(ctx: Ctx): Res {
@@ -466,23 +534,24 @@ export function promptSave(ctx: Ctx): Res {
   return redirect(`/prompts/history?key=${encodeURIComponent(key)}&saved=${r.id}${prev === null ? '' : `&prev=${prev}`}`);
 }
 
-export function promptHistory(ctx: Ctx): Res {
+export async function promptHistory(ctx: Ctx): Promise<Res> {
   const key = ctx.query.get('key');
   if (!validKey(ctx.db, key)) return notFound(ctx);
+  const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const a = activeText(ctx.db, key);
   const rows = ctx.db.prepare('SELECT id, sha256, length(body) AS len, created_at, note FROM text_versions WHERE key = ? ORDER BY id DESC LIMIT 100').all(key) as { id: number; sha256: string; len: number; created_at: string; note: string | null }[];
   const view = idOrNull(ctx.query.get('view'));
   const vr = view === null ? undefined : (ctx.db.prepare('SELECT body FROM text_versions WHERE id = ? AND key = ?').get(view, key) as { body: string } | undefined);
   const saved = idOrNull(ctx.query.get('saved'));
-  const prev = idOrNull(ctx.query.get('prev'));
+  const k = encodeURIComponent(key);
   const act = (id: string, label: string) => html`<form method="post" action="/prompts/activate">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="id" value="${id}"><button type="submit">${label}</button></form>`;
-  return layout(ctx, `History of ${key}`, '/prompts', html`${saved !== null ? html`<p class="notice" role="status">Saved as v${saved}. Takes effect at the next tick (within 1 minute). A slot in production finishes on ${prev === null ? 'the file text' : `v${prev}`}.</p>` : ''}
-<p>Active: ${a.id === null ? 'the file' : `v${a.id}`}. <a href="/prompts/edit?key=${encodeURIComponent(key)}">Edit</a></p>
-<div class="actions">${act('', 'Use file')}</div>
-${vr ? html`<h2>Version ${view} against the active text</h2><div class="diff panel">${foldDiff(lineDiff(a.body, vr.body)).map((d) => html`<div class="${d.op === '+' ? 'add' : d.op === '-' ? 'del' : ''}">${d.op} ${d.text}</div>`)}</div>` : ''}
-<h2>Versions</h2><div class="scroll"><table><thead><tr><th>Version</th><th>Saved</th><th>Length</th><th>sha256</th><th>Note</th><th></th></tr></thead><tbody>
-${rows.map((r) => html`<tr><td>v${r.id}${r.id === a.id ? html` <span class="tag ok">active</span>` : ''}</td><td>${fmtTs(r.created_at)}</td><td>${r.len}</td><td><code>${r.sha256.slice(0, 12)}</code></td><td>${r.note}</td><td><a href="/prompts/history?key=${encodeURIComponent(key)}&view=${r.id}">Diff</a> ${r.id === a.id ? '' : act(String(r.id), 'Activate')}</td></tr>`)}
-</tbody></table></div>`);
+  return layout(ctx, `History of ${textName(ctx.db, key)}`, '/prompts', html`${saved !== null ? flash('ok', 'Saved.', 'The writers use it from the next video. A video already being made finishes with the old text.') : ''}
+<div class="section-head"><p>In use: <strong>${inUse(a.id)}</strong>.</p><div class="section-actions"><a class="btn" href="/prompts/edit?key=${k}">Edit</a>${a.id === null ? '' : act('', 'Go back to the built-in text')}</div></div>
+${vr ? html`<section><h2>Version ${view} compared with the text in use</h2>${diffView(lineDiff(a.body, vr.body))}</section>` : ''}
+<section><h2>Saved versions</h2>${rows.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Version</th><th scope="col">Saved</th><th scope="col">Note</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
+${rows.map((r) => html`<tr><td data-label="Version">Version ${r.id}${r.id === a.id ? html` ${badge('ok', 'In use')}` : ''}</td><td data-label="Saved">${fmtLocal(r.created_at, cfg.timezone)}</td><td data-label="Note">${r.note}</td><td><a href="/prompts/history?key=${k}&view=${r.id}">Show changes</a> ${r.id === a.id ? '' : act(String(r.id), 'Use this version')}</td></tr>`)}
+</tbody></table></div>
+<details class="tech"><summary>Technical details</summary><div class="scroll"><table><thead><tr><th scope="col">Version</th><th scope="col">Length</th><th scope="col">sha256</th><th scope="col">Saved (UTC)</th></tr></thead><tbody>${rows.map((r) => html`<tr><td>${r.id}</td><td class="num">${r.len}</td><td><code>${r.sha256.slice(0, 12)}</code></td><td class="nw">${fmtTs(r.created_at)}</td></tr>`)}</tbody></table></div></details>` : empty('No saved versions yet. The built-in text is in use.')}</section>`);
 }
 
 export function promptActivate(ctx: Ctx): Res {
@@ -494,46 +563,51 @@ export function promptActivate(ctx: Ctx): Res {
   return redirect(`/prompts/history?key=${encodeURIComponent(key)}`);
 }
 
-// ---------- history ----------
+// ---------- change history ----------
 
 export async function historyPage(ctx: Ctx): Promise<Res> {
   const active = versionId(ctx.db, 'config_active');
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+  const tz = cfg.timezone;
   const rows = ctx.db.prepare('SELECT id, created_at, overrides_json, note FROM config_versions ORDER BY id DESC LIMIT 50').all() as { id: number; created_at: string; overrides_json: string; note: string | null }[];
   const view = idOrNull(ctx.query.get('view'));
   const vr = rows.find((r) => r.id === view);
   const page = Math.max(0, Math.min(10_000, idOrNull(ctx.query.get('page')) ?? 0));
   const audits = ctx.db.prepare('SELECT id, ts, actor, action, target, detail_json FROM audit ORDER BY id DESC LIMIT 51 OFFSET ?').all(page * 50) as { id: number; ts: string; actor: string; action: string; target: string; detail_json: string }[];
-  const act = (id: string, label: string) => html`<form method="post" action="/history/activate">${csrfField(ctx)}<input type="hidden" name="id" value="${id}"><button type="submit">${label}</button></form>`;
-  let overrides: Record<string, unknown> = {};
-  try { overrides = vr ? JSON.parse(vr.overrides_json) : {}; } catch { /* shown empty */ }
-  return layout(ctx, 'History', '/history', html`${flash(ctx, cfg)}
-<h2>Settings versions</h2><p>Active: ${active === null ? 'the file' : `v${active}`}. ${active === null ? '' : act('', 'Use file')}</p>
-${vr ? html`<h3>Version ${vr.id} against the file</h3><div class="scroll"><table><thead><tr><th>Setting</th><th>File default</th><th>Value</th></tr></thead><tbody>${Object.entries(overrides).map(([p, v]) => html`<tr><td><code>${p}</code></td><td>${show(getPath(fileRaw, p))}</td><td>${show(v)}</td></tr>`)}</tbody></table></div>` : ''}
-<div class="scroll"><table><thead><tr><th>Version</th><th>Saved</th><th>Changed settings</th><th>Note</th><th></th></tr></thead><tbody>
-${rows.map((r) => {
-  let n = 0;
-  try { n = Object.keys(JSON.parse(r.overrides_json)).length; } catch { /* corrupt */ }
-  return html`<tr><td>v${r.id}${r.id === active ? html` <span class="tag ok">active</span>` : ''}</td><td>${fmtTs(r.created_at)}</td><td>${n}</td><td>${r.note}</td><td><a href="/history?view=${r.id}">Show</a> ${r.id === active ? '' : act(String(r.id), 'Activate')}</td></tr>`;
-})}</tbody></table></div>
-<h2>Audit log</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>
-${audits.slice(0, 50).map((a) => html`<tr><td>${fmtTs(a.ts)}</td><td>${a.actor}</td><td>${a.action}</td><td>${a.target}</td><td><code>${a.detail_json}</code></td></tr>`)}</tbody></table></div>
-<p>${page > 0 ? html`<a href="/history?page=${page - 1}">Newer</a> ` : ''}${audits.length > 50 ? html`<a href="/history?page=${page + 1}">Older</a>` : ''}</p>`);
+  const act = (id: string, label: string, cls = '') => html`<form method="post" action="/history/activate">${csrfField(ctx)}<input type="hidden" name="id" value="${id}"><button${cls ? html` class="${cls}"` : ''} type="submit">${label}</button></form>`;
+  const parse = (j: string): Record<string, unknown> | null => { try { return JSON.parse(j); } catch { return null; } };
+  const changed = (j: string) => {
+    const o = parse(j);
+    if (!o) return 'unreadable';
+    const ls = Object.keys(o).map(labelOf);
+    return ls.length > 4 ? `${ls.slice(0, 4).join(', ')} and ${ls.length - 4} more` : ls.join(', ') || 'nothing';
+  };
+  const overrides = vr ? (parse(vr.overrides_json) ?? {}) : {};
+  const names = modelNames(ctx.db);
+  return layout(ctx, 'Change history', '/history', html`${settingsFlash(ctx, cfg)}
+<section><div class="section-head"><h2>Saved settings</h2><div class="section-actions">${active === null ? '' : confirmRemove('Go back to the defaults…', act('', 'Yes, go back to the defaults', 'danger'), 'Every setting returns to its default. Your saved versions stay listed here.')}</div></div>
+<p>In use: <strong>${active === null ? 'the defaults' : `the settings saved ${fmtLocal(rows.find((r) => r.id === active)?.created_at, tz) || `as version ${active}`}`}</strong>.</p>
+${vr ? html`<h3>Saved ${fmtLocal(vr.created_at, tz)}, compared with the defaults</h3><div class="scroll"><table class="stack"><thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Value</th></tr></thead><tbody>${Object.entries(overrides).map(([p, v]) => html`<tr data-path="${p}"><td data-label="Setting">${labelOf(p)}</td><td data-label="Default">${showVal(fieldOf(p), getPath(fileRaw, p), names)}</td><td data-label="Value">${showVal(fieldOf(p), v, names)}</td></tr>`)}</tbody></table></div>` : ''}
+${rows.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Saved</th><th scope="col">What changed</th><th scope="col">Note</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
+${rows.map((r) => html`<tr><td data-label="Saved" class="nw">${fmtLocal(r.created_at, tz) || r.created_at}${r.id === active ? html` ${badge('ok', 'In use')}` : ''}</td><td data-label="Changed">${changed(r.overrides_json)}</td><td data-label="Note">${r.note}</td><td><a href="/history?view=${r.id}">Show</a> ${r.id === active ? '' : act(String(r.id), 'Use this version')}</td></tr>`)}</tbody></table></div>` : empty('No settings saved yet. The defaults are in use.', html`<a class="btn" href="/settings">Go to Settings</a>`)}</section>
+<details class="tech"${page > 0 ? rawHtml(' open') : ''}><summary>Full audit log</summary><div class="scroll"><table><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Detail</th></tr></thead><tbody>
+${audits.slice(0, 50).map((a) => html`<tr><td class="nw">${fmtTs(a.ts)}</td><td>${a.actor}</td><td>${a.action}</td><td>${a.target}</td><td><code>${a.detail_json}</code></td></tr>`)}</tbody></table></div>
+<p>${page > 0 ? html`<a href="/history?page=${page - 1}">Newer</a> ` : ''}${audits.length > 50 ? html`<a href="/history?page=${page + 1}">Older</a>` : ''}</p></details>`);
 }
 
 export function historyActivate(ctx: Ctx): Res {
   const id = idOrNull(ctx.form.get('id'));
   if (id !== null && !ctx.db.prepare('SELECT 1 FROM config_versions WHERE id = ?').get(id)) return notFound(ctx);
   const r = activateConfig(ctx.db, id, ctx.now);
-  if (r) return { ...layout(ctx, 'Not activated', '/history', html`<div class="error-box" role="alert"><ul>${r.errors.map((x) => html`<li>${x}</li>`)}</ul></div><p><a href="/history">Back to history</a></p>`), status: 422 };
+  if (r) return { ...layout(ctx, 'Not changed', '/history', html`${errSummary(r.errors.map((msg) => ({ msg })), 'These settings cannot be used.')}<p><a class="btn" href="/history">Back to Change history</a></p>`), status: 422 };
   return redirect(id === null ? '/history?ok=file' : `/history?active=${id}`);
 }
 
-// ---------- overview ----------
+// ---------- home ----------
 
-// The pipeline's technical state, shown folded on the notice board (Activity).
-async function techDetails(ctx: Ctx): Promise<Raw> {
+export async function overviewPage(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+  const tz = cfg.timezone;
   let st: { dryRun?: boolean; configVersion?: number | string; promptVersions?: Record<string, number>; tickAt?: string } = {};
   try { st = JSON.parse(kvGet(ctx.db, 'pipeline_state') ?? '{}'); } catch { /* none */ }
   const hb = kvGet(ctx.db, 'heartbeat');
@@ -542,38 +616,80 @@ async function techDetails(ctx: Ctx): Promise<Raw> {
   const attention = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const cv = st.configVersion;
   const refused = typeof cv === 'string' && cv.startsWith('refused');
-  return html`${st.dryRun ? html`<p class="banner">Practice mode (DRY_RUN) is on: videos are made, nothing is published.</p>` : ''}
-${refused ? html`<p class="error-box" role="alert">The stored settings were refused and the file is in use: ${cv}</p>` : ''}
-<details class="panel tech"><summary>Technical details</summary><table><tbody>
-<tr><th scope="row">Pipeline heartbeat</th><td>${age === null ? 'never' : html`${age} s ago ${age > 300 ? html`<span class="tag bad">stale</span>` : html`<span class="tag ok">alive</span>`}`}</td></tr>
+  const today = localDateOf(ctx.now, tz);
+  const made = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')").get(today) as { n: number }).n;
+  const posted = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'published' AND published_at >= ?").get(new Date(ctx.now.getTime() - 86_400_000).toISOString()) as { n: number }).n;
+  const waiting = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'").get() as { n: number }).n;
+  const llm = monthSpend(ctx.db, ctx.now);
+  const clips = monthSpendUsd(ctx.db, 't2', ctx.now);
+  const alive = age !== null && age <= 300;
+  const needs = attention + waiting;
+  const headline = age === null ? 'The factory has not started yet.' : !alive ? 'The factory has stopped.' : needs ? `${needs} thing${needs === 1 ? ' needs' : 's need'} you.` : 'All good.';
+  const nextText = next ? `${PNAME[next.platform] ?? next.platform} ${fmtLocal(next.scheduled_at, tz)}` : null;
+  const tile = (cls: string, label: string, value: string, sub: string, href: string) => html`<a class="tile ${cls}" href="${href}"><span class="tile-l">${label}</span><span class="tile-v">${value}</span><span class="tile-s">${sub}</span></a>`;
+  return layout(ctx, 'Home', '/overview', html`${st.dryRun ? flash('warn', 'Practice mode is on.', 'Videos are made, and paid clips still cost money, but nothing is posted.') : ''}
+${refused ? flash('bad', 'Your saved settings could not be used, so the defaults are running.', html`Open <a href="/history">Change history</a>.`) : ''}
+<div class="headline"><p>${headline}</p>${age === null ? badge('neutral', 'Factory not started') : alive ? badge('ok', 'Factory running') : badge('bad', 'Factory stopped')}</div>
+<p class="next-line">${nextText ? `Next post: ${nextText}.` : 'No post is scheduled yet.'}</p>
+<div class="tiles">
+${tile(attention ? 'bad' : waiting ? 'warn' : 'ok', 'Needs you', needs ? String(needs) : 'Nothing', attention ? `${attention} post${attention === 1 ? '' : 's'} need checking` : waiting ? `${waiting} video${waiting === 1 ? '' : 's'} waiting for Post it or Discard` : 'All clear', attention ? '/activity' : '/posts')}
+${tile('', 'Next post', next ? fmtLocal(next.scheduled_at, tz) : 'None', next ? (PNAME[next.platform] ?? next.platform) : 'Nothing is scheduled', '/activity')}
+${tile('', 'Last 24 hours', `${made} made · ${posted} posted`, 'Videos finished today, posts sent', '/activity')}
+${tile(llm + clips > 0.9 * (cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2) ? 'warn' : '', 'Spent this month', `${money(llm + clips)} of $${cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2}`, `AI writing ${money(llm)} · Video clips ${money(clips)}`, '/activity')}
+</div>
+<h2>Shortcuts</h2>
+<div class="quick">
+<a class="qa" href="/posts"><b>Make a video now</b><span>Made right away; you press Post it when you like it.</span></a>
+<a class="qa" href="/products"><b>Choose products</b><span>Pick what gets videos and which post they go in.</span></a>
+<a class="qa" href="/settings#when"><b>Change post times</b><span>When Post 1 and Post 2 go out.</span></a>
+<a class="qa" href="/music"><b>Add music</b><span>Upload tracks the videos may use.</span></a>
+<a class="qa" href="/factory"><b>Watch the factory</b><span>See each video move from station to station.</span></a>
+</div>
+<details class="tech"><summary>Technical details</summary><div class="scroll"><table><tbody>
+<tr><th scope="row">Pipeline heartbeat</th><td>${age === null ? 'never' : html`${age} s ago ${age > 300 ? badge('bad', 'stale') : badge('ok', 'alive')}`}</td></tr>
 <tr><th scope="row">Settings in use</th><td>${cv === undefined ? 'unknown (no tick since the admin was installed)' : typeof cv === 'number' ? `version ${cv} since ${fmtTs(st.tickAt)}` : cv === 'file' ? `the file${st.tickAt ? ` since ${fmtTs(st.tickAt)}` : ''}` : 'the file (stored settings refused)'}</td></tr>
 <tr><th scope="row">Prompt versions in use</th><td>${st.promptVersions && Object.keys(st.promptVersions).length ? Object.entries(st.promptVersions).map(([k, v]) => `${k}: v${v}`).join(', ') : 'files'}</td></tr>
 <tr><th scope="row">Next publication</th><td>${next ? `${fmtTs(next.scheduled_at)} (${next.platform}, ${next.slot_id})` : 'none planned'}</td></tr>
-<tr><th scope="row">Needs attention</th><td>${attention ? html`<span class="tag bad">${attention}</span> <a href="/activity">See Activity</a>` : '0'}</td></tr>
+<tr><th scope="row">Needs attention</th><td>${attention ? html`${badge('bad', String(attention))} <a href="/activity">See Activity log</a>` : '0'}</td></tr>
 <tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
-</tbody></table></details>`;
+</tbody></table></div></details>`);
 }
 
-// ---------- activity ----------
+// ---------- activity log ----------
 
-const link = (u: string | null) => (u && /^https:\/\//.test(u) ? html`<a href="${u}" rel="noreferrer noopener">${u}</a>` : (u ?? ''));
+const link = (u: string | null, text?: string) => (u && /^https:\/\//.test(u) ? html`<a href="${u}" rel="noreferrer noopener">${text ?? u}</a>` : (text ? '' : (u ?? '')));
+const postName = (kind: string, idx: number) => (kind === 'manual' ? 'Made now' : `Post ${idx}`);
 
 export async function activityPage(ctx: Ctx): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
-  const today = localDateOf(ctx.now, cfg.timezone);
-  const slots = ctx.db.prepare('SELECT id, status, tier, attempt, error, master_json FROM slots WHERE local_date >= ? AND local_date <= ? ORDER BY id DESC').all(addDays(today, -7), addDays(today, 2)) as { id: string; status: string; tier: string | null; attempt: number; error: string | null; master_json: string | null }[];
+  const tz = cfg.timezone;
+  const today = localDateOf(ctx.now, tz);
+  const weekAgo = new Date(ctx.now.getTime() - 7 * 86_400_000).toISOString();
+  const slots = ctx.db.prepare('SELECT id, status, tier, attempt, error, master_json, updated_at, idx, kind FROM slots WHERE local_date >= ? AND local_date <= ? ORDER BY id DESC').all(addDays(today, -7), addDays(today, 2)) as { id: string; status: string; tier: string | null; attempt: number; error: string | null; master_json: string | null; updated_at: string; idx: number; kind: string }[];
   const caption = (m: string | null) => {
     try { return JSON.parse(m ?? 'null')?.concept?.caption ?? ''; } catch { return ''; }
   };
+  type PubRow = { slot_id: string; platform: string; state: string; scheduled_at: string; published_at: string | null; post_url: string | null; error: string | null; idx: number; kind: string; title: string | null };
+  const pubQ = (where: string, order: string, limit: number, ...a: string[]) => ctx.db.prepare(`SELECT p.slot_id, p.platform, p.state, p.scheduled_at, p.published_at, p.post_url, p.error, s.idx, s.kind, pr.title FROM publications p JOIN slots s ON s.id = p.slot_id LEFT JOIN products pr ON pr.handle = s.product_handle WHERE ${where} ORDER BY ${order} LIMIT ${limit}`).all(...a) as PubRow[];
+  const upcoming = pubQ("p.state = 'pending'", 'p.scheduled_at', 10);
+  const problems = pubQ("p.state = 'needs_attention'", 'p.scheduled_at DESC', 30);
+  const posted = pubQ("p.state = 'published' AND p.published_at >= ?", 'p.published_at DESC', 50, weekAgo);
+  const failed = slots.filter((s) => s.status === 'failed');
   const pubs = ctx.db.prepare("SELECT slot_id, platform, state, scheduled_at, post_url, error FROM publications ORDER BY (state = 'needs_attention') DESC, scheduled_at DESC LIMIT 60").all() as { slot_id: string; platform: string; state: string; scheduled_at: string; post_url: string | null; error: string | null }[];
   const events = ctx.db.prepare('SELECT ts, kind, key, message, delivered FROM events ORDER BY id DESC LIMIT 50').all() as { ts: string; kind: string; key: string; message: string; delivered: number }[];
   const t2n = (ctx.db.prepare("SELECT COUNT(*) AS n FROM spend WHERE tier = 't2' AND state != 'rejected' AND created_at >= ?").get(new Date(Date.UTC(ctx.now.getUTCFullYear(), ctx.now.getUTCMonth(), 1)).toISOString()) as { n: number }).n;
-  return layout(ctx, 'Activity', '/activity', html`${await techDetails(ctx)}
-<h2>Slots</h2><div class="scroll"><table><thead><tr><th>Slot</th><th>Status</th><th>Tier</th><th>Attempt</th><th>Error</th><th>Caption</th></tr></thead><tbody>${slots.map((s) => html`<tr><td>${s.id}</td><td>${s.status}</td><td>${s.tier}</td><td>${s.attempt}</td><td>${s.error}</td><td>${caption(s.master_json)}</td></tr>`)}</tbody></table></div>
-<h2>Publications</h2><div class="scroll"><table><thead><tr><th>Slot</th><th>Platform</th><th>State</th><th>Scheduled</th><th>Post</th><th>Error</th></tr></thead><tbody>${pubs.map((p) => html`<tr><td>${p.slot_id}</td><td>${p.platform}</td><td>${p.state === 'needs_attention' ? html`<span class="tag bad">needs attention</span>` : p.state}</td><td>${fmtTs(p.scheduled_at)}</td><td>${link(p.post_url)}</td><td>${p.error}</td></tr>`)}</tbody></table></div>
-<h2>Spend this month</h2><div class="scroll"><table><tbody>
-<tr><th scope="row">Model calls</th><td>$${monthSpend(ctx.db, ctx.now).toFixed(2)} of $${cfg.llm.monthlyCapUsd}</td></tr>
-<tr><th scope="row">Clips (t2)</th><td>$${monthSpendUsd(ctx.db, 't2', ctx.now).toFixed(2)} of $${cfg.tiers.capsUsd.t2}, ${t2n} job(s)</td></tr></tbody></table></div>
-<h2>Alerts</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Kind</th><th>Key</th><th>Message</th><th>Delivered</th></tr></thead><tbody>${events.map((e) => html`<tr><td>${fmtTs(e.ts)}</td><td>${e.kind}</td><td>${e.key}</td><td>${e.message}</td><td>${e.delivered ? 'yes' : 'no'}</td></tr>`)}</tbody></table></div>
-<h2>Summary (live)</h2><pre>${buildSummary(ctx.db, cfg, ctx.now)}</pre>`);
+  const raw = (e: string | null) => (e ? html`<details><summary>What the system said</summary><code>${e}</code></details>` : '');
+  return layout(ctx, 'Activity log', '/activity', html`
+<section><h2>Coming up</h2>${upcoming.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th><th scope="col">Product</th></tr></thead><tbody>${upcoming.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${postName(p.kind, p.idx)}</td><td data-label="Product">${p.title ?? ''}</td></tr>`)}</tbody></table></div>` : empty(`Nothing is scheduled yet. Tomorrow's videos are made at ${cfg.produceAt}.`)}</section>
+<section><h2>Problems</h2>${problems.length || failed.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Status</th><th scope="col">What to do</th></tr></thead><tbody>
+${problems.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${PNAME[p.platform] ?? p.platform}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('bad', 'Needs you')}</td><td data-label="To do">Check the post on ${PNAME[p.platform] ?? p.platform}; if it is not there, ask for help. It is never re-posted automatically.${raw(p.error)}</td></tr>`)}
+${failed.map((s) => html`<tr><td data-label="When" class="nw">${fmtLocal(s.updated_at, tz)}</td><td data-label="What">${postName(s.kind, s.idx)} video</td><td data-label="Status">${badge('bad', 'Failed')}</td><td data-label="To do">The video could not be made, so nothing was posted. Nothing to do unless it keeps happening.${raw(s.error)}</td></tr>`)}
+</tbody></table></div>` : empty('No problems this week.')}</section>
+<section><h2>Posted</h2>${posted.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th></tr></thead><tbody>${posted.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.published_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${link(p.post_url, 'Open post') || postName(p.kind, p.idx)}</td></tr>`)}</tbody></table></div>` : empty('Nothing was posted this week.')}</section>
+<section><h2>Spending this month</h2><div class="card"><p>AI writing: <strong>${money(monthSpend(ctx.db, ctx.now))}</strong> of $${cfg.llm.monthlyCapUsd}</p><p>Video clips: <strong>${money(monthSpendUsd(ctx.db, 't2', ctx.now))}</strong> of $${cfg.tiers.capsUsd.t2} (${t2n} clip${t2n === 1 ? '' : 's'})</p></div></section>
+<details class="tech"><summary>Technical tables</summary>
+<h3>Slots</h3><div class="scroll"><table><thead><tr><th scope="col">Slot</th><th scope="col">Status</th><th scope="col">Tier</th><th scope="col">Attempt</th><th scope="col">Error</th><th scope="col">Caption</th></tr></thead><tbody>${slots.map((s) => html`<tr><td class="nw">${s.id}</td><td>${s.status}</td><td>${s.tier}</td><td>${s.attempt}</td><td>${s.error}</td><td>${caption(s.master_json)}</td></tr>`)}</tbody></table></div>
+<h3>Publications</h3><div class="scroll"><table><thead><tr><th scope="col">Slot</th><th scope="col">Platform</th><th scope="col">State</th><th scope="col">Scheduled (UTC)</th><th scope="col">Post</th><th scope="col">Error</th></tr></thead><tbody>${pubs.map((p) => html`<tr><td class="nw">${p.slot_id}</td><td>${p.platform}</td><td>${p.state === 'needs_attention' ? badge('bad', 'needs attention') : p.state}</td><td class="nw">${fmtTs(p.scheduled_at)}</td><td>${link(p.post_url)}</td><td>${p.error}</td></tr>`)}</tbody></table></div>
+<h3>Alerts</h3><div class="scroll"><table><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Kind</th><th scope="col">Key</th><th scope="col">Message</th><th scope="col">Delivered</th></tr></thead><tbody>${events.map((e) => html`<tr><td class="nw">${fmtTs(e.ts)}</td><td>${e.kind}</td><td>${e.key}</td><td>${e.message}</td><td>${e.delivered ? 'yes' : 'no'}</td></tr>`)}</tbody></table></div>
+<h3>Summary (live)</h3><pre>${buildSummary(ctx.db, cfg, ctx.now)}</pre></details>`);
 }

@@ -50,11 +50,9 @@ export default {
   // expireHours: a held clip nobody posted is discarded after this long.
   approval: { manualPerDay: 3, expireHours: 24 },
   llm: {
-    models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5', escalation: 'claude-opus-5-5' },
+    models: { script: 'claude-sonnet-5-5', copy: 'claude-haiku-5-5', qa: 'claude-haiku-5-5' },
     // At this spend in a calendar month (UTC) model calls stop and approved scripts are reused.
     monthlyCapUsd: 10,
-    // Opus diagnosis after repeated failures.
-    escalationEnabled: false,
   },
   // A hook is not reused within noRepeatDays. The library is kept at
   // noRepeatDays x slots per day x poolFactor hooks or more.
@@ -66,8 +64,9 @@ export default {
     retryMinutes: [1, 5, 15, 45, 120],
     // An 'uploading' publication older than this is treated as crashed and recovered.
     uploadTimeoutMinutes: 30,
-    // Hard limit for one publisher call. Must be less than uploadTimeoutMinutes.
-    timeoutMinutes: 20,
+    // Hard limit for one publisher call. Must be less than uploadTimeoutMinutes, and the four platforms post one after
+    // another in a tick, so watchdogMinutes must be at least 4 x this + 5. The video upload inside it is cut off at 6 minutes.
+    timeoutMinutes: 10,
   },
   // A 'producing' slot older than produceTimeoutMinutes is retried, up to maxAttempts, then failed. The producer is
   // killed at this limit, so it must outlast the video jobs: a 'ugc' slot may wait for two jobs, each 25 minutes of polling,
@@ -78,18 +77,15 @@ export default {
   // In 'ad' mode some slots open with one short image-to-video clip made from a product photo: for that
   // mode set mix to all t0 and clipSeconds to 4.
   tiers: {
-    // Share of slots per tier: t0 = no new clip, t1 = open-weight clip, t2 = premium clip. Must sum to 1.
-    // No provider named 'fal' exists yet, so a slot drawn into t1 falls back to t0: keep mix.t1 at 0 until one is written.
-    mix: { t0: 0, t1: 0, t2: 1 },
+    // Share of slots per tier: t0 = no new clip, t2 = a new AI clip. Must sum to 1.
+    mix: { t0: 0, t2: 1 },
     // Hard monthly dollar cap per paid tier (UTC month). Failed jobs count at their quoted price.
     // The cap of $52 is about 2,400 credits, which is 91 clips at 26.25 credits each.
-    capsUsd: { t1: 15, t2: 52 },
+    capsUsd: { t2: 52 },
     // Length of the clip asked for, in seconds. In 'ugc' mode this must be 14 to 16.
     clipSeconds: 15,
     // Most paid jobs (retries included) one slot may start.
     maxJobsPerSlot: 2,
-    // Tier 1: provider, model id and the price of one clip in dollars. Not working: there is no 'fal' provider in src/router.
-    t1: { provider: 'fal', model: 'fal-ai/ltx-2-19b/image-to-video', usdPerClip: 0.17 },
     // Tier 2 runs on the owner's Higgsfield subscription through its MCP server. The Ultra plan grants
     // 3,000 credits a month and was bought at $65, so one credit is about $0.0217. Wan 3.0 at 720p is
     // quoted at 26.25 credits, so usdPerClip is 0.57. A job quoted above maxCredits is not started, and a job

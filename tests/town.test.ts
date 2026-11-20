@@ -56,11 +56,14 @@ test('the quest log asks for what needs the owner, in order of urgency', async (
 });
 
 test('the town page and its data need a session', async () => {
-  assert.equal((await send('GET', '/overview')).status, 303);
+  assert.equal((await send('GET', '/town')).status, 303);
   assert.equal((await send('GET', '/town.json')).status, 303);
   const r = await send('POST', '/login', { body: new URLSearchParams({ username: 'admin', password: PW }).toString() });
   const cookie = String(([] as string[]).concat(r.headers['set-cookie'] ?? [])[0]).split(';')[0];
-  const page = await send('GET', '/overview', { cookie });
+  const page = await send('GET', '/town', { cookie });
+  assert.equal(page.headers['content-security-policy'], "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  assert.deepEqual([...page.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/town.js" defer>']);
+  assert.ok(page.text.includes('href="/pixel.css"'));
   assert.equal(page.status, 200);
   for (const href of ['/factory', '/products', '/posts', '/settings', '/music', '/models', '/prompts', '/activity', '/history']) assert.ok(page.text.includes(`href="${href}"`), href);
   const j = await send('GET', '/town.json', { cookie });

@@ -10,7 +10,7 @@ import { checkScript } from '../creative/claims.ts';
 import { pickHook, refillHooks, type Hook } from '../creative/hooks.ts';
 import { writeScript } from '../creative/script.ts';
 import { writeConcept } from '../creative/ugc.ts';
-import { kvGet, kvSet, type Db } from '../db/index.ts';
+import type { Db } from '../db/index.ts';
 import { LlmCapError, LlmRefusalError, RetryableLlmError } from '../llm/client.ts';
 import { makeBed } from '../music/index.ts';
 import { alert } from '../ops/alert.ts';
@@ -19,12 +19,13 @@ import { captionStyleOk, clipHasSound, runQa } from '../qa/index.ts';
 import { checkClip } from '../qa/vision.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
-import { listBriefs, runIngest } from '../shopify/index.ts';
-import { activeHandles, selectBriefs } from '../shopify/catalog.ts';
+import { ensureIngest, runIngest } from '../shopify/index.ts';
+import { NoBriefError, alertStaleSelection, pickBrief } from '../shopify/catalog.ts';
+
 import { synthesize } from '../tts/index.ts';
 import { slotTierDef } from '../config/models.ts';
 import { chooseTier, clipProviders, generateClip, rejectClip, type ClipProvider } from '../router/index.ts';
-import { ClipPendingError } from '../router/errors.ts';
+import { ClipPendingError, NotSentError } from '../router/errors.ts';
 import { ff } from './ffmpeg.ts';
 import { probeVideo } from './probe.ts';
 import { renderEdl, renderUgc } from './render.ts';
@@ -75,7 +76,7 @@ export function chooseVariant(slotId: string, ordinal: number, prevTemplate: str
 
 // Seams for tests; production uses the real modules.
 export type ProduceDeps = {
-  ingest: (now: Date) => Promise<void>;
+  ingest: (now: Date, signal?: AbortSignal) => Promise<void>;
   synthesize: typeof synthesize;
   makeBed: typeof makeBed;
   render: typeof renderEdl;
@@ -101,12 +102,9 @@ async function cropToJpeg(src: string, crop: Brief['shots'][number]['crop'], out
 const MOTION_PROMPT = 'Slow, gentle camera push-in. Keep the person, the garment and its colour exactly as in the image. Subtle natural movement only. No text, no logos, no new objects.';
 
 const SPEEDS = [1.0, 1.06, 1.12];
-export const DAY_MS = 24 * 3600 * 1000;
 export type Slot = { id: string; local_date: string; idx: number; kind: 'planned' | 'manual'; video_model: string | null };
 export const before = 'local_date < ? OR (local_date = ? AND idx < ?)'; // slots ahead of this one, in order
 
-// The store could not be read and there is no stored brief: the slot goes back to 'planned'.
-export class NoBriefError extends Error {}
 // Nothing was spent by the failure and it may pass by itself: the slot goes back to 'planned' and the attempt is given back.
 export class DeferSlotError extends Error {
   counted = false; // true: the attempt is not given back (a repeat of an earlier deferral)
@@ -114,43 +112,30 @@ export class DeferSlotError extends Error {
 // Another producer owns the slot now; this one must stop writing.
 export class ClaimLostError extends Error {}
 
-// Daily, under an overall deadline. A failure alerts and keeps the stored brief; retry in an hour.
-export async function ensureIngest(db: Db, now: Date, d: ProduceDeps): Promise<void> {
-  const last = kvGet(db, 'ingest_at');
-  if (last && now.getTime() - Date.parse(last) < DAY_MS) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([d.ingest(now), new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('ingest deadline exceeded')), d.ingestDeadlineMs)))]);
-    kvSet(db, 'ingest_at', now.toISOString());
-  } catch (e) {
-    kvSet(db, 'ingest_at', new Date(now.getTime() - DAY_MS + 3600_000).toISOString());
-    await alert(db, 'ingest_failed', 'ingest', `ingest failed, using the stored brief: ${e}`, now);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// Products take turns by slot ordinal; only the ones ticked on the Products page, when any are ticked.
-export function pickBrief(db: Db, ordinal: number): Brief {
-  const briefs = selectBriefs(listBriefs(db), activeHandles(db));
-  if (!briefs.length) throw new NoBriefError('no product brief and the store could not be read');
-  return briefs[ordinal % briefs.length];
-}
+// The text of each cited fact, stored in the master so a later reuse can tell that a fact was edited since.
+export type FactTexts = Record<string, string>;
+export const factTextsOf = (brief: Brief, ids: Iterable<string>): FactTexts =>
+  Object.fromEntries([...new Set(ids)].flatMap((id) => { const f = brief.facts.find((x) => x.id === id); return f ? [[id, f.text]] : []; }));
+// A stored master may be reused only when every fact it cites is still in the brief with the same text.
+// A master stored before factTexts existed is never reused.
+export const factsUnchanged = (brief: Brief, stored: unknown): stored is FactTexts =>
+  !!stored && typeof stored === 'object' && !Array.isArray(stored) && Object.entries(stored).every(([id, t]) => brief.facts.find((f) => f.id === id)?.text === t);
 
 // Oldest finished slot of this product, old enough that its script may run again, with its stored copy.
-// A stored script must still pass every check against the current brief.
-function oldSlot(db: Db, config: Config, brief: Brief, now: Date): { hookId: number | null; script: Script } | null {
+// A stored script must still pass every check against the current brief, and cite no edited fact.
+function oldSlot(db: Db, config: Config, brief: Brief, now: Date): { hookId: number | null; script: Script; factTexts: FactTexts } | null {
   const cutoff = addDays(localDateOf(now, config.timezone), -config.hooks.noRepeatDays);
   const rows = db.prepare("SELECT hook_id, master_json FROM slots WHERE product_handle = ? AND status IN ('ready','done') AND master_json IS NOT NULL AND local_date < ? ORDER BY local_date, idx").all(brief.product.handle, cutoff) as { hook_id: number | null; master_json: string }[];
   for (const r of rows) {
-    const parsed = Script.safeParse(JSON.parse(r.master_json).script);
-    if (!parsed.success) continue;
+    const m = JSON.parse(r.master_json);
+    const parsed = Script.safeParse(m.script);
+    if (!parsed.success || !factsUnchanged(brief, m.factTexts)) continue;
     const problems = checkScript(brief, parsed.data);
     if (problems.length) {
       log.warn('stored script rejected against the current brief', { problems: problems.slice(0, 3) });
       continue;
     }
-    return { hookId: r.hook_id, script: parsed.data };
+    return { hookId: r.hook_id, script: parsed.data, factTexts: m.factTexts };
   }
   return null;
 }
@@ -221,8 +206,9 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   const hold = holdOf(db, slot, token, d);
   await ensureIngest(db, now, d);
   const ordinal = (db.prepare(`SELECT COUNT(*) AS n FROM slots WHERE ${before}`).get(slot.local_date, slot.local_date, slot.idx) as { n: number }).n;
-  const brief = pickBrief(db, ordinal);
+  const brief = pickBrief(db, slot);
   const handle = brief.product.handle;
+  await alertStaleSelection(db, slot, handle, now);
   const work = path.join(dir, `attempt-${Date.parse(token)}`, 'work');
   mkdirSync(work, { recursive: true });
   const attemptDir = path.dirname(work);
@@ -238,6 +224,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   let script: Script | null = null;
   let hookId: number | null = hook?.id ?? null;
   let degraded = false;
+  let storedFacts: FactTexts | null = null;
   if (hook) {
     try {
       script = await writeScript(db, config, brief, hook, now, slot.id);
@@ -250,12 +237,13 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
     const stored = oldSlot(db, config, brief, now);
     if (!stored) throw new Error('no hook or script available and no usable old slot to reuse');
     ({ script, hookId } = stored);
+    storedFacts = stored.factTexts;
     degraded = true;
     await alert(db, 'degraded', slot.id, `${slot.id} reuses a stored script: the model is unavailable or no hook is free`, now);
   }
   hold();
 
-  // Tier: some slots open with one AI clip made from the hook photo. Any failure leaves the slot at tier 0.
+  // Tier: some slots open with one AI clip made from the hook photo. A failure leaves the slot at tier 0, except a request not sent, which retries the slot.
   const tier = await chooseTier(db, config, d.providers, slot.id, now);
   let clip: AssembleInput['clip'] = null;
   if (tier !== 't0') {
@@ -271,7 +259,7 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
       if (ok && info && info.seconds >= 2 && Math.min(info.width, info.height) >= 480) clip = { src: out, width: info.width, height: info.height };
       else if (ok) rejectClip(db, slot.id, now, 'clip failed the size or length check');
     } catch (e) {
-      if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError) throw e;
+      if (d.signal?.aborted || e instanceof ClaimLostError || e instanceof ClipPendingError || e instanceof NotSentError) throw e;
       log.warn('clip step failed, using tier 0', { slot: slot.id, error: String(e) });
     }
   }
@@ -341,7 +329,9 @@ async function produce(db: Db, config: Config, slot: Slot, dir: string, token: s
   hold();
 
   // Claim confirmed and everything passed: move the files into place and flip the slot, in one transaction.
-  commitSlot(db, slot, dir, attemptDir, token, { handle, hookId, tier: clip ? tier : 't0', master: JSON.stringify({ script, edl, variant: variantUsed }), platforms, qaOf, ai: edl.ai, copy, hold: null, heldAt: null, musicSha: null });
+  // A reused script keeps the facts it was checked against; a fresh one cites its beats' and its hook's facts.
+  const factTexts = storedFacts ?? factTextsOf(brief, [...script.beats.flatMap((b) => b.factIds), ...(hook?.factIds ?? [])]);
+  commitSlot(db, slot, dir, attemptDir, token, { handle, hookId, tier: clip ? tier : 't0', master: JSON.stringify({ script, edl, variant: variantUsed, factTexts }), platforms, qaOf, ai: edl.ai, copy, hold: null, heldAt: null, musicSha: null });
   log.info('slot produced', { slot: slot.id, seconds: Math.round((Date.now() - t0) / 100) / 10, degraded });
 }
 
@@ -353,7 +343,7 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
   // `at` is the time written to updated_at: the claim time, or for a wait the end of the attempt.
   const fenced = (status: string, error: string | null, attempt = 0, at = ts) =>
     db.prepare("UPDATE slots SET status = ?, error = ?, attempt = attempt + ?, claimed_at = NULL, updated_at = ? WHERE id = ? AND status = 'producing' AND claimed_at = ?").run(status, error, attempt, at, slotId, ts).changes === 1;
-  const d: ProduceDeps = { ingest: (n) => runIngest(db, config, n, { print: false }), synthesize, makeBed, render: renderEdl, qa: runQa, concept: writeConcept, checkClip, renderUgc, ingestDeadlineMs: 5 * 60000, providers: clipProviders(db, config, () => now), prepareImage: cropToJpeg, probeClip: probeVideo, clipSound: clipHasSound, ...deps };
+  const d: ProduceDeps = { ingest: async (n, signal) => { await runIngest(db, config, n, { print: false, signal }); }, synthesize, makeBed, render: renderEdl, qa: runQa, concept: writeConcept, checkClip, renderUgc, ingestDeadlineMs: 5 * 60000, providers: clipProviders(db, config, () => now), prepareImage: cropToJpeg, probeClip: probeVideo, clipSound: clipHasSound, ...deps };
   try {
     const slot = db.prepare('SELECT id, local_date, idx, kind, video_model FROM slots WHERE id = ?').get(slotId) as Slot;
     // The slot's own video model replaces tier 2 for this run. An unknown, removed or malformed one fails only this slot.
@@ -379,6 +369,8 @@ export async function produceSlot(db: Db, config: Config, slotId: string, now: D
     const attempt = tries;
     const paid = db.prepare("SELECT 1 FROM spend WHERE slot_id = ? AND state IN ('submitted','succeeded')").get(slotId);
     if (paid && attempt < config.render.maxAttempts && fenced('planned', text, 0, ended())) return log.warn('slot will be tried again, the paid clip is kept', { slot: slotId, error: text });
+    // The clip request failed before the paid call: nothing was spent, so the slot is tried again while attempts remain.
+    if (e instanceof NotSentError && attempt < config.render.maxAttempts && fenced('planned', text, 0, ended())) return log.warn('slot will be tried again, the clip was not sent', { slot: slotId, error: text });
     if (fenced('failed', text)) await alert(db, 'produce_failed', slotId, `produce failed for ${slotId}: ${text}`, now);
   }
 }

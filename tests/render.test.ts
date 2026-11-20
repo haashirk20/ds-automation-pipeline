@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { assertInside, planStaging } from '../src/render/render.ts';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { assertInside, planStaging, sweepStaged } from '../src/render/render.ts';
 import { assembleEdl, ttsLines } from '../src/creative/assemble.ts';
 import { Brief, Script } from '../src/contracts.ts';
 
@@ -98,4 +100,17 @@ test('renderUgc with music: the duck window is quieter than after it', { timeout
   console.log(`music duck measured: ducked ${ducked} LUFS, after ${after} LUFS, diff ${(after - ducked).toFixed(1)} dB`);
   assert.ok(after > -40, 'music is audible after the duck');
   assert.ok(after - ducked > 15 && after - ducked < 25, 'the duck is about 20 dB');
+});
+
+test('sweepStaged removes staged folders older than the limit and keeps fresh ones', () => {
+  const bundle = mkdtempSync(join(tmpdir(), 'bundle-'));
+  const old = join(bundle, 'public', 's', 'old');
+  const fresh = join(bundle, 'public', 's', 'fresh');
+  mkdirSync(old, { recursive: true });
+  mkdirSync(fresh, { recursive: true });
+  const now = Date.now();
+  utimesSync(old, new Date(now - 2 * 3600_000), new Date(now - 2 * 3600_000));
+  assert.equal(sweepStaged(bundle, 3600_000, now), 1);
+  assert.deepEqual([existsSync(old), existsSync(fresh)], [false, true]);
+  assert.equal(sweepStaged(join(bundle, 'none'), 3600_000, now), 0);
 });

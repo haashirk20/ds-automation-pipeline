@@ -84,6 +84,6 @@ export async function saveImage(file: File, dir: string, prefix: string, maxSide
     renameSync(part, path.join(dir, name));
     return { name, width: out.width, height: out.height };
   } finally {
-    for (const f of [incoming, part]) try { rmSync(f, { force: true }); } catch { /* left for the sweep */ }
+    for (const f of [incoming, part]) try { rmSync(f, { force: true }); } catch { /* left for sweepIncoming (src/shopify/index.ts) */ }
   }
 }

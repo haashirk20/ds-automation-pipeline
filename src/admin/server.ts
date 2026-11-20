@@ -16,11 +16,7 @@ import * as products from './products.ts';
 import * as town from './town.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
-import { readFileSync } from 'node:fs';
-
-// Static files of the settings block editor, read once. They hold no data.
-export const SETTINGS_JS = readFileSync(new URL('./settings.client.js', import.meta.url), 'utf8');
-export const BLOCKS_CSS = readFileSync(new URL('./blocks.css', import.meta.url), 'utf8');
+import { PIXEL_CSS } from './pixel.ts';
 
 const MAX_BODY = 256 * 1024;
 const MAX_PASSWORD = 1024;
@@ -36,49 +32,51 @@ const HEADERS: Record<string, string> = {
   'cross-origin-resource-policy': 'same-origin',
 };
 
-type Route = { auth: boolean; h: (c: Ctx) => Res | Promise<Res> };
+type Route = { h: (c: Ctx) => Res | Promise<Res> };
 const ROUTES: Record<string, Route> = {
-  'GET /': { auth: true, h: town.townPage },
-  'GET /overview': { auth: true, h: town.townPage },
-  'GET /town.json': { auth: true, h: town.townJson },
-  'GET /factory': { auth: true, h: factory.factoryPage },
-  'GET /factory.json': { auth: true, h: factory.factoryJson },
-  'GET /settings': { auth: true, h: pages.settingsPage },
-  'POST /settings/preview': { auth: true, h: pages.settingsPreview },
-  'POST /settings/save': { auth: true, h: pages.settingsSave },
-  'GET /products': { auth: true, h: (c) => products.productsPage(c) },
-  'GET /products/new': { auth: true, h: (c) => products.productForm(c) },
-  'GET /products/edit': { auth: true, h: (c) => products.productForm(c) },
-  'POST /products/save': { auth: true, h: () => pages.notFound(null) }, // multipart, handled before the body is read
-  'POST /products/select': { auth: true, h: products.productsSelect },
-  'POST /products/delete': { auth: true, h: products.productsDelete },
-  'POST /brand/logo': { auth: true, h: () => pages.notFound(null) }, // multipart
-  'POST /brand/logo/reset': { auth: true, h: products.logoReset },
-  'GET /media/photo': { auth: true, h: products.mediaPhoto },
-  'GET /media/logo': { auth: true, h: (c) => products.mediaLogo(c) },
-  'GET /posts': { auth: true, h: posts.postsPage },
-  'POST /posts/new': { auth: true, h: posts.postNew },
-  'POST /posts/approve': { auth: true, h: posts.postApprove },
-  'POST /posts/discard': { auth: true, h: posts.postDiscard },
-  'GET /media/render': { auth: true, h: media.mediaRender },
-  'GET /media/music': { auth: true, h: media.mediaMusic },
-  'GET /music': { auth: true, h: (c) => music.musicPage(c) },
-  'POST /music/upload': { auth: true, h: () => pages.notFound(null) }, // handled before the body is read
-  'POST /music/select': { auth: true, h: music.musicSelect },
-  'POST /music/delete': { auth: true, h: music.musicDelete },
-  'GET /models': { auth: true, h: (c) => models.modelsPage(c) },
-  'POST /models/add': { auth: true, h: models.modelAdd },
-  'POST /models/remove': { auth: true, h: models.modelRemove },
-  'GET /prompts': { auth: true, h: pages.promptsPage },
-  'GET /prompts/view': { auth: true, h: pages.promptView },
-  'GET /prompts/edit': { auth: true, h: (c) => pages.promptEdit(c) },
-  'POST /prompts/preview': { auth: true, h: pages.promptPreview },
-  'POST /prompts/save': { auth: true, h: pages.promptSave },
-  'GET /prompts/history': { auth: true, h: pages.promptHistory },
-  'POST /prompts/activate': { auth: true, h: pages.promptActivate },
-  'GET /activity': { auth: true, h: pages.activityPage },
-  'GET /history': { auth: true, h: pages.historyPage },
-  'POST /history/activate': { auth: true, h: pages.historyActivate },
+  'GET /': { h: pages.overviewPage },
+  'GET /overview': { h: pages.overviewPage },
+  'GET /factory': { h: factory.factoryPage },
+  'GET /town': { h: town.townPage },
+  'GET /town.json': { h: town.townJson },
+  'GET /factory.json': { h: factory.factoryJson },
+  'GET /settings': { h: pages.settingsPage },
+  'POST /settings/preview': { h: pages.settingsPreview },
+  'POST /settings/save': { h: pages.settingsSave },
+  'GET /products': { h: (c) => products.productsPage(c) },
+  'GET /products/new': { h: (c) => products.productForm(c) },
+  'GET /products/edit': { h: (c) => products.productForm(c) },
+  'POST /products/save': { h: () => pages.notFound(null) }, // multipart, handled before the body is read
+  'POST /products/select': { h: products.productsSelect },
+  'POST /products/delete': { h: products.productsDelete },
+  'POST /products/sync': { h: products.productsSync },
+  'POST /brand/logo': { h: () => pages.notFound(null) }, // multipart
+  'POST /brand/logo/reset': { h: products.logoReset },
+  'GET /media/photo': { h: products.mediaPhoto },
+  'GET /media/logo': { h: (c) => products.mediaLogo(c) },
+  'GET /posts': { h: posts.postsPage },
+  'POST /posts/new': { h: posts.postNew },
+  'POST /posts/approve': { h: posts.postApprove },
+  'POST /posts/discard': { h: posts.postDiscard },
+  'GET /media/render': { h: media.mediaRender },
+  'GET /media/music': { h: media.mediaMusic },
+  'GET /music': { h: (c) => music.musicPage(c) },
+  'POST /music/upload': { h: () => pages.notFound(null) }, // handled before the body is read
+  'POST /music/select': { h: music.musicSelect },
+  'POST /music/delete': { h: music.musicDelete },
+  'GET /models': { h: (c) => models.modelsPage(c) },
+  'POST /models/add': { h: models.modelAdd },
+  'POST /models/remove': { h: models.modelRemove },
+  'GET /prompts': { h: pages.promptsPage },
+  'GET /prompts/view': { h: pages.promptView },
+  'GET /prompts/edit': { h: (c) => pages.promptEdit(c) },
+  'POST /prompts/preview': { h: pages.promptPreview },
+  'POST /prompts/save': { h: pages.promptSave },
+  'GET /prompts/history': { h: pages.promptHistory },
+  'POST /prompts/activate': { h: pages.promptActivate },
+  'GET /activity': { h: pages.activityPage },
+  'GET /history': { h: pages.historyPage },
+  'POST /history/activate': { h: pages.historyActivate },
 };
 
 // Multipart routes, each with its own body limit.
@@ -123,8 +121,7 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/town.js') return { status: 200, body: town.TOWN_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/town.css') return { status: 200, body: town.TOWN_CSS, type: 'text/css; charset=utf-8' };
-  if (method === 'GET' && path === '/settings.js') return { status: 200, body: SETTINGS_JS, type: 'text/javascript; charset=utf-8' };
-  if (method === 'GET' && path === '/blocks.css') return { status: 200, body: BLOCKS_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/pixel.css') return { status: 200, body: PIXEL_CSS, type: 'text/css; charset=utf-8' };
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();

@@ -157,12 +157,12 @@
     { id: 'factory', href: '/factory', place: 'FACTORY', page: 'FACTORY', x: 24, y: 18, w: 116, h: 74, door: [82, 92], route: [[228, 108], [82, 108], [82, 96]] },
     { id: 'hall', href: '/settings', place: 'TOWN HALL', page: 'SETTINGS', x: 214, y: 8, w: 116, h: 82, door: [272, 90], route: [[228, 108], [272, 108], [272, 94]] },
     { id: 'market', href: '/products', place: 'MARKET', page: 'PRODUCTS', x: 404, y: 22, w: 116, h: 70, door: [462, 92], route: [[316, 108], [462, 108], [462, 96]] },
-    { id: 'post', href: '/posts', place: 'POST OFFICE', page: 'POSTS', x: 20, y: 130, w: 92, h: 60, door: [66, 190], route: [[200, 205], [66, 205], [66, 194]] },
+    { id: 'post', href: '/posts', place: 'POST OFFICE', page: 'VIDEOS', x: 20, y: 130, w: 92, h: 60, door: [66, 190], route: [[200, 205], [66, 205], [66, 194]] },
     { id: 'music', href: '/music', place: 'MUSIC HALL', page: 'MUSIC', x: 432, y: 130, w: 92, h: 60, door: [478, 190], route: [[344, 205], [478, 205], [478, 194]] },
-    { id: 'library', href: '/prompts', place: 'LIBRARY', page: 'PROMPTS', x: 26, y: 238, w: 106, h: 54, door: [79, 292], route: [[272, 214], [272, 308], [79, 308], [79, 296]] },
-    { id: 'tower', href: '/models', place: 'WIZARD TOWER', page: 'MODELS', x: 186, y: 214, w: 50, h: 78, door: [211, 292], route: [[272, 214], [272, 308], [211, 308], [211, 296]] },
-    { id: 'board', href: '/activity', place: 'NOTICE BOARD', page: 'ACTIVITY', x: 296, y: 228, w: 34, h: 28, door: [313, 256], route: [[272, 214], [272, 264], [313, 264], [313, 260]] },
-    { id: 'archive', href: '/history', place: 'ARCHIVE', page: 'HISTORY', x: 404, y: 238, w: 112, h: 54, door: [460, 292], route: [[272, 214], [272, 308], [460, 308], [460, 296]] },
+    { id: 'library', href: '/prompts', place: 'LIBRARY', page: 'WRITING INSTRUCTIONS', x: 26, y: 238, w: 106, h: 54, door: [79, 292], route: [[272, 214], [272, 308], [79, 308], [79, 296]] },
+    { id: 'tower', href: '/models', place: 'WIZARD TOWER', page: 'VIDEO MODELS', x: 186, y: 214, w: 50, h: 78, door: [211, 292], route: [[272, 214], [272, 308], [211, 308], [211, 296]] },
+    { id: 'board', href: '/activity', place: 'NOTICE BOARD', page: 'ACTIVITY LOG', x: 296, y: 228, w: 34, h: 28, door: [313, 256], route: [[272, 214], [272, 264], [313, 264], [313, 260]] },
+    { id: 'archive', href: '/history', place: 'ARCHIVE', page: 'CHANGE HISTORY', x: 404, y: 238, w: 112, h: 54, door: [460, 292], route: [[272, 214], [272, 308], [460, 308], [460, 296]] },
   ];
   const FOUNTAIN = { x: 272, y: 158, r: 22 };
   const HUB = [272, 200];

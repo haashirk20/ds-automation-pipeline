@@ -14,10 +14,14 @@ const MAX_WAIT_MS = 90_000;
 
 export const defaultSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Each request's 20 s timeout, combined with the caller's signal when there is one.
+export const withTimeout = (signal?: AbortSignal) => (signal ? AbortSignal.any([AbortSignal.timeout(20_000), signal]) : AbortSignal.timeout(20_000));
+
 // GET with a 20 s timeout. Retries 429 and 5xx; returns the final response (caller checks ok).
-export async function getWithRetry(url: string, f: Fetch, sleep: Sleep): Promise<Response> {
+export async function getWithRetry(url: string, f: Fetch, sleep: Sleep, signal?: AbortSignal): Promise<Response> {
   for (let i = 1; ; i++) {
-    const res = await f(url, { signal: AbortSignal.timeout(20_000) });
+    signal?.throwIfAborted();
+    const res = await f(url, { signal: withTimeout(signal) });
     if (res.status !== 429 && res.status < 500) return res;
     if (i >= MAX_TRIES) throw new Error(`GET ${url} failed: HTTP ${res.status} after ${MAX_TRIES} tries`);
     await res.body?.cancel();
@@ -28,8 +32,8 @@ export async function getWithRetry(url: string, f: Fetch, sleep: Sleep): Promise
   }
 }
 
-async function getJson<T>(url: string, schema: z.ZodType<T>, f: Fetch, sleep: Sleep): Promise<T> {
-  const res = await getWithRetry(url, f, sleep);
+async function getJson<T>(url: string, schema: z.ZodType<T>, f: Fetch, sleep: Sleep, signal?: AbortSignal): Promise<T> {
+  const res = await getWithRetry(url, f, sleep, signal);
   if (!res.ok) throw new Error(`GET ${url} failed: HTTP ${res.status}`);
   const r = schema.safeParse(await res.json());
   if (!r.success) throw new Error(`GET ${url}: unexpected response: ${r.error.message}`);
@@ -59,14 +63,18 @@ const RawProduct = z.object({
 export type RawProduct = z.infer<typeof RawProduct>;
 export const Products = z.object({ products: z.array(RawProduct) });
 
-export async function fetchShop(shop: string, f: Fetch, sleep: Sleep): Promise<{ meta: ShopMeta; products: RawProduct[] }> {
-  const meta = await getJson(`https://${shop}/meta.json`, Meta, f, sleep);
+// `handles` is every listed product's handle, or null when the list may go on past the last page read.
+export type ShopRead = { meta: ShopMeta; products: RawProduct[]; handles: string[] | null };
+
+export async function fetchShop(shop: string, f: Fetch, sleep: Sleep, signal?: AbortSignal): Promise<ShopRead> {
+  const meta = await getJson(`https://${shop}/meta.json`, Meta, f, sleep, signal);
   const products: RawProduct[] = [];
+  let complete = false;
   for (let page = 1; page <= 4; page++) {
     const url = `https://${shop}/products.json?limit=250` + (page > 1 ? `&page=${page}` : '');
-    const got = (await getJson(url, Products, f, sleep)).products;
+    const got = (await getJson(url, Products, f, sleep, signal)).products;
     products.push(...got);
-    if (got.length < 250) break;
+    if (got.length < 250) { complete = true; break; }
   }
-  return { meta, products };
+  return { meta, products, handles: complete ? products.map((p) => p.handle) : null };
 }

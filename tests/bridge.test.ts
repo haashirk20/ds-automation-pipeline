@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAccounts } from '../src/publish/bridge.ts';
-import { makePublishers } from '../src/publish/registry.ts';
+import { makePublishers } from '../src/publish/bridge.ts';
 import { AmbiguousError, PermanentError, RetryableError } from '../src/publish/types.ts';
 import { AI_LINE } from '../src/contracts.ts';
 import { config } from './helpers.ts';
