@@ -5,7 +5,7 @@ import { audit } from '../config/overrides.ts';
 import { kvGet, type Db } from '../db/index.ts';
 import { alert } from '../ops/alert.ts';
 import { log } from '../ops/log.ts';
-import { clearCookie, clearLockout, cookieOf, COOKIE, createSession, destroySession, getSession, hostAllowed, isLocked, loginFailed, safeEqual, sessionCookie, verifyPassword } from './auth.ts';
+import { clearCookie, clearLockout, cookieOf, COOKIE, createSession, destroySession, getSession, hostAllowed, isLocked, loginFailed, safeEqual, safeNext, sessionCookie, verifyPassword } from './auth.ts';
 import * as factory from './factory.ts';
 import * as media from './media.ts';
 import * as models from './models.ts';
@@ -16,7 +16,6 @@ import * as products from './products.ts';
 import * as town from './town.ts';
 import type { Ctx, Res } from './pages.ts';
 import { CSS } from './style.ts';
-import { PIXEL_CSS } from './pixel.ts';
 
 const MAX_BODY = 256 * 1024;
 const MAX_PASSWORD = 1024;
@@ -41,7 +40,8 @@ const ROUTES: Record<string, Route> = {
   'GET /town.json': { h: town.townJson },
   'GET /factory.json': { h: factory.factoryJson },
   'GET /settings': { h: pages.settingsPage },
-  'POST /settings/preview': { h: pages.settingsPreview },
+  'POST /settings/preview': { h: (c) => pages.settingsPreview(c) },
+  'POST /settings/edit': { h: pages.settingsEdit },
   'POST /settings/save': { h: pages.settingsSave },
   'GET /products': { h: (c) => products.productsPage(c) },
   'GET /products/new': { h: (c) => products.productForm(c) },
@@ -71,6 +71,7 @@ const ROUTES: Record<string, Route> = {
   'GET /prompts/view': { h: pages.promptView },
   'GET /prompts/edit': { h: (c) => pages.promptEdit(c) },
   'POST /prompts/preview': { h: pages.promptPreview },
+  'POST /prompts/back': { h: pages.promptBack },
   'POST /prompts/save': { h: pages.promptSave },
   'GET /prompts/history': { h: pages.promptHistory },
   'POST /prompts/activate': { h: pages.promptActivate },
@@ -105,6 +106,7 @@ function readBody(req: IncomingMessage): Promise<string | null> {
 }
 
 const plain = (status: number, text: string): Res => ({ status, body: text, type: 'text/plain; charset=utf-8' });
+const SESSION_ENDED = 'Your session ended. Sign in again; your change was not saved.';
 
 async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Res> {
   const host = req.headers.host;
@@ -121,7 +123,7 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   if (method === 'GET' && path === '/factory.js') return { status: 200, body: factory.FACTORY_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/town.js') return { status: 200, body: town.TOWN_JS, type: 'text/javascript; charset=utf-8' };
   if (method === 'GET' && path === '/town.css') return { status: 200, body: town.TOWN_CSS, type: 'text/css; charset=utf-8' };
-  if (method === 'GET' && path === '/pixel.css') return { status: 200, body: PIXEL_CSS, type: 'text/css; charset=utf-8' };
+  if (method === 'GET' && path === '/favicon.ico') return { status: 204 }; // no icon; answered before any session lookup
   if (method === 'GET' && path === '/healthz') {
     try {
       db.prepare('SELECT 1').get();
@@ -133,7 +135,25 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   const isLogin = path === '/login';
   const isLogout = method === 'POST' && path === '/logout';
   const route = ROUTES[`${method} ${path}`];
-  if (!route && !(isLogin && (method === 'GET' || method === 'POST')) && !isLogout) return pages.notFound(null);
+  const session = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
+  // With a valid session the error pages keep the menu.
+  const ectx: Ctx | null = session ? { db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: session.csrf, range: null } : null;
+  // Back to a page that can be opened with GET: the Referer if it is this site, else the parent of the posted path, else Home.
+  // A POST-only address (a review or save step) is never offered.
+  const back = ((): { href: string; label: string } => {
+    const getable = (p: string) => !!ROUTES[`GET ${p}`];
+    try {
+      const r = new URL(req.headers.referer ?? '');
+      if (r.host === host && getable(r.pathname)) return { href: safeNext(r.pathname + r.search) ?? r.pathname, label: 'Go back' };
+    } catch { /* no referer */ }
+    const parent = '/' + (path.split('/')[1] ?? '');
+    const to = parent === '/brand' ? '/products' : getable(parent) ? parent : '/overview';
+    return { href: to, label: to === '/overview' ? 'Go to Home' : 'Go back' };
+  })();
+  // Signed in: the page was simply stale. Signed out: the session ended.
+  const stale = (): Res => session ? fail(403, 'Not saved', 'This page was out of date, so nothing was saved. Go back, reload, and try again.') : fail(403, 'Not saved', SESSION_ENDED, { href: '/login', label: 'Sign in' });
+  const fail = (status: number, title: string, text: string, to = back): Res => pages.errorPage(ectx, status, title, text, to);
+  if (!route && !(isLogin && (method === 'GET' || method === 'POST')) && !isLogout) return pages.notFound(ectx);
 
   const sameOrigin = (): boolean => {
     if (req.headers.origin !== `http://${host}` && req.headers.origin !== `https://${host}`) return false;
@@ -144,15 +164,15 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   // The multipart routes. The session is checked before any body is read; the csrf field is checked after parsing.
   const upload = method === 'POST' ? MULTIPART[path] : undefined;
   if (upload) {
-    const s = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
+    const s = session;
     const close = (r: Res): Res => ({ ...r, headers: { ...r.headers, connection: 'close' } }); // the body is not read, so the connection must not be reused
     if (!s) return close(pages.redirect('/login'));
-    if (!sameOrigin()) return close(plain(403, 'Forbidden'));
+    if (!sameOrigin()) return close(stale());
     const ct = req.headers['content-type'] ?? '';
-    if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return close(plain(415, 'Unsupported media type'));
+    if (!/^multipart\/form-data;\s*boundary=/i.test(ct)) return close(fail(415, 'Not saved', 'This form could not be read. Reload the page and try again.'));
     const len = req.headers['content-length'];
-    if (len === undefined || !/^\d+$/.test(len)) return close(plain(411, 'Length required'));
-    if (Number(len) > upload.max) return close(plain(413, 'Request too large'));
+    if (len === undefined || !/^\d+$/.test(len)) return close(fail(411, 'Not saved', 'This form could not be read. Reload the page and try again.'));
+    if (Number(len) > upload.max) return close(fail(413, 'Too large', 'That is too large to send. Choose a smaller file and try again.'));
     const r = await upload.h({ db, now, method, path, query: url.searchParams, form: new URLSearchParams(), csrf: s.csrf, range: null }, req);
     return r.status === 303 || r.status === 403 ? close(r) : r;
   }
@@ -160,25 +180,32 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
   let form = new URLSearchParams();
   if (method === 'POST') {
     const ct = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-    if (ct !== 'application/x-www-form-urlencoded') return plain(415, 'Unsupported media type');
-    if (Number(req.headers['content-length'] ?? 0) > MAX_BODY) return plain(413, 'Request too large');
+    if (ct !== 'application/x-www-form-urlencoded') return fail(415, 'Not saved', 'This form could not be read. Reload the page and try again.');
+    if (Number(req.headers['content-length'] ?? 0) > MAX_BODY) return fail(413, 'Too large', 'That is too large to send. Shorten it and try again.');
     // CSRF: same-origin only. The session cookie is SameSite=Strict as well.
-    if (!sameOrigin()) return plain(403, 'Forbidden');
+    if (!sameOrigin()) return stale();
     const body = await readBody(req);
-    if (body === null) return plain(413, 'Request too large');
+    if (body === null) return fail(413, 'Too large', 'That is too large to send. Shorten it and try again.');
     form = new URLSearchParams(body);
   }
 
-  if (isLogin) return method === 'GET' ? pages.loginPage(null, !!kvGet(db, 'admin_password')) : login(db, form, now, req.headers.origin === `https://${host}`);
+  if (isLogin) {
+    if (method === 'POST') return login(db, form, now, req.headers.origin === `https://${host}`);
+    if (session) return pages.redirect('/overview');
+    return pages.loginPage(null, !!kvGet(db, 'admin_password'), { next: safeNext(url.searchParams.get('next')) ?? undefined, out: url.searchParams.get('msg') === 'out' });
+  }
 
-  const session = getSession(db, cookieOf(req.headers.cookie, COOKIE), now);
-  if (!session) return pages.redirect('/login');
+  if (!session) {
+    // A page the owner asked for comes back after sign-in. Data and media URLs do not.
+    const wants = method === 'GET' && !path.endsWith('.json') && !path.startsWith('/media/') ? safeNext(path + url.search) : null;
+    return pages.redirect(wants ? `/login?next=${encodeURIComponent(wants)}` : '/login');
+  }
   if (method === 'POST') {
-    if (!safeEqual(form.get('csrf') ?? '', session.csrf)) return plain(403, 'Forbidden');
+    if (!safeEqual(form.get('csrf') ?? '', session.csrf)) return stale();
     if (isLogout) {
       destroySession(db, session.sha);
       audit(db, 'admin', 'logout', 'session', {}, now);
-      return { status: 303, headers: { location: '/login', 'set-cookie': clearCookie() } };
+      return { status: 303, headers: { location: '/login?msg=out', 'set-cookie': clearCookie() } };
     }
   }
   return route!.h({ db, now, method, path, query: url.searchParams, form, csrf: session.csrf, range: (req.headers.range as string | undefined) ?? null });
@@ -187,16 +214,17 @@ async function handle(db: Db, opts: AdminOpts, req: IncomingMessage): Promise<Re
 // secure: the login came with an https Origin (Tailscale serve); the Origin header is the only signal trusted.
 async function login(db: Db, form: URLSearchParams, now: Date, secure: boolean): Promise<Res> {
   // While locked, or with no password set, scrypt does not run.
-  if (isLocked(db, now)) return { ...pages.loginPage('Too many failed attempts. Try again in 15 minutes.', true), status: 429 };
+  const next = safeNext(form.get('next')) ?? undefined;
+  if (isLocked(db, now)) return { ...pages.loginPage('Too many failed attempts. Try again in 15 minutes.', true, { next }), status: 429 };
   const stored = kvGet(db, 'admin_password');
-  if (!stored) return { ...pages.loginPage(null, false), status: 401 };
+  if (!stored) return { ...pages.loginPage(null, false, { next }), status: 401 };
   const pw = form.get('password') ?? '';
   if (pw.length <= MAX_PASSWORD && verifyPassword(stored, pw)) {
     clearLockout(db);
     const s = createSession(db, now);
     audit(db, 'admin', 'login', 'session', {}, now);
     log.info('admin login', { ok: true });
-    return { status: 303, headers: { location: '/overview', 'set-cookie': sessionCookie(s.token, secure) } };
+    return { status: 303, headers: { location: next ?? '/overview', 'set-cookie': sessionCookie(s.token, secure) } };
   }
   audit(db, 'admin', 'login.failed', 'session', {}, now);
   log.warn('admin login', { ok: false });
@@ -205,7 +233,7 @@ async function login(db: Db, form: URLSearchParams, now: Date, secure: boolean):
     log.warn('admin login locked', {});
     await alert(db, 'admin_lockout', 'admin', 'Admin login locked for 15 minutes after 5 failed attempts.', now);
   }
-  return { ...pages.loginPage('Wrong password.', true), status: 401 };
+  return { ...pages.loginPage('Wrong password.', true, { next }), status: 401 };
 }
 
 function send(res: ServerResponse, r: Res): void {
@@ -227,7 +255,7 @@ export function makeServer(db: Db, opts: AdminOpts): Server {
     handle(db, opts, req)
       .catch((e): Res => {
         log.error('admin request failed', { error: e instanceof Error ? e.name : 'error' });
-        return plain(500, 'Internal error');
+        return pages.errorPage(null, 500, 'Something went wrong', 'Something went wrong on our side. Try again in a minute. If it keeps happening, ask for help.');
       })
       .then((r) => {
         try { send(res, r); } catch (e) { log.error('admin response failed', { error: e instanceof Error ? e.name : 'error' }); res.destroy(); }

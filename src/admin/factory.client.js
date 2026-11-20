@@ -1,6 +1,6 @@
 // The Factory page's only script, served at /factory.js. It draws the pipeline as a top-down pixel-art
 // factory on one canvas. Every sprite is drawn here in code; there are no image files. It reads
-// /factory.json every few seconds and moves each crate (slot) along the belt to its station. It never
+// /factory.json every few seconds and moves each crate (video) along the belt to its station. It never
 // writes, builds page nodes with createElement and textContent only, and only fetches this origin.
 'use strict';
 (() => {
@@ -15,21 +15,33 @@
   const demo = cv.dataset.demo === '1';
 
   const STAGES = ['dock', 'design', 'foundry', 'inspect', 'paint', 'label', 'gate', 'shipping'];
-  const NAMES = { dock: 'Loading dock', design: 'Concept studio', foundry: 'Clip foundry', inspect: 'Inspection', paint: 'Caption shop', label: 'Label press', gate: 'Approval gate', shipping: 'Shipping docks', shipped: 'Shipped', scrap: 'Scrap bin' };
+  const NAMES = { dock: 'Loading dock', design: 'Concept studio', foundry: 'Clip foundry', inspect: 'Inspection', paint: 'Caption shop', label: 'Label press', gate: 'Approval gate', shipping: 'Shipping docks', shipped: 'Shipped', scrap: 'Thrown away' };
   const DOING = {
-    dock: 'Planned. The producer picks it up on a tick, a manual post first.',
-    design: 'The brief is read from Shopify, the concept writer drafts the scene and the claim judge checks every statement.',
-    foundry: 'One paid Higgsfield job renders the 15 second clip, or a stored clip is pulled for reuse.',
-    inspect: 'A model looks at eight frames against the product photos and the owner\'s note.',
-    paint: 'Remotion draws the caption, mixes the music, normalizes loudness and runs the ten-check QA gate.',
-    label: 'The copy writer writes titles, captions and hashtags for each platform, and the copy judge checks them.',
-    gate: 'A manual post waits here until the owner presses Post or Discard on the Posts page.',
-    shipping: 'Each platform is posted through the bridge at its scheduled time.',
-    shipped: 'Every platform is done.',
-    scrap: 'The slot failed or was discarded. Nothing was published.',
+    dock: 'Planned. The factory picks it up soon; videos you made by hand go first.',
+    design: 'Reads the product page, writes the idea for the video and checks the ad only says what the product page says.',
+    foundry: 'Makes the 15 second video clip (a paid step), or reuses one you already have.',
+    inspect: 'Looks at the clip and checks it matches your product photos and your note.',
+    paint: 'Adds the captions and music, evens out the sound and runs the quality check.',
+    label: 'Writes the titles, captions and hashtags for each platform, then checks them.',
+    gate: 'A video you made by hand waits here until you press Post it or Discard on the Videos page.',
+    shipping: 'Each platform gets the video at its planned time.',
+    shipped: 'Posted everywhere.',
+    scrap: 'The video failed or was discarded. Nothing was posted.',
   };
   const PL = ['youtube', 'facebook', 'instagram', 'tiktok'];
   const PL_NAME = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
+  const PUB_WORD = { pending: 'Waiting', uploading: 'Posting', published: 'Posted', skipped: 'Skipped', needs_attention: 'Needs you' };
+  // The shop's local time, same format as the server's fmtLocal: "Fri 20 Nov, 12:15".
+  let tz;
+  const fmtLocal = (iso) => {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    let p;
+    try { p = new Intl.DateTimeFormat('en-CA', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d); } catch { return ''; }
+    const g = (t) => (p.find((x) => x.type === t) || { value: '' }).value;
+    return g('weekday') + ' ' + g('day') + ' ' + g('month').replace('.', '') + ', ' + g('hour') + ':' + g('minute');
+  };
+  const slotName = (s) => s.name || fmtLocal(s.when) + ', ' + (s.kind === 'manual' ? 'Made now' : 'Post ' + s.idx);
   const PL_SHORT = { youtube: 'YT', facebook: 'FB', instagram: 'IG', tiktok: 'TT' };
 
   // ---------- palette ----------
@@ -919,6 +931,7 @@
 
   function apply(state) {
     last = state;
+    tz = state.tz || undefined;
     counts = {};
     for (const s of state.slots) counts[s.stage] = (counts[s.stage] || 0) + 1;
     const groups = {};
@@ -1008,21 +1021,21 @@
 
   function boardRows(state) {
     if (!board) return;
-    const rows = state.slots.filter((s) => s.stage !== 'shipped' && s.stage !== 'scrap');
+    const rows = state.slots.filter((s) => s.stage !== 'shipped' && s.stage !== 'scrap').sort((a, b) => (a.when || '').localeCompare(b.when || ''));
     const out = rows.map((s) => {
       const tr = el('tr');
       const td = el('td', 'nw');
-      const b = el('button', 'fx-pick', s.id);
+      const b = el('button', 'fx-pick', slotName(s));
       b.type = 'button';
       b.addEventListener('click', () => select({ type: 'crate', id: s.id }));
       td.append(b);
-      tr.append(td, el('td', null, s.kind), el('td', null, NAMES[s.stage]), el('td', null, s.caption), el('td', null, s.pubs.map((p) => p.p + ': ' + p.s).join(', ')));
+      tr.append(td, el('td', null, NAMES[s.stage]), el('td', null, s.caption), el('td', null, s.pubs.map((p) => PL_NAME[p.p] + ': ' + (PUB_WORD[p.s] || p.s)).join(', ')));
       return tr;
     });
     if (!out.length) {
       const tr = el('tr');
       const td = el('td', 'muted', 'The line is empty. Nothing is planned or in production.');
-      td.colSpan = 5;
+      td.colSpan = 4;
       tr.append(td);
       out.push(tr);
     }
@@ -1032,22 +1045,18 @@
   function hud(state) {
     if (hb) {
       const a = state.heartbeatAge;
-      hb.textContent = a === null ? 'Pipeline never ticked' : a > 300 ? 'Pipeline stale (' + a + ' s)' : 'Pipeline alive (' + a + ' s ago)';
+      hb.textContent = a === null ? 'Factory not started yet' : a > 300 ? 'Factory stopped: no sign of life for a while' : 'Factory running';
       hb.classList.toggle('ok', a !== null && a <= 300);
       hb.classList.toggle('bad', a === null || a > 300);
     }
-    if (updated) updated.textContent = 'Updated ' + state.now.slice(11, 19) + 'Z';
+    if (updated) updated.textContent = 'Updated ' + fmtLocal(state.now).slice(-5);
   }
 
-  const shortId = (id) => {
-    const i = id.indexOf('#');
-    return i < 0 ? id.slice(-4) : '#' + id.slice(i + 1);
-  };
   function hoverLabel(o) {
     if (o.type === 'station') return NAMES[o.id] + (counts[o.id] ? ' ' + counts[o.id] : '');
-    if (o.type === 'truck') return PL_NAME[o.id] + ' ' + ((last && last.published[o.id]) || 0) + ' SENT';
+    if (o.type === 'truck') return PL_NAME[o.id] + ' ' + ((last && last.published[o.id]) || 0) + ' POSTED';
     const c = crates.get(o.id);
-    return c ? 'CRATE ' + shortId(c.id) + ' ' + NAMES[c.slot.stage] : '';
+    return c ? (c.slot.kind === 'manual' ? 'MADE NOW' : 'POST ' + c.slot.idx) + ' ' + NAMES[c.slot.stage] : '';
   }
   function hoverBox(o) {
     if (o.type === 'station') { const [x, y, w] = AREA[o.id]; return { x, y, w }; }
@@ -1072,18 +1081,17 @@
       const c = crates.get(selected.id);
       const s = c ? c.slot : null;
       if (s) {
-        title = 'Crate ' + s.id;
+        title = slotName(s);
         row('Station', NAMES[s.stage]);
         row('Happening', DOING[s.stage]);
-        row('Kind', s.kind === 'manual' ? 'manual (Post button)' : 'planned');
-        row('Tier', s.tier);
-        row('Attempt', s.attempt);
-        row('Hold', s.hold);
+        row('Kind', s.kind === 'manual' ? 'Made by hand with Make a video now' : 'Planned daily post');
+        row('Tries', s.attempt > 1 ? s.attempt : null);
+        row('Waiting for you', s.hold === 'waiting' ? 'Yes: Post it or Discard' : null);
         row('Caption', s.caption);
         row('Error', s.error);
         if (s.pubs.length) {
           const span = el('span');
-          for (const p of s.pubs) span.append(el('span', 'chip ' + p.s, p.p + ': ' + p.s.replace('_', ' ')));
+          for (const p of s.pubs) span.append(el('span', 'chip ' + p.s, PL_NAME[p.p] + ': ' + (PUB_WORD[p.s] || p.s)));
           row('Platforms', span);
         }
       }
@@ -1091,14 +1099,14 @@
       const k = selected.id;
       title = (STAGES.indexOf(k) + 1) + '. ' + NAMES[k];
       row('What happens', DOING[k]);
-      const here = last ? last.slots.filter((s) => s.stage === k).map((s) => s.id) : [];
-      row('Crates here', here.length ? here.join(', ') : 'none');
+      const here = last ? last.slots.filter((s) => s.stage === k).map(slotName) : [];
+      row('Videos here', here.length ? here.join(', ') : 'none');
     } else if (selected && selected.type === 'truck') {
       const p = selected.id;
       title = PL_NAME[p] + ' truck';
-      row('Sent in 24 h', last ? last.published[p] || 0 : 0);
-      row('Uploading now', last ? last.uploading[p] || 0 : 0);
-      row('Loading', trucks[p].loading ? 'yes, a crate at shipping is waiting for this platform' : 'no');
+      row('Posted today', last ? last.published[p] || 0 : 0);
+      row('Posting now', last ? last.uploading[p] || 0 : 0);
+      row('Loading', trucks[p].loading ? 'yes, a video at the shipping docks is waiting for this platform' : 'no');
     }
     if (!title) {
       insp.replaceChildren(el('p', 'muted', 'Click a crate, a machine or a truck on the floor to see what is happening there.'));
@@ -1178,7 +1186,7 @@
     let scrapped = 0;
     const add = () => {
       seq++;
-      slots.push({ id: 'demo#' + seq, kind: seq % 4 === 0 ? 'manual' : 'planned', stage: 'dock', caption: CAPS[seq % CAPS.length], tier: 't2', attempt: 0, hold: null, error: null, pubs: PL.map((p) => ({ p, s: 'pending' })), wait: 0, age: 0 });
+      slots.push({ id: 'demo#' + seq, name: 'Demo video ' + seq, idx: (seq % 2) + 1, when: new Date().toISOString(), kind: seq % 4 === 0 ? 'manual' : 'planned', stage: 'dock', caption: CAPS[seq % CAPS.length], tier: 't2', attempt: 0, hold: null, error: null, pubs: PL.map((p) => ({ p, s: 'pending' })), wait: 0, age: 0 });
     };
     const inProduction = () => slots.filter((x) => { const j = STAGES.indexOf(x.stage); return j >= 1 && j <= 5; }).length;
     const advance = (s) => {
@@ -1226,7 +1234,7 @@
         now: new Date().toISOString(),
         dryRun: true,
         heartbeatAge: 2,
-        slots: slots.map((s) => ({ id: s.id, kind: s.kind, stage: s.stage, caption: s.caption, tier: s.tier, attempt: s.attempt, hold: s.hold, error: s.error, pubs: s.pubs.map((p) => ({ p: p.p, s: p.s })) })),
+        slots: slots.map((s) => ({ id: s.id, name: s.name, idx: s.idx, when: s.when, kind: s.kind, stage: s.stage, caption: s.caption, tier: s.tier, attempt: s.attempt, hold: s.hold, error: s.error, pubs: s.pubs.map((p) => ({ p: p.p, s: p.s })) })),
         published: Object.assign({}, published),
         uploading,
         scrapped,

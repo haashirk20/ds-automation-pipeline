@@ -1,4 +1,4 @@
-// Owner music: list, tick, preview, delete and the one multipart upload. Untrusted media is parsed here, in the
+// Owner music: list, switch on, preview, remove and the one multipart upload. Untrusted media is parsed here, in the
 // container that holds no API keys, with forced demuxers and a file-only protocol whitelist.
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
@@ -30,20 +30,20 @@ export function musicPage(ctx: Ctx, error: string | null = null, status = 200): 
   const rows = ctx.db.prepare('SELECT sha256, name, seconds, lufs, selected, last_used_at FROM music_tracks WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as Row[];
   const tz = (() => { try { return parseConfig(fileConfig).timezone; } catch { return 'UTC'; } })();
   const m = ctx.query.get('msg');
-  const top = error ? flash('bad', 'Not added.', error) : m === 'uploaded' ? flash('ok', 'Track added.', 'Tick it below to use it.') : m === 'saved' ? flash('ok', 'Choices saved.', 'The next video made uses them.') : m === 'deleted' ? flash('ok', 'Track deleted.', 'Videos already made keep their music.') : '';
+  const top = error ? flash('bad', 'Not saved.', error) : m === 'uploaded' ? flash('ok', 'Uploaded.', 'Switch it on below to use it in videos.') : m === 'saved' ? flash('ok', 'Choices saved.', 'The next video made uses them.') : m === 'deleted' ? flash('ok', 'Track removed.', 'Videos already made keep their music.') : '';
   const len = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
   return {
     ...layout(ctx, 'Music', '/music', html`${top}${flash('info', 'Only upload music you own or have licensed for ads.', html`Platforms mute or block posts with music they recognise.<details><summary>Why this matters</summary>YouTube, Facebook, Instagram and TikTok scan uploads for copyrighted music; a match can mute or block the post, hand its earnings to the rights holder, or strike the account. TikTok business accounts may use only its Commercial Music Library or audio you own.</details>`)}
-<section><h2>Your tracks</h2><p class="hint">Ticked tracks take turns, the least recently used first. With none ticked, videos have no music.</p>
+<section><h2>Your tracks</h2><p class="hint">Tracks that are switched on take turns, the least recently used first. With none switched on, videos have no music.</p>
 ${rows.length ? html`<form method="post" action="/music/select">${csrfField(ctx)}<ul class="tracks card">${rows.map((r, i) => html`<li class="track">${toggle({ id: `t-${i}`, name: 'sel', value: r.sha256, checked: !!r.selected, label: `Use ${r.name}` })}
 <div><strong>${r.name}</strong><span class="hint">${len(r.seconds)} · ${r.last_used_at ? `Last used ${fmtLocal(r.last_used_at, tz)}` : 'Never used'}</span></div>
-${confirmRemove('Delete…', html`<button class="danger" type="submit" form="del-${i}">Yes, delete ${r.name}</button>`)}
+${confirmRemove('Remove…', html`<button class="danger" type="submit" form="del-${i}">Yes, remove ${r.name}</button>`)}
 <audio controls preload="none" src="/media/music?sha=${r.sha256}" aria-label="Play ${r.name}"></audio>
 <details class="tech"><summary>Technical details</summary>Loudness ${r.lufs.toFixed(1)} LUFS (evened out when mixed).</details></li>`)}</ul>
 <div class="sticky-save"><button class="primary" type="submit">Save choices</button></div></form>
 ${rows.map((r, i) => html`<form id="del-${i}" method="post" action="/music/delete">${csrfField(ctx)}<input type="hidden" name="sha" value="${r.sha256}"></form>`)}` : empty('No music yet. Without music, videos have none.')}</section>
 <section class="card"><h2>Upload a track</h2><form method="post" action="/music/upload" enctype="multipart/form-data">${csrfField(ctx)}
-${formRow({ id: 'file', label: 'Track', control: html`<input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4" required>`, hint: 'Up to 40 MB. mp3, m4a, mp4 or wav; the picture of a video file is dropped.' })}
+${formRow({ id: 'file', label: 'Track', control: html`<input id="file" type="file" name="file" accept=".mp3,.m4a,.mp4,.wav,audio/*,video/mp4" required>`, hint: 'Up to 40 MB, 5 seconds to 10 minutes. mp3, m4a, mp4 or wav; the picture of a video file is dropped.' })}
 <label class="check" for="ack"><input id="ack" type="checkbox" name="ack" value="1" required> I own this track or hold the rights to use it in ads on these platforms.</label>
 <div class="actions"><button class="primary" type="submit">Upload track</button></div></form></section>`),
     status,
@@ -99,9 +99,10 @@ async function stage(ctx: Ctx, req: IncomingMessage, incoming: string): Promise<
   if (!safeEqual(String(fd.get('csrf') ?? ''), ctx.csrf ?? '')) return { status: 403, body: 'Forbidden', type: 'text/plain; charset=utf-8', headers: { connection: 'close' } };
   if (fd.get('ack') !== '1') return fail(422, 'Tick the box to confirm you hold the rights to this track.');
   const file = fd.get('file');
-  if (!(file instanceof File) || file.size < 1024) return fail(422, 'Choose an audio file (at least 1 KB).');
+  if (!(file instanceof File) || file.size === 0) return fail(422, 'Choose an audio file.');
+  if (file.size < 1024) return fail(422, 'That file is too small to be a song.');
   if (file.size > MAX_FILE) return fail(413, 'The file is over 40 MB.');
-  if ((ctx.db.prepare('SELECT COUNT(*) AS n FROM music_tracks WHERE deleted_at IS NULL').get() as { n: number }).n >= MAX_TRACKS) return fail(422, `At most ${MAX_TRACKS} tracks. Delete one first.`);
+  if ((ctx.db.prepare('SELECT COUNT(*) AS n FROM music_tracks WHERE deleted_at IS NULL').get() as { n: number }).n >= MAX_TRACKS) return fail(422, `At most ${MAX_TRACKS} tracks. Remove one first.`);
 
   const hash = createHash('sha256');
   await pipeline(Readable.fromWeb(file.stream() as any), new Transform({ transform(c: Buffer, _e, cb) { hash.update(c); cb(null, c); } }), createWriteStream(incoming));
@@ -110,15 +111,15 @@ async function stage(ctx: Ctx, req: IncomingMessage, incoming: string): Promise<
   const f = openSync(incoming, 'r');
   try { readSync(f, head, 0, 12, 0); } finally { closeSync(f); }
   const d = demuxerOf(head);
-  if (!d) return fail(422, 'This is not an mp3, m4a, mp4 or wav file.');
+  if (!d) return fail(422, 'That file is not audio we can read.');
   return { sha: hash.digest('hex'), name, d };
 }
 
 // Steps 4 to 15 of the upload order. The caller has checked host, session, Origin, Sec-Fetch-Site, content type and length.
 export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> {
   const fail = (status: number, msg: string): Res => ({ ...musicPage(ctx, msg, status), headers: status === 413 ? { connection: 'close' } : undefined });
-  const plain = (status: number, text: string): Res => ({ status, body: text, type: 'text/plain; charset=utf-8' });
-  if (busy) return plain(429, 'Another upload is running');
+  const plain = (status: number, text: string): Res => ({ ...layout(ctx, 'Music', '/music', html`<p>${text}</p><p><a class="btn" href="/music">Back to Music</a></p>`), status });
+  if (busy) return plain(429, 'Another upload is running. Try again in a minute.');
   busy = true;
   let part: string | null = null;
   const root = musicRoot();
@@ -133,7 +134,7 @@ export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> 
       const probe = JSON.parse((await ff('ffprobe', ['-v', 'error', ...guard, '-print_format', 'json', '-show_format', '-show_streams', incoming], { timeoutMs: 15_000 })).stdout.toString());
       const a = (probe.streams ?? []).find((s: any) => s.codec_type === 'audio' && CODECS.has(s.codec_name));
       const seconds = Number(probe.format?.duration ?? a?.duration);
-      if (!a) return fail(422, 'The file has no audio stream in a supported codec (aac, mp3 or wav).');
+      if (!a) return fail(422, 'That file is not audio we can read.');
       if (!(seconds >= 5 && seconds <= 600)) return fail(422, 'The track must be 5 seconds to 10 minutes long.');
       part = path.join(root, `${sha}.m4a.part`);
       await ff('ffmpeg', ['-hide_banner', '-nostdin', '-threads', '2', '-filter_threads', '1', ...guard, '-i', incoming, '-map', '0:a:0', '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', '-map_metadata', '-1', '-t', '600', '-f', 'mp4', '-movflags', '+faststart', '-y', part], { timeoutMs: 120_000 });
@@ -147,7 +148,7 @@ export async function uploadMusic(ctx: Ctx, req: IncomingMessage): Promise<Res> 
       return redirect('/music?msg=uploaded');
     } catch (e) {
       log.warn('music upload refused', { error: (e as Error).message.slice(0, 200) });
-      return fail(422, 'The file could not be read as audio.');
+      return fail(422, 'That file is not audio we can read.');
     }
   } finally {
     busy = false;

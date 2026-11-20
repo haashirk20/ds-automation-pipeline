@@ -40,7 +40,7 @@ after(() => {
 
 test('the quest log asks for what needs the owner, in order of urgency', async () => {
   let s = await townState(db, NOW);
-  assert.deepEqual(s.quests.map((q) => q.href), ['/products', '/factory']); // no products, never ticked
+  assert.deepEqual(s.quests.map((q) => q.href), ['/products', null]); // no products, never ticked
   seedBrief(db);
   kvSet(db, 'heartbeat', NOW.toISOString());
   const ts = NOW.toISOString();
@@ -63,7 +63,7 @@ test('the town page and its data need a session', async () => {
   const page = await send('GET', '/town', { cookie });
   assert.equal(page.headers['content-security-policy'], "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   assert.deepEqual([...page.text.matchAll(/<script[^>]*>/gi)].map((m) => m[0]), ['<script src="/town.js" defer>']);
-  assert.ok(page.text.includes('href="/pixel.css"'));
+  assert.ok(page.text.includes('href="/style.css"'));
   assert.equal(page.status, 200);
   for (const href of ['/factory', '/products', '/posts', '/settings', '/music', '/models', '/prompts', '/activity', '/history']) assert.ok(page.text.includes(`href="${href}"`), href);
   const j = await send('GET', '/town.json', { cookie });

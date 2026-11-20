@@ -106,6 +106,9 @@ test('the factory page needs a session, allows one same-origin script and escape
   assert.ok(!r.text.includes('"><script>alert'));
   assert.ok(!/ style="|<style/i.test(r.text));
   assert.match(r.text, /data-station="foundry"/);
+  assert.match(r.text, /Updated \d\d:\d\d</); // local time, no Z
+  assert.match(r.text, /<td class="nw">\w{3} \d+ \w+, \d\d:\d\d, Post 3<\/td>/); // no raw slot id on the board
+  assert.ok(!/claim judge|QA gate|Remotion|Higgsfield|never ticked/.test(r.text));
   assert.match(r.text, /<canvas id="factory" class="fx" width="544" height="320"/);
   assert.ok(!/<img|\.png|\.gif/i.test(r.text)); // every sprite is drawn by the script
   const j = await req('GET', '/factory.json', cookie);
@@ -121,4 +124,12 @@ test('the factory page needs a session, allows one same-origin script and escape
 test('the factory script never builds markup from strings or calls another origin', () => {
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/.test(FACTORY_JS));
   for (const m of FACTORY_JS.matchAll(/fetch\(([^,)]+)/g)) assert.equal(m[1], "'/factory.json'");
+});
+
+test('two manual videos made in the same minute get different names', async () => {
+  slot('2026-11-17#101', 'producing', { kind: 'manual' });
+  slot('2026-11-17#102', 'producing', { kind: 'manual' });
+  const names = (await factoryState(db, NOW)).slots.filter((s) => s.kind === 'manual').map((s) => s.name);
+  assert.equal(new Set(names).size, names.length);
+  assert.match(names.join('|'), /Made now/);
 });

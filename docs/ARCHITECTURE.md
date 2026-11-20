@@ -342,8 +342,7 @@ per-session CSRF token on every POST, a login lockout, form-encoded bodies of at
 exception: 40 MB plus 64 kB), and a CSP with no script source. Pages are server-rendered with no client JavaScript and escape every
 database value. The exceptions are the read-only Factory page (D-37) and the town square at `/town`
 (D-43), whose CSPs allow their own `/factory.js` or `/town.js` and fetches to the same origin. Every page
-loads `/style.css` except Factory and the town, which load `/pixel.css`, the previous pixel-art
-stylesheet kept for those two pages (D-41, D-43). Destructive actions
+loads `/style.css`, Factory and the town included (D-44); their own stylesheets only add the layout around the canvas. Destructive actions
 open a `<details>` confirmation first, so no script is needed for them.
 Product photos and the logo are image uploads with the same handling as music: PNG or JPEG sniffed
 from the first bytes, ffmpeg with the image demuxer, a forced decoder and a file-only whitelist, and a

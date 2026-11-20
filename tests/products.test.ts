@@ -102,6 +102,24 @@ test('products page: add, refuse claims, select, remove; photos are re-encoded P
   assert.equal(notImage.status, 422);
   assert.match(notImage.text, /not a PNG or JPEG/);
   assert.equal((await multipart('/products/save', cookie, fd({ csrf: 'wrong' }))).status, 403);
+  // A price that is not a number gets one plain message that links to the field, not a parser error.
+  const abc = await multipart('/products/save', cookie, fd({ price: 'abc' }));
+  assert.equal(abc.status, 422);
+  assert.match(abc.text, /<a href="#price">Price: Enter the price as a number, like 24\.99<\/a>/);
+  assert.doesNotMatch(abc.text, /Invalid input|NaN/);
+  assert.match(abc.text, /<span class="err">Enter the price as a number/);
+  assert.match(abc.text, /choose them again/);
+  const neg = await multipart('/products/save', cookie, fd({ price: '-5' }));
+  assert.match(neg.text, /Price: Enter a price above 0, like 24\.99/);
+  assert.doesNotMatch(neg.text, /Too small|expected|Invalid/);
+  assert.match((await multipart('/products/save', cookie, fd({ price: '100001' }))).text, /Enter a price of 100,000 or less\./);
+  const shortFact = await multipart('/products/save', cookie, fd({ facts: 'ok' }));
+  assert.doesNotMatch(shortFact.text, /Too small|expected|Invalid input/);
+  assert.match(shortFact.text, /Each fact needs 3 to 300 characters\./);
+  const nope = await send('GET', '/products/edit?handle=nope', { cookie });
+  assert.equal(nope.status, 404);
+  assert.match(nope.text, /There is no product with that name\. It may have been removed\./);
+  assert.match(nope.text, /Back to Products/);
 
   const ok = await multipart('/products/save', cookie, fd());
   assert.equal(ok.status, 303, ok.text);
@@ -128,6 +146,12 @@ test('products page: add, refuse claims, select, remove; photos are re-encoded P
   // Selecting nothing is refused; selecting one stores it.
   const sel = (handles: string[]) => send('POST', '/products/select', { cookie, body: new URLSearchParams([['csrf', csrf], ...handles.map((h) => ['sel', h])]).toString() });
   assert.equal((await sel([])).status, 422);
+  // A refused save shows what was submitted ("Not used"), not what is stored, and says "Not saved."
+  const refused = await send('POST', '/products/select', { cookie, body: new URLSearchParams({ csrf, 'use.own-cozy-heated-slippers': 'none' }).toString() });
+  assert.equal(refused.status, 422);
+  assert.match(refused.text, /<strong>Not saved\.<\/strong>/);
+  assert.match(refused.text, /name="use\.own-cozy-heated-slippers" value="none" checked/);
+  assert.doesNotMatch(refused.text, /name="use\.own-cozy-heated-slippers" value="any" checked/);
   assert.equal((await sel(['own-cozy-heated-slippers', 'not-a-product'])).status, 303);
   assert.deepEqual(activeHandles(db), ['own-cozy-heated-slippers']);
 

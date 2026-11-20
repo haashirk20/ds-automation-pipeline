@@ -9,7 +9,7 @@ import { kvGet, kvSet, type Db } from '../src/db/index.ts';
 import { startAdmin, setPassword } from '../src/admin/index.ts';
 import { html, esc } from '../src/admin/html.ts';
 import { foldDiff, lineDiff } from '../src/admin/diff.ts';
-import { ABSOLUTE_MS, IDLE_MS, hashPassword, verifyPassword } from '../src/admin/auth.ts';
+import { ABSOLUTE_MS, IDLE_MS, hashPassword, safeNext, verifyPassword } from '../src/admin/auth.ts';
 import { promptText } from '../src/llm/prompts.ts';
 import { scryptSync } from 'node:crypto';
 import { fresh, seedBrief } from './helpers.ts';
@@ -138,7 +138,7 @@ test('other methods and unknown paths; nothing is served from disk', async () =>
   assert.equal((await req('GET', '/..%2fpackage.json')).status, 404);
   assert.equal((await req('GET', '/package.json')).status, 404);
   assert.equal((await req('GET', '/healthz')).text, 'ok');
-  for (const f of ['/style.css', '/pixel.css']) {
+  for (const f of ['/style.css']) {
     const css = await req('GET', f);
     assert.equal(css.status, 200);
     assert.match(String(css.headers['content-type']), /text\/css/);
@@ -150,7 +150,7 @@ test('other methods and unknown paths; nothing is served from disk', async () =>
 test('every response carries the security headers and no page has a script tag', async () => {
   const { cookie } = await login();
   // Only Factory has a script (D-37, D-41); it is tested in factory.test.ts.
-  for (const path of ['/login', '/overview', '/settings', '/history?view=1', '/pixel.css', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
+  for (const path of ['/login', '/overview', '/settings', '/history?view=1', '/products', '/products/new', '/prompts', '/prompts/edit?key=ugc', '/prompts/history?key=ugc', '/prompts/view?key=claims', '/activity', '/history', '/posts', '/music', '/models', '/style.css', '/healthz', '/nope']) {
     const r = await req('GET', path, { cookie });
     assert.equal(r.headers['content-security-policy'], "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", path);
     assert.equal(r.headers['x-content-type-options'], 'nosniff');
@@ -287,7 +287,7 @@ test('settings: switching the clip preset does not carry the old preset caps ove
   const diff = await req('POST', '/settings/preview', { cookie, form });
   assert.equal(diff.status, 200, diff.text);
   assert.ok(diff.text.includes('tiers.t2Preset'));
-  assert.ok(!diff.text.includes('tiers.t2.maxCredits') && !diff.text.includes('tiers.t2.keepCredits'), 'old caps carried over');
+  assert.ok(!diff.text.includes('data-path="tiers.t2.maxCredits"') && !diff.text.includes('data-path="tiers.t2.keepCredits"'), 'old caps carried over');
 });
 
 test('settings: unchanged form means no changes; a bad value is refused inline; a good one saves a version, pointer and audit together', async () => {
@@ -305,13 +305,24 @@ test('settings: unchanged form means no changes; a bad value is refused inline; 
   bad.set('tiers.capsUsd.t2', '9999');
   const refused = await req('POST', '/settings/preview', { cookie, form: bad });
   assert.equal(refused.status, 422);
-  assert.match(refused.text, /class="err"[^>]*>9999 is above the limit/); // the field path is not shown
+  assert.match(refused.text, /class="err"[^>]*>Use 0 to \d+ USD\./); // owner words, no field path
   assert.match(refused.text, /class="err-summary" role="alert"[\s\S]*href="#f-tiers-capsUsd-t2"/);
   const nan = new URLSearchParams(form);
   nan.set('ugc.captionPx', 'big');
   const refused2 = await req('POST', '/settings/preview', { cookie, form: nan });
   assert.equal(refused2.status, 422);
-  assert.match(refused2.text, /must be a number/);
+  assert.match(refused2.text, /Enter a number\./);
+  // All problems show in one pass, and the owner's entries stay in the form.
+  const many = new URLSearchParams(form);
+  many.set('ugc.captionPx', '5');
+  many.set('ugc.reuseAfterDays', '1');
+  many.set('tiers.capsUsd.t2', '9999');
+  const all = await req('POST', '/settings/preview', { cookie, form: many });
+  assert.equal(all.status, 422);
+  assert.match(all.text, /Fix 3 things/);
+  assert.match(all.text, /Use 56 to 110 px\./);
+  assert.ok(all.text.includes('value="5"') && all.text.includes('value="1"'));
+  assert.match(all.text, /name="ugc\.captionPx"[^>]*min="56" max="110"/);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM config_versions').get()!.n, 0);
 
   const good = new URLSearchParams(form);
@@ -331,14 +342,14 @@ test('settings: unchanged form means no changes; a bad value is refused inline; 
   assert.ok(db.prepare("SELECT 1 FROM audit WHERE action = 'config.save'").get());
   const after = await req('GET', '/settings?saved=1', { cookie });
   assert.ok(after.text.includes('<strong>Saved.</strong> The factory picks up the change within a minute.'));
-  assert.ok(!/v1|version 1/i.test(after.text.split('<main>')[1].split('</p>')[0])); // no version number in the flash
+  assert.ok(!/v1|version 1/i.test(after.text.split('<main id="main" tabindex="-1">')[1].split('</p>')[0])); // no version number in the flash
   assert.ok(after.text.includes('value="90"'));
 
   // A stale base_id is refused.
   const stale = new URLSearchParams(save);
   const again = await req('POST', '/settings/save', { cookie, form: stale });
   assert.equal(again.status, 422);
-  assert.match(again.text, /changed since/);
+  assert.match(again.text, /Someone saved Settings in another tab/);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM config_versions').get()!.n, 1);
 
   // A second version, then rollback to the first and back to the file.
@@ -461,4 +472,141 @@ test('html tag escapes values and keeps its own output; the diff marks changes',
 test('the shared logger never receives request bodies', () => {
   const src = readFileSync(join(import.meta.dirname, '../src/admin/server.ts'), 'utf8');
   assert.ok(!/log\.\w+\([^)]*(form|body|cookie)/.test(src));
+});
+
+test('settings: a failed save shows the form again with the entries kept; Go back keeps them too', async () => {
+  const { cookie } = await login();
+  const form = formOf((await req('GET', '/settings', { cookie })).text, '/settings/preview');
+  form.set('ugc.captionPx', '77');
+  const diff = await req('POST', '/settings/preview', { cookie, form });
+  assert.match(diff.text, /id="cp"|formaction="\/settings\/edit"/);
+  const save = formOf(diff.text, '/settings/save');
+  const back = await req('POST', '/settings/edit', { cookie, form: save });
+  assert.equal(back.status, 200);
+  assert.ok(back.text.includes('value="77"') && back.text.includes('action="/settings/preview"'));
+  assert.equal((await req('POST', '/settings/save', { cookie, form: save })).status, 303);
+  const again = await req('POST', '/settings/save', { cookie, form: save }); // stale base
+  assert.equal(again.status, 422);
+  assert.ok(again.text.includes('action="/settings/preview"') && again.text.includes('value="77"'));
+  assert.match(again.text, /Not saved\. Fix 1 thing/);
+  assert.ok(!again.text.includes('Back to Settings'));
+  // The public-post box is required, and a missing tick brings the review page back, not a dead end.
+  const pub = formOf((await req('GET', '/settings', { cookie })).text, '/settings/preview');
+  pub.set('platforms.youtube.visibility', 'public');
+  const review = await req('POST', '/settings/preview', { cookie, form: pub });
+  assert.match(review.text, /<input id="cp"[^>]*\srequired>/);
+  const no = await req('POST', '/settings/save', { cookie, form: formOf(review.text, '/settings/save') });
+  assert.equal(no.status, 422);
+  assert.ok(no.text.includes('id="cp"') && no.text.includes('Tick the box'));
+});
+
+test('errors are pages with the menu; 404 keeps the nav when signed in; login returns to the page asked for', async () => {
+  const out = await req('GET', '/nope');
+  assert.equal(out.status, 404);
+  assert.ok(!out.text.includes('aria-label="Main"'));
+  assert.equal(out.text.split('There is no page at this address.').length, 2);
+  const { cookie, csrf } = await login();
+  const nf = await req('GET', '/nope', { cookie });
+  assert.equal(nf.status, 404);
+  assert.ok(nf.text.includes('aria-label="Main"'));
+  assert.ok(nf.text.includes('<a class="skip" href="#main">'));
+  const bad = await req('POST', '/settings/save', { cookie, form: { csrf: 'x'.repeat(csrf.length) } });
+  assert.equal(bad.status, 403);
+  assert.ok(bad.headers['content-type']!.toString().startsWith('text/html'));
+  assert.ok(bad.text.includes('This page was out of date, so nothing was saved.'));
+  assert.ok(bad.text.includes('href="/settings"') && !bad.text.includes('href="/login"')); // back to a GET page, never the POST-only one
+  const noSess = await req('POST', '/settings/save', { form: { csrf: 'x' }, origin: 'http://evil.example' });
+  assert.equal(noSess.status, 403);
+  assert.ok(noSess.text.includes('Your session ended. Sign in again; your change was not saved.'));
+  const viaRef = await req('POST', '/products/select', { cookie, form: { csrf: 'x'.repeat(csrf.length) }, headers: { referer: `http://127.0.0.1:${port}/settings/preview` } });
+  assert.ok(viaRef.text.includes('href="/products"'));
+  assert.equal((await req('GET', '/favicon.ico')).status, 204);
+  assert.equal((await req('POST', '/settings/save', { cookie, body: '{}', type: 'application/json' })).status, 415);
+  // A signed-in GET /login goes home.
+  assert.equal((await req('GET', '/login', { cookie })).headers.location, '/overview');
+});
+
+test('login: next is kept only for same-site paths; logout says so', async () => {
+  const r = await req('GET', '/settings?x=1');
+  assert.equal(r.headers.location, '/login?next=%2Fsettings%3Fx%3D1');
+  const page = await req('GET', String(r.headers.location));
+  assert.ok(page.text.includes('name="next" value="/settings?x=1"'));
+  assert.ok(page.text.includes('<h1>Sign in</h1>') && page.text.indexOf('class="card login"') < page.text.indexOf('<h1>'));
+  const ok = await req('POST', '/login', { form: { username: 'admin', password: PW, next: '/settings?x=1' } });
+  assert.equal(ok.headers.location, '/settings?x=1');
+  for (const evil of ['//evil.example', '/\\evil.example', 'https://evil.example', 'settings', '/a\r\nb']) {
+    assert.equal((await req('POST', '/login', { form: { username: 'admin', password: PW, next: evil } })).headers.location, '/overview', evil);
+  }
+  const { cookie, csrf } = await login();
+  const lo = await req('POST', '/logout', { cookie, form: { csrf } });
+  assert.equal(lo.headers.location, '/login?msg=out');
+  assert.ok((await req('GET', '/login?msg=out')).text.includes('You are signed out.'));
+});
+
+test('home: a stopped or never-started factory is said in the headline and counts as needing you', async () => {
+  const { cookie } = await login();
+  kvSet(db, 'heartbeat', new Date(clock.getTime() - 3600_000).toISOString());
+  const stopped = await req('GET', '/overview', { cookie });
+  assert.ok(stopped.text.includes('<p>The factory has stopped.</p>'));
+  assert.ok(!/tile-v">Nothing</.test(stopped.text));
+  kvSet(db, 'heartbeat', clock.toISOString());
+  const up = await req('GET', '/overview', { cookie });
+  assert.ok(up.text.includes('Factory running') && !up.text.includes('The factory has'));
+});
+
+test('activity: late means 15 minutes overdue; a manual video still being made is not late; one row per video', async () => {
+  const { cookie } = await login();
+  const ins = (id: string, kind: string, status: string, at: string) => {
+    db.prepare("INSERT INTO slots (id, local_date, idx, kind, status, created_at, updated_at) VALUES (?, ?, 9, ?, ?, ?, ?)").run(id, kind === 'manual' ? '2026-10-02' : '2026-10-01', kind, status, at, at);
+  };
+  try {
+    ins('late#1', 'planned', 'ready', clock.toISOString());
+    ins('manual#1', 'manual', 'producing', clock.toISOString());
+    const pub = db.prepare("INSERT INTO publications (slot_id, platform, state, scheduled_at) VALUES (?, ?, 'pending', ?)");
+    const old = new Date(clock.getTime() - 3600_000).toISOString();
+    pub.run('late#1', 'youtube', old);
+    pub.run('late#1', 'tiktok', old);
+    pub.run('manual#1', 'youtube', old);
+    const r = await req('GET', '/activity', { cookie });
+    assert.equal([...r.text.matchAll(/Late: not sent yet/g)].length, 1); // one video, one row; the manual one is still being made
+    assert.match(r.text, /(TikTok, YouTube|YouTube, TikTok), Post 9/);
+    assert.ok(r.text.includes('the factory is not running') || r.text.includes('on its next check'));
+  } finally {
+    db.prepare("DELETE FROM publications WHERE slot_id IN ('late#1','manual#1')").run();
+    db.prepare("DELETE FROM slots WHERE id IN ('late#1','manual#1')").run();
+  }
+});
+
+test('settings: a save after another tab saved is a conflict, also through the unticked public-confirm path', async () => {
+  const { cookie } = await login();
+  const page = formOf((await req('GET', '/settings', { cookie })).text, '/settings/preview');
+  const a = new URLSearchParams(page);
+  a.set('platforms.youtube.visibility', 'public');
+  const reviewA = await req('POST', '/settings/preview', { cookie, form: a });
+  const saveA = formOf(reviewA.text, '/settings/save');
+  assert.equal(saveA.get('base_id'), page.get('base_id'));
+  const b = new URLSearchParams(page);
+  b.set('ugc.captionPx', '88');
+  assert.equal((await req('POST', '/settings/save', { cookie, form: formOf((await req('POST', '/settings/preview', { cookie, form: b })).text, '/settings/save') })).status, 303);
+  const before = kvGet(db, 'config_active');
+  const r1 = await req('POST', '/settings/save', { cookie, form: saveA }); // no tick
+  assert.equal(r1.status, 422);
+  assert.match(r1.text, /Someone saved Settings in another tab/);
+  assert.equal(kvGet(db, 'config_active'), before);
+  saveA.set('confirm_public', '1');
+  const r2 = await req('POST', '/settings/save', { cookie, form: saveA });
+  assert.equal(r2.status, 422);
+  assert.equal(kvGet(db, 'config_active'), before); // nothing was reverted or overwritten
+});
+
+test('safeNext accepts only same-site paths', () => {
+  for (const bad of ['//evil.com', '/\\evil.com', '/\t/evil', '/a\r\nSet-Cookie: x=1', 'javascript:alert(1)', 'https://evil.com', '/café', ' /settings', '/login', '/login?next=/x', '', null, undefined]) assert.equal(safeNext(bad), null, String(bad));
+  assert.equal(safeNext('/settings?x=1'), '/settings?x=1');
+  assert.equal(safeNext('/'), '/');
+});
+
+test('login with next=//evil.com goes to /overview', async () => {
+  const r = await req('POST', '/login', { form: { username: 'admin', password: PW, next: '//evil.com' } });
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.location, '/overview');
 });

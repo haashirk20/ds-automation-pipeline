@@ -143,6 +143,7 @@ test('mp3, m4a, wav and mp4 with a picture are accepted, transcoded and stored b
     assert.ok(!row.name.includes('/'), row.name);
     assert.ok(row.seconds > 7 && row.seconds < 9, String(row.seconds));
     assert.ok(Number.isFinite(row.lufs));
+    assert.equal(row.selected, 0, 'new uploads start Off');
     assert.ok(existsSync(join(dir, 'data', 'music', `${sha}.m4a`)));
   }
   assert.deepEqual(musicFiles().filter((f) => !f.endsWith('.m4a')), ['.incoming']);
@@ -185,7 +186,7 @@ test('select, preview ranges and delete', async () => {
   assert.deepEqual(selectForm.match(/<button[^>]*type="submit"(?! form=)[^>]*>[^<]*/g), ['<button class="primary" type="submit">Save choices']); // the only submit owned by the form
   const del = new RegExp(`<form id="(del-\\d+)" method="post" action="/music/delete"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="sha" value="${a.sha256}"></form>`).exec(page);
   assert.ok(del, 'standalone delete form');
-  assert.match(selectForm, new RegExp(`type="submit" form="${del[1]}">Yes, delete`));
+  assert.match(selectForm, new RegExp(`type="submit" form="${del[1]}">Yes, remove`));
   assert.equal((await post('/music/delete', cookie, csrf, { sha: a.sha256 })).status, 303);
   assert.equal(db.prepare('SELECT selected FROM music_tracks WHERE sha256 = ?').get(a.sha256)!.selected, 0);
   assert.ok(!existsSync(join(dir, 'data', 'music', `${a.sha256}.m4a`)));
@@ -258,6 +259,40 @@ test('Post and Discard: the second press is a no-op notice', async () => {
   assert.equal((await post('/posts/approve', cookie, csrf, { slot: 'x' })).headers.location, '/posts?msg=noop');
 });
 
+test('Posts: flash says the factory is not running unless the heartbeat is fresh; Discard asks first; refresh only when nothing waits', async () => {
+  const get = async (q: string) => (await send('GET', `/posts${q}`, { headers: { cookie } })).text;
+  db.prepare("DELETE FROM kv WHERE key = 'heartbeat'").run();
+  const dead = await get('?msg=approved');
+  assert.match(dead, /<div class="flash warn"[^>]*>(?:(?!<\/div>)[\s\S])*Sent for posting\./);
+  assert.match(await get('?msg=made'), /<div class="flash warn"/);
+  assert.match(dead, /The factory is not running, so it will not go out until it starts\./);
+  assert.doesNotMatch(dead, /within a minute/);
+  assert.match(await get('?msg=made'), /The factory is not running, so it will not start until it does\./);
+  db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('heartbeat', ?)").run(clock.toISOString());
+  const alive = await get('?msg=approved');
+  assert.match(alive, /<div class="flash ok"/);
+  assert.match(alive, /within a minute\./);
+  assert.doesNotMatch(alive, /factory is not running/);
+  assert.match(await get('?msg=made'), /the page refreshes by itself/);
+  // Discard is behind a confirmation.
+  const ts = clock.toISOString();
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, created_at, updated_at, kind, hold, held_at) VALUES ('2026-11-12#170', '2026-11-12', 170, 'ready', ?, ?, 'manual', 'waiting', ?)").run(ts, ts, ts);
+  const page = await get('');
+  assert.match(page, /<details class="confirm"><summary[^>]*>Discard this video\?<\/summary><div><p>The clip is thrown away\. It was already paid for\.<\/p><form method="post" action="\/posts\/discard">/);
+  assert.doesNotMatch(page, /http-equiv="refresh"/);
+  // Factory down and a video queued: no endless reload, a Refresh link instead.
+  db.prepare("DELETE FROM slots WHERE id = '2026-11-12#170'").run();
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, created_at, updated_at, kind) VALUES ('2026-11-12#171', '2026-11-12', 171, 'producing', ?, ?, 'manual')").run(ts, ts);
+  db.prepare("UPDATE slots SET hold = 'discarded' WHERE hold = 'waiting'").run();
+  db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('heartbeat', ?)").run(clock.toISOString());
+  assert.match(await get(''), /http-equiv="refresh"/); // alive: refreshes
+  db.prepare("DELETE FROM kv WHERE key = 'heartbeat'").run();
+  const q = await get('?msg=made');
+  assert.doesNotMatch(q, /http-equiv="refresh"/);
+  assert.match(q, /Your video is queued\. The factory is not running, so it will start when the factory does\. <a href="\/posts">Refresh<\/a>/);
+  db.prepare("DELETE FROM slots WHERE id = '2026-11-12#171'").run();
+});
+
 test('Make a post refuses a second one while one is being made', async () => {
   for (const t of ['publications', 'renders']) db.prepare(`DELETE FROM ${t} WHERE slot_id IN (SELECT id FROM slots WHERE kind = 'manual')`).run();
   db.prepare("DELETE FROM slots WHERE kind = 'manual'").run();
@@ -268,6 +303,7 @@ test('Make a post refuses a second one while one is being made', async () => {
   assert.equal(again.status, 303);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM slots WHERE kind = 'manual'").get()!.n, before + 1);
   assert.match(String(again.headers.location), /refused=/);
+  db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('heartbeat', ?)").run(clock.toISOString());
   assert.match((await send('GET', '/posts', { headers: { cookie } })).text, /http-equiv="refresh"/);
   assert.equal((await post('/posts/new', cookie, csrf, { model: 'custom:99' })).status, 303);
 });

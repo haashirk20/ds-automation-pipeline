@@ -8,14 +8,14 @@ import { monthSpendUsd } from '../router/index.ts';
 import { localDateOf } from '../scheduler/time.ts';
 import { activeHandles } from '../shopify/catalog.ts';
 import { html, type Raw } from './html.ts';
-import { fmtTs, layout, type Ctx, type Res } from './pages.ts';
-
-const PNAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' };
+import { layout, PNAME, type Ctx, type Res } from './pages.ts';
+import { fmtLocal } from './ui.ts';
 
 export type ChatLine = { ts: string; who: string; text: string; kind: 'post' | 'make' | 'scrap' | 'alert' };
-export type Quest = { text: string; href: string; urgent: boolean };
+export type Quest = { text: string; href: string | null; urgent: boolean };
 export type TownState = {
   now: string;
+  tz: string;
   dryRun: boolean;
   age: number | null;
   alive: boolean;
@@ -32,6 +32,10 @@ export type TownState = {
   chat: ChatLine[];
 };
 
+// "22 min ago", "3 h ago"
+const ago = (s: number) => (s < 3600 ? `${Math.max(1, Math.round(s / 60))} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`);
+const vname = (r: { kind: string; idx: number }) => (r.kind === 'manual' ? 'Your video' : `Post ${r.idx}`);
+
 export async function townState(db: Db, now: Date): Promise<TownState> {
   const cfg = await loadEffectiveConfig(db, now);
   let st: { dryRun?: boolean; configVersion?: number | string } = {};
@@ -42,7 +46,7 @@ export async function townState(db: Db, now: Date): Promise<TownState> {
   const nextRow = db.prepare("SELECT platform, scheduled_at FROM publications WHERE state = 'pending' AND scheduled_at > ? ORDER BY scheduled_at LIMIT 1").get(now.toISOString()) as { platform: string; scheduled_at: string } | undefined;
   const attention = one("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'");
   const waiting = one("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'");
-  const dayAgo = new Date(now.getTime() - 86_400_000).toISOString();
+  const today = localDateOf(now, cfg.timezone);
   const threeDays = new Date(now.getTime() - 3 * 86_400_000).toISOString();
   const handles = (db.prepare('SELECT handle FROM briefs').all() as { handle: string }[]).map((r) => r.handle);
   const act = activeHandles(db);
@@ -56,23 +60,24 @@ export async function townState(db: Db, now: Date): Promise<TownState> {
   if (waiting) quests.push({ text: `Decide on ${waiting} video${waiting === 1 ? '' : 's'} at the post office`, href: '/posts', urgent: true });
   if (refused) quests.push({ text: 'The town hall refused the saved settings: pick a version in the archive', href: '/history', urgent: true });
   if (!handles.length) quests.push({ text: 'Stock the market: add a product', href: '/products', urgent: true });
-  if (!alive) quests.push({ text: age === null ? 'Start the pipeline: the factory has never opened' : 'Wake the factory: it has not checked in for a while', href: '/factory', urgent: true });
+  if (!alive) quests.push({ text: age === null ? 'The factory has not run yet. Ask whoever set it up to start it.' : 'The factory has stopped. Ask whoever set it up to restart it.', href: null, urgent: true });
   if (!platforms.length) quests.push({ text: 'Open a shipping route: switch a platform on at the town hall', href: '/settings', urgent: false });
   if (!quests.length) quests.push({ text: 'Make a video now at the post office', href: '/posts', urgent: false });
 
   const chat: ChatLine[] = [];
-  for (const r of db.prepare("SELECT slot_id, platform, published_at FROM publications WHERE state = 'published' AND published_at >= ? ORDER BY published_at DESC LIMIT 8").all(threeDays) as { slot_id: string; platform: string; published_at: string }[])
-    chat.push({ ts: r.published_at, who: 'Post office', text: `Video ${r.slot_id} went out on ${PNAME[r.platform] ?? r.platform}.`, kind: 'post' });
-  for (const r of db.prepare("SELECT id, status, updated_at, error FROM slots WHERE status IN ('ready','done','failed') AND updated_at >= ? ORDER BY updated_at DESC LIMIT 8").all(threeDays) as { id: string; status: string; updated_at: string; error: string | null }[])
+  for (const r of db.prepare("SELECT p.platform, p.published_at, s.kind, s.idx FROM publications p JOIN slots s ON s.id = p.slot_id WHERE p.state = 'published' AND p.published_at >= ? ORDER BY p.published_at DESC LIMIT 8").all(threeDays) as { platform: string; published_at: string; kind: string; idx: number }[])
+    chat.push({ ts: r.published_at, who: 'Post office', text: `${vname(r)} went out on ${PNAME[r.platform] ?? r.platform}.`, kind: 'post' });
+  for (const r of db.prepare("SELECT kind, idx, status, updated_at, error FROM slots WHERE status IN ('ready','done','failed') AND updated_at >= ? ORDER BY updated_at DESC LIMIT 8").all(threeDays) as { kind: string; idx: number; status: string; updated_at: string; error: string | null }[])
     chat.push(r.status === 'failed'
-      ? { ts: r.updated_at, who: 'Factory', text: `Video ${r.id} went to the scrap bin${r.error ? `: ${r.error.slice(0, 90)}` : '.'}`, kind: 'scrap' }
-      : { ts: r.updated_at, who: 'Factory', text: `Video ${r.id} rolled off the line.`, kind: 'make' });
+      ? { ts: r.updated_at, who: 'Factory', text: `${vname(r)} was thrown away${r.error ? `: ${r.error.slice(0, 90)}` : '.'}`, kind: 'scrap' }
+      : { ts: r.updated_at, who: 'Factory', text: `${vname(r)} is ready.`, kind: 'make' });
   for (const r of db.prepare('SELECT ts, kind, message FROM events WHERE ts >= ? ORDER BY id DESC LIMIT 6').all(threeDays) as { ts: string; kind: string; message: string }[])
     chat.push({ ts: r.ts, who: 'Town crier', text: r.message.slice(0, 140), kind: 'alert' });
   chat.sort((a, b) => (a.ts < b.ts ? 1 : -1));
 
   return {
     now: now.toISOString(),
+    tz: cfg.timezone,
     dryRun: !!st.dryRun,
     age,
     alive,
@@ -80,8 +85,8 @@ export async function townState(db: Db, now: Date): Promise<TownState> {
     attention,
     refused,
     next: nextRow ? { at: nextRow.scheduled_at, platform: PNAME[nextRow.platform] ?? nextRow.platform } : null,
-    made: one("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')", localDateOf(now, cfg.timezone)),
-    posted: one("SELECT COUNT(*) AS n FROM publications WHERE state = 'published' AND published_at >= ?", dayAgo),
+    made: one("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')", today),
+    posted: (db.prepare("SELECT published_at FROM publications WHERE state = 'published' AND published_at >= ?").all(new Date(now.getTime() - 2 * 86_400_000).toISOString()) as { published_at: string }[]).filter((r) => localDateOf(new Date(r.published_at), cfg.timezone) === today).length,
     spend: { llm: monthSpend(db, now), llmCap: cfg.llm.monthlyCapUsd, clips: monthSpendUsd(db, 't2', now), clipCap: cfg.tiers.capsUsd.t2 },
     products: { on, total: handles.length },
     platforms,
@@ -105,7 +110,7 @@ export const PLACES: { href: string; place: string; page: string; what: string }
   { href: '/factory', place: 'Factory', page: 'Factory', what: 'Watch each video move down the line, live.' },
   { href: '/products', place: 'Market', page: 'Products', what: 'Pick which products get videos and which daily post they go in.' },
   { href: '/posts', place: 'Post office', page: 'Videos', what: 'Approve videos before they go out, or make one now.' },
-  { href: '/settings', place: 'Town hall', page: 'Settings', what: 'Times, platforms and budget, as blocks.' },
+  { href: '/settings', place: 'Town hall', page: 'Settings', what: 'Post times, platforms and budget.' },
   { href: '/music', place: 'Music hall', page: 'Music', what: 'Upload and pick background music.' },
   { href: '/models', place: 'Wizard tower', page: 'Video models', what: 'The video models the factory may use.' },
   { href: '/prompts', place: 'Library', page: 'Writing instructions', what: 'What the writers are told, and how each product looks.' },
@@ -125,24 +130,24 @@ export async function townPage(ctx: Ctx): Promise<Res> {
 <div class="town-stage">
 <div class="hud-strip">
 <div class="hud hud-me"><span class="me-face" aria-hidden="true"></span><div><b>Factory owner</b>
-${bar('hp', 'Factory', s.alive ? 100 : 15, s.age === null ? 'never checked in' : s.alive ? 'running' : `quiet ${s.age} s`)}
+${bar('hp', 'Factory', s.alive ? 100 : 15, s.age === null ? 'Not started yet' : s.alive ? 'Running' : `Stopped ${ago(s.age)}`)}
 ${bar('mp', 'Budget', 100 - pct(spent, cap), `${money(cap - spent)} left`)}</div></div>
 <div class="hud hud-gold" title="Spent this month on writers and clips"><span class="coin" aria-hidden="true"></span><b data-gold>${money(spent)}</b><small>of ${money(cap)}</small></div>
 ${s.dryRun ? html`<div class="hud hud-mode">Practice mode: nothing is published</div>` : ''}
 </div>
 <canvas id="town" class="tw" width="544" height="320" tabindex="0" role="img" aria-label="The town square seen from above. Each building is a page: walk your character to a door, or click a building, to go in. The list of buildings below the town has the same places." data-state="${JSON.stringify(s)}">The town needs JavaScript and canvas. Use the list of buildings below.</canvas>
-<p class="town-hint" data-hint>Walk with the arrow keys or WASD. Press E at a door to go in, or just click a building.</p>
+<p class="town-hint" data-hint>Walk with the arrow keys or WASD. Press E at a door to go in, or just click a building. The list of buildings below has the same places.</p>
 </div>
 <aside class="town-side">
-<section class="hud-panel quests"><h2>Quest log</h2><ul data-quests>${s.quests.map((q) => html`<li class="${q.urgent ? 'urgent' : ''}"><a href="${q.href}">${q.text}</a></li>`)}</ul></section>
+<section class="hud-panel quests"><h2>Quest log</h2><ul data-quests>${s.quests.map((q) => html`<li class="${q.urgent ? 'urgent' : ''}">${q.href ? html`<a href="${q.href}">${q.text}</a>` : q.text}</li>`)}</ul></section>
 <section class="hud-panel today"><h2>Today</h2><dl>
-<dt>Made</dt><dd data-made>${s.made}</dd><dt>Posted (24 h)</dt><dd data-posted>${s.posted}</dd>
-<dt>Next post</dt><dd data-next>${s.next ? `${fmtTs(s.next.at).slice(11, 16)}Z, ${s.next.platform}` : 'none planned'}</dd>
+<dt>Videos made</dt><dd data-made>${s.made}</dd><dt>Posts sent</dt><dd data-posted>${s.posted}</dd>
+<dt>Next post</dt><dd data-next>${s.next ? `${fmtLocal(s.next.at, s.tz)}, ${s.next.platform}` : 'none planned'}</dd>
 <dt>Products in turn</dt><dd data-products>${s.products.on} of ${s.products.total}</dd></dl></section>
-<section class="hud-panel chat"><h2>Town chat</h2><ol data-chat>${s.chat.length ? s.chat.map((c) => html`<li class="c-${c.kind}"><time>${fmtTs(c.ts).slice(11, 16)}</time> <b>[${c.who}]</b> ${c.text}</li>`) : html`<li class="muted">All quiet in town.</li>`}</ol></section>
+<section class="hud-panel chat"><h2>Town chat</h2><ol data-chat>${s.chat.length ? s.chat.map((c) => html`<li class="c-${c.kind}"><time>${fmtLocal(c.ts, s.tz)}</time> <b>[${c.who}]</b> ${c.text}</li>`) : html`<li class="muted">All quiet in town.</li>`}</ol></section>
 </aside>
 </div>
-<nav class="town-dir" aria-label="Buildings"><h2>Buildings</h2><ul>${PLACES.map((p) => html`<li><a href="${p.href}"><b>${p.place}</b> <span class="muted">${p.page}</span><small>${p.what}</small></a></li>`)}</ul></nav>`;
+<section class="town-dir" aria-labelledby="town-dir-h"><h2 id="town-dir-h">Buildings</h2><ul>${PLACES.map((p) => html`<li><a href="${p.href}"><b>${p.place}</b> <span class="muted">${p.page}</span><small>${p.what}</small></a></li>`)}</ul></section>`;
   const r = layout(ctx, 'Town square', '/town', body, html`<link rel="stylesheet" href="/town.css"><script src="/town.js" defer></script>`);
   return { ...r, headers: { ...r.headers, 'content-security-policy': TOWN_CSP } };
 }

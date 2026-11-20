@@ -1,4 +1,4 @@
-// The stylesheet of every admin page except Factory, served at /style.css (D-41). Plain and calm: sentence-case
+// The stylesheet of every admin page, Factory and the town square included, served at /style.css (D-41, D-44). Plain and calm: sentence-case
 // system fonts, a warm paper palette that keeps 4.5:1 text contrast in both colour schemes, and a wood-brown
 // brand plate with one thin hazard stripe as the only nod to the Factory. No images, no fonts, no animation.
 export const CSS = `
@@ -70,6 +70,9 @@ legend{font-weight:600;padding:0;margin-bottom:var(--space-2)}
 .has-error input,.has-error select,.has-error textarea{border-color:var(--danger);border-width:2px}
 input[type=text],input[type=number],input[type=password],input[type=time],select,textarea{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius);padding:.5rem .6rem;min-height:44px;width:100%;max-width:24rem}
 input[type=time],input[inputmode=decimal]{max-width:10rem}
+.skip{position:absolute;left:var(--space-2);top:-4rem;z-index:30;padding:var(--space-2) var(--space-4);background:var(--surface);color:var(--text);border:2px solid var(--ink);border-radius:var(--radius);font-weight:600}
+.skip:focus{top:var(--space-2)}
+main:focus{outline:none}
 input[readonly]{background:var(--surface-2);color:var(--muted);border-color:var(--border)}
 textarea{max-width:100%;font-family:var(--mono);font-size:.9375rem;min-height:18rem}
 textarea.short{min-height:0;font-family:var(--font)}
@@ -137,6 +140,8 @@ th,td{text-align:left;vertical-align:top;padding:var(--space-2) var(--space-3);b
 thead th{font-size:.9375rem;color:var(--muted);border-bottom:2px solid var(--border-strong);overflow-wrap:normal}
 td.num,.nw{white-space:nowrap;font-variant-numeric:tabular-nums}
 td details summary{cursor:pointer;color:var(--accent)}
+/* action links in tables: a 44px target. Links inside prose keep their text height. */
+td>a,th>a,a.tap,.actions>a,.sticky-save>a,.flash summary{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--space-2);cursor:pointer}
 @media (max-width:40rem){
   table.stack thead{display:none}
   table.stack tr{display:block;border-bottom:1px solid var(--border-strong);padding:var(--space-2) 0}
@@ -151,6 +156,11 @@ details.tech{margin:0 0 var(--space-6)}
 details.tech>summary,details.plain>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600;color:var(--accent)}
 details.tech[open]>summary{margin-bottom:var(--space-3)}
 details.card>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:1.3rem;font-weight:700}
+/* a visible marker on every disclosure summary that is not the nav */
+.flash summary,details.tech>summary,details.plain>summary,details.card>summary{list-style:none}
+.flash summary::-webkit-details-marker,details.tech>summary::-webkit-details-marker,details.plain>summary::-webkit-details-marker,details.card>summary::-webkit-details-marker{display:none}
+.flash summary::before,details.tech>summary::before,details.plain>summary::before,details.card>summary::before{content:"\\25B8";margin-right:var(--space-2);font-size:.9em}
+.flash details[open]>summary::before,details.tech[open]>summary::before,details.plain[open]>summary::before,details.card[open]>summary::before{content:"\\25BE"}
 details.card[open]>summary{margin-bottom:var(--space-3)}
 
 /* sticky save bar */
@@ -180,10 +190,15 @@ video,audio{display:block;max-width:100%}
 video{width:100%;max-width:14rem;background:#000;border-radius:var(--radius)}
 .media-row{display:grid;grid-template-columns:minmax(0,14rem) minmax(0,1fr);gap:var(--space-6)}
 .tracks{list-style:none;margin:0;padding:0}
+.tracks.card{padding:0 var(--space-4)}
 .track{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--space-2) var(--space-4);align-items:center;padding:var(--space-3) 0;border-top:1px solid var(--border)}
 .track:first-child{border-top:0}
 .track audio{grid-column:1/-1;width:100%}
 .track details.tech{grid-column:1/-1;margin:0}
+.track details.confirm{display:block}
+.track{scroll-margin-bottom:12rem}
+.track details.confirm[open]{position:relative}
+.track details.confirm[open]>div{position:absolute;right:0;top:100%;z-index:6;min-width:14rem;max-width:calc(100vw - 2rem)}
 
 /* products */
 .next-posts{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-2)}
@@ -191,26 +206,23 @@ video{width:100%;max-width:14rem;background:#000;border-radius:var(--radius)}
 .pgrid{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:var(--space-4);margin:0;padding:0}
 .pcard{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .pcard.on{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
-.pcard-img{display:grid;place-items:center;aspect-ratio:3/2;max-height:11rem;background:#fff;border-bottom:1px solid var(--border)}
-.pcard-img img{width:100%;height:100%;object-fit:contain}
-.pcard-img .muted{font-weight:600;color:#5f5141}
+.pcard-img{position:relative;overflow:hidden;display:grid;place-items:center;aspect-ratio:3/2;max-height:11rem;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.pcard-img img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.pcard-img .muted{font-weight:600;color:var(--muted)}
 .pcard-body{display:flex;flex-direction:column;gap:var(--space-1);padding:var(--space-3) var(--space-4) var(--space-4)}
 .pcard-price{font-weight:700}
 .pcard fieldset{margin-top:var(--space-2);padding-top:var(--space-2);border-top:1px solid var(--border)}
 .pcard-act{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-3);align-items:center;margin-top:var(--space-2)}
 .pcard .badge{align-self:flex-start}
-.pcard.add{border:2px dashed var(--border-strong);background:transparent}
-.pcard.add a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-2);min-height:12rem;font-weight:600;text-decoration:none}
-.plus{display:grid;place-items:center;width:3rem;height:3rem;border-radius:50%;background:var(--primary);color:#fff;font:700 2rem/1 var(--font)}
 .logo-panel{display:grid;grid-template-columns:10rem minmax(0,1fr);gap:var(--space-6);align-items:start}
-.logo-box{display:grid;place-items:center;aspect-ratio:1;border:1px solid var(--border);border-radius:var(--radius);background:#fff}
+.logo-box{display:grid;place-items:center;aspect-ratio:1;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2)}
 .logo-box img{width:100%;height:100%;object-fit:contain}
-.logo-box .muted{color:#5f5141}
+.logo-box .muted{color:var(--muted)}
 .logo-panel .form-row{grid-template-columns:1fr}
 .logo-panel .form-row>label{padding-top:0}
 .thumbs{display:flex;flex-wrap:wrap;gap:var(--space-3)}
 .thumb{display:flex;flex-direction:column;align-items:center;gap:var(--space-1);font-size:.9375rem}
-.thumb img{width:96px;height:96px;object-fit:contain;border:1px solid var(--border);border-radius:var(--radius);background:#fff}
+.thumb img{width:96px;height:96px;object-fit:contain;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2)}
 
 /* settings */
 .times td,.times th{vertical-align:middle}
@@ -219,7 +231,18 @@ video{width:100%;max-width:14rem;background:#000;border-radius:var(--radius)}
 .login{max-width:24rem;margin:var(--space-8) auto}
 .login .form-row{grid-template-columns:1fr}
 .login .form-row>label{padding-top:0}
+.login h1{margin:0 0 var(--space-4)}
+.brandname{margin:0 0 var(--space-1);font-weight:700;color:var(--brand);letter-spacing:.02em}
+@media (prefers-color-scheme:dark){.brandname{color:var(--muted)}}
 
+/* post times: one block per daily post, one line per platform */
+@media (max-width:37.5rem){
+  table.times thead{display:none}
+  table.times tr{display:block;border-bottom:1px solid var(--border-strong);padding:var(--space-2) 0}
+  table.times th[scope=row]{display:block;border:0;padding:var(--space-1) var(--space-2);font-weight:700}
+  table.times td{display:flex;align-items:center;gap:var(--space-3);border:0;padding:var(--space-1) var(--space-2)}
+  table.times td::before{content:attr(data-label);flex:0 0 7rem;color:var(--muted);font-weight:600}
+}
 @media (max-width:40rem){
   main{padding:var(--space-4)}
   .card{padding:var(--space-4)}

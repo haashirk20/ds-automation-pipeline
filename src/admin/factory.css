@@ -1,46 +1,48 @@
-/* The Factory page. The floor is a pixel-art canvas drawn by /factory.js; this file styles what sits around it. */
-.f-bar{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;margin:0 0 .75rem}
-.f-hb::before{content:"";display:inline-block;width:.7rem;height:.7rem;border:2px solid var(--ink);margin-right:.45rem;background:var(--muted);vertical-align:middle}
-.f-hb,.f-up{font:700 .85rem var(--mono);text-transform:uppercase}
-.f-hb.ok::before{background:#3fd47a;animation:f-blink 1.6s ease-in-out infinite}
-.f-hb.bad::before{background:#ff5a4f;animation:f-blink .6s steps(2) infinite}
-.f-demo{margin-left:auto;display:inline-flex;align-items:center;min-height:44px;padding:.4rem .9rem;border:3px solid var(--ink);text-decoration:none;color:var(--text);background:var(--btn);font:700 .85rem/1.2 var(--mono);text-transform:uppercase;letter-spacing:.04em;box-shadow:inset -3px -3px 0 rgba(0,0,0,.22),inset 3px 3px 0 rgba(255,255,255,.45),0 4px 0 var(--ink);margin-bottom:4px}
-.f-demo.on{background:var(--amber);color:var(--ink)}
-.f-demo:hover{filter:brightness(1.07)}
+/* The Factory page. The floor is a pixel-art canvas drawn by /factory.js; this file styles what sits around it,
+   with the tokens and buttons of style.css (D-44). */
+.f-bar{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-4);align-items:center;margin:0 0 var(--space-3)}
+.f-hb{font-weight:600}
+.f-hb::before{content:"";display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin-right:var(--space-2);background:var(--muted);vertical-align:middle}
+.f-hb.ok::before{background:var(--primary);animation:f-blink 1.6s ease-in-out infinite}
+.f-hb.bad::before{background:var(--danger);animation:f-blink .6s steps(2) infinite}
+.f-up{font-size:.9375rem}
+.f-demo{margin-left:auto}
 .f-still{margin-left:auto}
 .f-still:not([hidden])+.f-demo{margin-left:0}
+.banner{padding:var(--space-3) var(--space-4);border:1px solid currentColor;border-left-width:6px;border-radius:var(--radius);color:var(--warn);background:var(--warn-bg);margin:0 0 var(--space-4)}
 
 /* the floor: drawn at 544x320 and scaled up with hard pixel edges */
-.fx-wrap{margin:0 0 1.25rem;border:4px solid var(--ink);background:var(--ink);box-shadow:5px 5px 0 rgba(27,28,36,.6)}
+.fx-wrap{margin:0 0 var(--space-6);border:1px solid var(--border-strong);border-radius:var(--radius);overflow:hidden;background:var(--surface-2)}
 .fx{display:block;width:100%;height:auto;aspect-ratio:544/320;image-rendering:crisp-edges;image-rendering:pixelated;background:#5c9c3e}
 .fx.pointer{cursor:pointer}
-.fx:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 
 /* station list */
-.fx-legend{list-style:none;counter-reset:st;display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.5rem;margin:0 0 .75rem;padding:0}
-.fx-legend li{counter-increment:st;display:flex;align-items:flex-start;gap:.6rem;padding:.5rem .6rem;border:3px solid var(--ink);background:var(--panel);box-shadow:3px 3px 0 var(--ink)}
+.fx-legend{list-style:none;counter-reset:st;display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:var(--space-2);margin:0 0 var(--space-3);padding:0}
+.fx-legend li{counter-increment:st;display:flex;align-items:flex-start;gap:var(--space-3);padding:var(--space-2) var(--space-3);border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.fx-legend li.busy{border-color:var(--primary)}
 .fx-n::before{content:counter(st)}
-.fx-n{flex:none;display:grid;place-items:center;width:1.5rem;height:1.5rem;border:3px solid var(--ink);background:#c98e55;color:var(--ink);font:800 .8rem/1 var(--mono)}
+.fx-n{flex:none;min-width:1rem;color:var(--muted);font-weight:700;font-size:.9375rem;line-height:1.4}
+.fx-n::after{content:'.'}
 .fx-t{min-width:0;display:flex;flex-direction:column}
-.fx-t b{font:700 .85rem/1.3 var(--mono);text-transform:uppercase}
-.fx-t small{color:var(--muted);font-size:.8rem;line-height:1.3}
-.fx-legend .count{margin-left:auto;min-width:1.6rem;text-align:center;padding:0 .4rem;border:2px solid var(--ink);background:var(--btn);color:var(--text);font:700 .85rem/1.5 var(--mono)}
-.fx-legend li.busy .count{background:#f5a524;color:#1b1c24}
-.fx-sent span{margin-right:.4rem;white-space:nowrap}
+.fx-t small{color:var(--muted);font-size:.9375rem;line-height:1.35}
+.fx-legend .count{margin-left:auto;white-space:nowrap;font-size:.875rem;padding:0 var(--space-2);border-radius:var(--radius);border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-variant-numeric:tabular-nums}
+.fx-legend li.busy .count{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
+.fx-sent{margin:0 0 var(--space-4)}
+.fx-sent span{margin-right:var(--space-2);white-space:nowrap}
 
 /* line board: the slot id is a button that selects the crate */
-.fx-pick{min-height:0;padding:0;margin:0;border:0;background:none;box-shadow:none;color:var(--accent);text-decoration:underline;font:inherit;text-transform:none;letter-spacing:0;cursor:pointer}
-.fx-pick:active{top:0}
+.fx-pick{display:inline-flex;align-items:center;min-height:44px;padding:0;margin:0;border:0;background:none;color:var(--accent);text-decoration:underline;font:inherit;cursor:pointer}
 
 /* inspector */
+.inspector{padding:var(--space-3) var(--space-4)}
 .inspector h3{margin-top:0}
-.insp-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.3rem 1rem;margin:.5rem 0 0}
+.insp-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:var(--space-1) var(--space-4);margin:var(--space-2) 0 0}
 .insp-grid dt{font-weight:600;color:var(--muted)}
 .insp-grid dd{margin:0;overflow-wrap:anywhere}
-.chip{display:inline-block;margin:0 .35rem .25rem 0;padding:0 .45rem;border:2px solid var(--ink);background:var(--btn);font:700 .75rem/1.5 var(--mono);text-transform:uppercase}
-.chip.published{background:#7ed36b;color:var(--ink)}
-.chip.uploading{background:var(--amber);color:var(--ink)}
-.chip.needs_attention,.chip.skipped{background:var(--bad);color:#fff}
+.chip{display:inline-block;margin:0 var(--space-1) var(--space-1) 0;padding:0 .5rem;border-radius:1rem;border:1px solid currentColor;background:var(--surface-2);color:var(--muted);font-size:.875rem;font-weight:600;line-height:1.5}
+.chip.published{color:var(--ok);background:var(--ok-bg)}
+.chip.uploading{color:var(--warn);background:var(--warn-bg)}
+.chip.needs_attention,.chip.skipped{color:var(--danger);background:var(--bad-bg)}
 
 @keyframes f-blink{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.f-hb::before{animation:none!important}}

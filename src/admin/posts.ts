@@ -2,18 +2,19 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/index.ts';
+import { kvGet } from '../db/index.ts';
 import { audit, loadEffectiveConfig } from '../config/overrides.ts';
 import { approveHold, discardHold, manualToday, planManual } from '../scheduler/holds.ts';
 import { html, raw } from './html.ts';
 import { inside, SLOT_ID } from './media.ts';
 import { csrfField, dryRunOn, layout, PNAME, redirect, type Ctx, type Res } from './pages.ts';
-import { badge, empty, flash, fmtLocal, formRow, money, type Kind } from './ui.ts';
+import { badge, confirmRemove, empty, flash, fmtLocal, formRow, money, type Kind } from './ui.ts';
 
 const VIS: Record<string, string> = { public: 'everyone', private: 'only me' };
 const MESSAGES: Record<string, [Kind, string, string]> = {
-  made: ['ok', 'Making your video.', 'This takes about 5 minutes; the page refreshes by itself.'],
+  made: ['ok', 'Making your video.', ''],
   nothing: ['warn', 'Nothing to post.', 'No platform has a post waiting for this video. Discard it.'],
-  approved: ['ok', 'Posted.', ''],
+  approved: ['ok', 'Sent for posting.', ''],
   discarded: ['ok', 'Discarded.', 'Nothing was posted.'],
   noop: ['info', 'Nothing to do.', 'That video was already posted, discarded or has expired.'],
   nofile: ['bad', 'The video file is missing, so it cannot be posted.', 'Discard it and make a new one.'],
@@ -50,23 +51,32 @@ export async function postsPage(ctx: Ctx): Promise<Res> {
   const modelName = (v: string | null) => (v === null ? 'Usual model' : (names.get(v) ?? v));
   const per = cfg.tiers.t2.usdPerClip;
   const goes = enabled.map(([k, p]) => `${PNAME[k]} (${VIS[p.visibility]})`).join(', ');
+  // The factory beats every tick; older than 5 minutes (as on Home and Factory) means it is not running.
+  const hb = kvGet(ctx.db, 'heartbeat');
+  const alive = !!hb && ctx.now.getTime() - Date.parse(hb) <= 300_000;
   const blocked = cfg.creative.mode !== 'ugc' ? 'This button needs the "ugc" creative mode in the config file.'
     : !enabled.length ? 'Every platform is off, so nothing could be posted. Turn one on in Settings.'
-    : inFlight ? 'A video is being made right now. Wait for it to finish.'
+    : inFlight ? (alive ? 'A video is being made right now. Wait for it to finish.' : 'A video is queued, but the factory is not running, so it will start when the factory does.')
     : cfg.approval.manualPerDay === 0 ? 'The button is turned off in Settings.'
     : made >= cfg.approval.manualPerDay ? `Today's limit of ${cfg.approval.manualPerDay} is used. It resets at midnight.` : null;
   const msg = ctx.query.get('msg');
   const refused = ctx.query.get('refused');
   const m = msg ? MESSAGES[msg] : undefined;
-  const top = m ? flash(m[0], m[1], msg === 'approved' ? `It goes out to ${enabled.map(([k]) => PNAME[k]).join(', ') || 'no platform'} within a minute.` : m[2]) : refused ? flash('bad', 'Not made.', refused.slice(0, 200)) : '';
-  const head = inFlight ? raw('<meta http-equiv="refresh" content="30">') : '';
-  return layout(ctx, 'Videos', '/posts', html`${top}${dry ? flash('warn', 'Practice mode is on.', 'The clip is still made and paid for, but Post it sends nothing.') : ''}
+  const down = alive ? '' : ' The factory is not running, so it will not go out until it starts.';
+  const detail = msg === 'approved' ? `It goes out to ${enabled.map(([k]) => PNAME[k]).join(', ') || 'no platform'}${alive ? ' within a minute' : ''}.${down}`
+    : msg === 'made' ? (alive ? 'This takes about 5 minutes; the page refreshes by itself.' : 'The factory is not running, so it will not start until it does.')
+    : m?.[2];
+  const top = m ? flash(!alive && (msg === 'approved' || msg === 'made') ? 'warn' : m[0], m[1], detail) : refused ? flash('bad', 'Not made.', refused.slice(0, 200)) : '';
+  // Reloading while a video is waiting would cut off someone watching it, and a dead factory would reload forever: refresh only when nothing waits and the factory is alive.
+  const head = inFlight && !waiting.length && alive ? raw('<meta http-equiv="refresh" content="30;url=/posts">') : '';
+  const refreshLink = inFlight && (waiting.length || !alive) ? html`<p class="hint">${!alive ? 'Your video is queued. The factory is not running, so it will start when the factory does.' : msg === 'made' ? 'Your video is queued.' : 'A video is being made.'} <a href="/posts">Refresh</a> to check on it.</p>` : '';
+  return layout(ctx, 'Videos', '/posts', html`${top}${refreshLink}${dry ? flash('warn', 'Practice mode is on.', 'The clip is still made and paid for, but Post it sends nothing.') : ''}
 <section><h2>Waiting for you</h2>${waiting.length ? waiting.map((s) => html`<div class="card media-row"><video controls preload="metadata" playsinline src="/media/render?slot=${encodeURIComponent(s.id)}"></video>
 <div>${s.product ? html`<p><strong>${s.product}</strong></p>` : ''}<p>${caption(s.master_json)}</p>
 <p class="hint">Made ${fmtLocal(s.held_at, tz)}. Thrown away automatically after ${cfg.approval.expireHours} hours if you do nothing.</p>
 <p>Goes to: ${goes || 'nowhere (every platform is off)'}</p>
-<div class="actions"><form method="post" action="/posts/approve">${csrfField(ctx)}<input type="hidden" name="slot" value="${s.id}"><button class="primary" type="submit">Post it</button></form>
-<form method="post" action="/posts/discard" class="apart">${csrfField(ctx)}<input type="hidden" name="slot" value="${s.id}"><button type="submit">Discard</button></form></div></div></div>`) : empty('No videos are waiting for you.')}</section>
+<div class="actions"><form method="post" action="/posts/approve">${csrfField(ctx)}<input type="hidden" name="slot" value="${s.id}"><button class="primary" type="submit">Post it</button></form></div>
+<div class="actions">${confirmRemove('Discard this video?', html`<form method="post" action="/posts/discard">${csrfField(ctx)}<input type="hidden" name="slot" value="${s.id}"><button class="danger" type="submit">Yes, discard it</button></form>`, 'The clip is thrown away. It was already paid for.')}</div></div></div>`) : empty('No videos are waiting for you.')}</section>
 <section class="card"><h2>Make a video now</h2><p>Costs about ${money(per)}, at most ${money(per * cfg.tiers.maxJobsPerSlot)} if the first try fails the quality check. Nothing is posted until you press <strong>Post it</strong>.</p>
 <p class="hint">Today: ${made} of ${cfg.approval.manualPerDay} used.</p>
 <form method="post" action="/posts/new">${csrfField(ctx)}

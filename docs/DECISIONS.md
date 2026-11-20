@@ -922,9 +922,8 @@ calm warm palette that meets 4.5:1 contrast in both colour schemes, six main nav
 local times, plain labels and status words, one flash pattern and one error pattern. Settings is one
 server-rendered form in five sections (When videos go out, Where videos go, Spending limits, Look and
 sound, Advanced), with post times as a Post 1 / Post 2 by platform grid. `/settings.js` and
-`/blocks.css` are removed; only Factory loads a script (D-37). Factory keeps its pixel look: the
-previous stylesheet is served unchanged as `/pixel.css` to that page alone, with rules for the new nav
-appended. URLs and form contracts are unchanged, with two exceptions on Products: each product has one
+`/blocks.css` are removed; only Factory loads a script (D-37). Factory kept its pixel look in D-41
+via `/pixel.css`; D-44 removed that. URLs and form contracts are unchanged, with two exceptions on Products: each product has one
 choice ("Not used / Post 1 / Post 2 / Both posts / Any post", field `use.<handle>`) that the handler
 maps onto the D-40 kv format (`slot_products` and the `products_active` pool, unchanged; the old
 `sel` and `postN` fields are still read), and saving is accepted with an empty pool when a post has a
@@ -1023,6 +1022,20 @@ read-only); a test checks both. The page also lists every building as plain link
 owner. A game engine: a dependency and a build step.
 
 **Cost.** No dependency. About 600 lines of client script, with drawing helpers copied from the Factory's.
+
+## D-44 One stylesheet for every admin page (2026-11-19)
+
+**Chosen.** `/pixel.css` and `src/admin/pixel.ts` are removed. Every page, Factory and the town square
+included, loads `/style.css`. The header font, page background and heading style jumped when you clicked
+Factory or Town, because those two pages used a monospace, uppercase, grass-checker stylesheet. Now
+`factory.css` and `town.css` style only the chrome around the canvases (status bar, station list, inspector,
+HUD panels), with style.css tokens and its `.btn`, `.card` and badge look. The pixel-art canvases are
+unchanged. The Factory demo link is now `a.btn`; the inspector is a `.card`.
+
+**Alternatives.** Keeping pixel.css for the two pages: the jump was the problem. Skinning the whole admin in
+pixel style: D-41 chose a plain look for a non-technical owner.
+
+**Cost.** No dependency. About 180 fewer lines of CSS.
 
 ## Open questions for the owner
 

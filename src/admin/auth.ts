@@ -108,3 +108,8 @@ export function hostAllowed(hostHeader: string | undefined, extra: string[]): bo
   if (!m) return false;
   return ['127.0.0.1', 'localhost', '[::1]', ...extra].includes(m[1]);
 }
+
+// Where to send the owner after signing in: a same-site path only. "//host", backslashes and anything that is not plain ASCII are refused.
+export function safeNext(v: string | null | undefined): string | null {
+  return typeof v === 'string' && v.length <= 500 && /^\/(?![/\\])[\x21-\x7e]*$/.test(v) && !/^\/login(?:[?#]|$)/.test(v) ? v : null;
+}

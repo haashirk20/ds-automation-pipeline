@@ -534,11 +534,11 @@
       if (isHover) plate(b.page, b.x + b.w / 2, pl.y + 12, C.white, C.ink);
       const q = questOf(b.id);
       if (q) {
-        const bob = Math.round(Math.sin(T * 4) * 2), qx = b.x + b.w / 2, qy = Math.max(2, pl.y - 12 + bob);
+        const bob = Math.round(Math.sin(T * 4) * 2), qx = Math.min(W - 6, pl.x + pl.w + 6), qy = Math.max(1, pl.y - 1 + bob);
         R(qx - 3, qy - 1, 7, 11, C.ink); R(qx - 2, qy, 5, 9, C.gold); R(qx, qy + 1, 1, 4, C.ink); R(qx, qy + 7, 1, 1, C.ink);
       }
     }
-    if (state && state.waiting) bubble(state.waiting + ' VIDEO' + (state.waiting === 1 ? '' : 'S') + ' WAIT FOR YOU', postman.x, postman.y - 27);
+    if (state && state.waiting) bubble(state.waiting + ' VIDEO' + (state.waiting === 1 ? ' WAITS' : 'S WAIT') + ' FOR YOU', postman.x, postman.y - 27);
     if (state && state.attention && blink(4, 0.6)) bubble('HEAR YE! ' + state.attention + ' POST' + (state.attention === 1 ? '' : 'S') + ' STUCK', byId.board.x + 17, byId.board.y - 38);
     plate('YOU', hero.x, hero.y - 24, '#7ef0a8');
     if (ready && !entering) plate('E: ENTER ' + ready.place, hero.x, hero.y + 4, C.gold, C.gold);
@@ -565,24 +565,37 @@
   // ---------- the HUD ----------
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined && txt !== null) e.textContent = String(txt); return e; };
   const money = (n) => '$' + Number(n).toFixed(2);
-  const hhmm = (ts) => (ts ? ts.slice(11, 16) : '');
+  // The shop's local time, same format as the server's fmtLocal: "Fri 20 Nov, 12:15".
+  const fmtLocal = (iso, tz) => {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    let p;
+    try { p = new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d); } catch { return ''; }
+    const g = (t) => (p.find((x) => x.type === t) || { value: '' }).value;
+    return g('weekday') + ' ' + g('day') + ' ' + g('month').replace('.', '') + ', ' + g('hour') + ':' + g('minute');
+  };
+  // Phones and tablets have no keys: say how to get around by touch.
+  try {
+    const hint = document.querySelector('[data-hint]');
+    if (hint && window.matchMedia('(pointer: coarse)').matches) hint.textContent = 'Tap a building to walk there and go in. The list of buildings below has the same places.';
+  } catch { /* keep the keyboard hint */ }
   function hud(s) {
     const set = (sel, v) => { const e = document.querySelector(sel); if (e) e.textContent = v; };
     const spent = s.spend.llm + s.spend.clips, cap = s.spend.llmCap + s.spend.clipCap;
     set('[data-gold]', money(spent));
-    set('[data-v="hp"]', s.age === null ? 'never checked in' : s.alive ? 'running' : 'quiet ' + s.age + ' s');
+    set('[data-v="hp"]', s.age === null ? 'Not started yet' : s.alive ? 'Running' : 'Stopped ' + (s.age < 3600 ? Math.max(1, Math.round(s.age / 60)) + ' min' : s.age < 86400 ? Math.round(s.age / 3600) + ' h' : Math.round(s.age / 86400) + ' days') + ' ago');
     set('[data-v="mp"]', money(cap - spent) + ' left');
     const fill = (k, v) => { const e = document.querySelector('[data-fill="' + k + '"]'); if (e) e.style.setProperty('width', Math.max(0, Math.min(100, v)) + '%'); };
     fill('hp', s.alive ? 100 : 15);
     fill('mp', cap > 0 ? 100 - (spent / cap) * 100 : 0);
     set('[data-made]', String(s.made));
     set('[data-posted]', String(s.posted));
-    set('[data-next]', s.next ? hhmm(s.next.at) + 'Z, ' + s.next.platform : 'none planned');
+    set('[data-next]', s.next ? fmtLocal(s.next.at, s.tz) + ', ' + s.next.platform : 'none planned');
     set('[data-products]', s.products.on + ' of ' + s.products.total);
     const q = document.querySelector('[data-quests]');
-    if (q) q.replaceChildren(...s.quests.map((x) => { const li = el('li', x.urgent ? 'urgent' : null); const a = el('a', null, x.text); a.href = x.href; li.append(a); return li; }));
+    if (q) q.replaceChildren(...s.quests.map((x) => { const li = el('li', x.urgent ? 'urgent' : null); if (x.href) { const a = el('a', null, x.text); a.href = x.href; li.append(a); } else li.textContent = x.text; return li; }));
     const c = document.querySelector('[data-chat]');
-    if (c) c.replaceChildren(...(s.chat.length ? s.chat.map((m) => { const li = el('li', 'c-' + m.kind); li.append(el('time', null, hhmm(m.ts)), document.createTextNode(' '), el('b', null, '[' + m.who + ']'), document.createTextNode(' ' + m.text)); return li; }) : [el('li', 'muted', 'All quiet in town.')]));
+    if (c) c.replaceChildren(...(s.chat.length ? s.chat.map((m) => { const li = el('li', 'c-' + m.kind); li.append(el('time', null, fmtLocal(m.ts, s.tz)), document.createTextNode(' '), el('b', null, '[' + m.who + ']'), document.createTextNode(' ' + m.text)); return li; }) : [el('li', 'muted', 'All quiet in town.')]));
   }
   let timer = null;
   async function poll() {

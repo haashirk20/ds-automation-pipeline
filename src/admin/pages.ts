@@ -44,14 +44,15 @@ const HELP: Record<string, string> = {
   '/products': 'Pick which products get videos and which daily post they go in.',
   '/posts': 'Approve videos before they go out, or make one now.',
   '/settings': 'When videos are posted, where they go, and how much may be spent.',
-  '/music': 'Background music for your videos. Ticked tracks take turns.',
+  '/music': 'Background music for your videos. Tracks that are switched on take turns.',
   '/models': 'Video models the factory may use for clips.',
   '/prompts': 'Advanced: the instructions the AI writers follow.',
   '/activity': 'What was made, posted, or went wrong this week.',
   '/history': 'Go back to earlier settings, and see every change made.',
 };
 
-export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = ''): Res {
+// h1: false when the page puts its own title inside a card (the sign-in page).
+export function layout(ctx: Ctx | null, title: string, active: string, body: Raw, head: Raw | '' = '', opts: { h1?: boolean } = {}): Res {
   const link = ([h, t]: [string, string]) => html`<a href="${h}"${h === active ? rawHtml(' aria-current="page"') : ''}>${t}</a>`;
   const logout = ctx?.csrf ? html`<form method="post" action="/logout"><input type="hidden" name="csrf" value="${ctx.csrf}"><button class="link" type="submit">Log out</button></form>` : '';
   const nav = ctx?.csrf
@@ -59,10 +60,8 @@ export function layout(ctx: Ctx | null, title: string, active: string, body: Raw
 <div class="nav-wide">${PRIMARY.map(link)}<details class="more"><summary>More</summary><div class="drop">${MORE.map(link)}<hr>${logout}</div></details></div>
 <details class="menu"><summary>Menu</summary><div class="drop">${PRIMARY.map(link)}<hr>${MORE.map(link)}<hr>${logout}</div></details></nav></header>`
     : '';
-  const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|History of|Check)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
-  // Factory and the town square keep the pixel-art stylesheet (D-41, D-43); every other page uses the plain one.
-  const css = active === '/factory' || active === '/town' ? '/pixel.css' : '/style.css';
-  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad factory</title><link rel="stylesheet" href="${css}">${head}</head><body>${nav}<main><h1>${title}</h1>${help}${body}</main></body></html>`);
+  const help = ctx?.csrf && HELP[active] && !/^(Not |Review|Edit|Add|History of|Check)/.test(title) ? html`<p class="lede">${HELP[active]}</p>` : '';
+  return ok(html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} - Ad factory</title><link rel="stylesheet" href="/style.css">${head}</head><body><a class="skip" href="#main">Skip to content</a>${nav}<main id="main" tabindex="-1">${opts.h1 === false ? '' : html`<h1>${title}</h1>`}${help}${body}</main></body></html>`);
 }
 
 export const csrfField = (ctx: Ctx) => html`<input type="hidden" name="csrf" value="${ctx.csrf}">`;
@@ -71,17 +70,25 @@ export const fmtTs = (s: string | null | undefined) => (s ? s.replace('T', ' ').
 
 // ---------- login ----------
 
-export function loginPage(msg: string | null, hasPassword: boolean): Res {
+// opts.next: where to go after signing in (already checked by safeNext). opts.out: the owner just signed out.
+export function loginPage(msg: string | null, hasPassword: boolean, opts: { next?: string; out?: boolean } = {}): Res {
   return layout(null, 'Sign in', '', html`<div class="card login">
+<p class="brandname">Ad factory</p><h1>Sign in</h1>
+${opts.out ? flash('ok', 'You are signed out.') : ''}
 ${msg ? flash('bad', msg) : ''}
 ${hasPassword ? '' : flash('bad', 'No password is set.', html`Run <code>node src/cli.ts admin password</code> on the server first.`)}
-<form method="post" action="/login">
+<form method="post" action="/login">${opts.next ? html`<input type="hidden" name="next" value="${opts.next}">` : ''}
 ${formRow({ id: 'u', label: 'Username', control: html`<input id="u" type="text" name="username" value="admin" readonly autocomplete="username">`, hint: 'There is one account, admin.' })}
 ${formRow({ id: 'p', label: 'Password', control: html`<input id="p" type="password" name="password" autocomplete="current-password" required autofocus>` })}
-<div class="actions"><button class="primary" type="submit">Sign in</button></div></form></div>`);
+<div class="actions"><button class="primary" type="submit">Sign in</button></div></form></div>`, '', { h1: false });
 }
 
-export const notFound = (ctx: Ctx | null): Res => ({ ...layout(ctx, 'Not found', '', html`<p>Page not found.</p><p><a class="btn" href="/overview">Go to Home</a></p>`), status: 404 });
+// A plain error page in the normal layout: what went wrong in owner words, and a way back. ctx null (not signed in) hides the menu.
+export function errorPage(ctx: Ctx | null, status: number, title: string, text: string, back: { href: string; label: string } = { href: '/overview', label: 'Go to Home' }): Res {
+  return { ...layout(ctx, title, '', html`<p>${text}</p><p><a class="btn" href="${back.href}">${back.label}</a></p>`), status };
+}
+
+export const notFound = (ctx: Ctx | null): Res => errorPage(ctx, 404, 'Page not found', 'There is no page at this address.');
 
 // ---------- shared reads ----------
 
@@ -89,6 +96,11 @@ const versionId = (db: Db, key: string): number | null => {
   const v = kvGet(db, key);
   return v ? Number(v) : null;
 };
+
+function overridesById(db: Db, id: number | null): Record<string, unknown> {
+  const r = id === null ? undefined : (db.prepare('SELECT overrides_json FROM config_versions WHERE id = ?').get(id) as { overrides_json: string } | undefined);
+  try { return r ? JSON.parse(r.overrides_json) : {}; } catch { return {}; }
+}
 
 function activeOverrides(db: Db): { id: number | null; o: Record<string, unknown> } {
   const id = versionId(db, 'config_active');
@@ -152,7 +164,7 @@ const FIELDS: Field[] = [
   { path: 'tiers.t2.keepCredits', label: 'Always leave this many credits in the account', sec: 'money', kind: 'num', unit: 'credits' },
   { path: 'ugc.captionPx', label: 'Caption text size', sec: 'look', kind: 'int', unit: 'px' },
   { path: 'ugc.music.volumeDb', label: 'Music volume', sec: 'look', kind: 'num', unit: 'dB', hint: 'Closer to 0 is louder; −20 is quiet. Music comes from the Music page.' },
-  { path: 'ugc.music.duckDb', label: 'Lower the music while someone speaks by', sec: 'look', kind: 'num', unit: 'dB' },
+  { path: 'ugc.music.duckDb', label: 'Lower the music while someone speaks by', sec: 'look', kind: 'num', unit: 'dB', hint: 'Use a negative number: −6 makes the music 6 dB quieter while someone speaks. 0 changes nothing.' },
   { path: 'ugc.reuseAfterDays', label: 'Reuse an earlier clip after', sec: 'look', kind: 'int', unit: 'days' },
   { path: 'tiers.mix.t0', label: 'Share of videos that reuse an earlier clip', sec: 'look', kind: 'num', hint: '0 = always a new clip, 1 = always reuse.' },
   { path: 'tiers.t2Preset', label: 'Video model', sec: 'models', kind: 'select' },
@@ -214,6 +226,7 @@ function currentValue(f: Field, cfg: Config, o: Record<string, unknown>): unknow
 
 function choicesOf(f: Field, lim: Record<string, any>, customs: Customs): string[] {
   if (f.path === 'tiers.t2Preset') return t2PresetKeys(customs);
+  if (f.path === 'platforms.instagram.visibility') return ['public']; // Instagram has no private posts
   if (f.path.endsWith('.visibility')) return ['public', 'private'];
   if (f.path.startsWith('llm.models.')) return lim[f.path]?.choices ?? Object.keys(PRICES);
   return lim[f.path]?.choices ?? [];
@@ -249,9 +262,16 @@ function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeI
     const cur = currentValue(f, cfg, o);
     const val = submitted ? (submitted.get(f.path) ?? '') : String(cur ?? '');
     if (f.kind === 'bool') return toggle({ id, name: f.path, checked: submitted ? submitted.has(f.path) : cur === true, label: f.label, invalid: errs.has(f.path) });
-    if (f.kind === 'select') return html`<select id="${id}" name="${f.path}"${invalid(f)}>${choicesOf(f, lim, customs).map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${f.path.endsWith('.visibility') ? VIS[c] : (names.get(c) ?? c)}</option>`)}</select>`;
+    if (f.kind === 'select') {
+      // Instagram offers only Everyone. A stored "Only me" (the file default while Instagram is off) stays visible so an untouched form changes nothing.
+      const opts = choicesOf(f, lim, customs);
+      if (f.path === 'platforms.instagram.visibility' && val === 'private') opts.push('private');
+      return html`<select id="${id}" name="${f.path}"${invalid(f)}>${opts.map((c) => html`<option value="${c}"${c === val ? rawHtml(' selected') : ''}>${f.path === 'platforms.instagram.visibility' && c === 'private' ? 'Only me (Instagram cannot use this)' : f.path.endsWith('.visibility') ? VIS[c] : (names.get(c) ?? c)}</option>`)}</select>`;
+    }
     if (f.kind === 'time') return html`<input id="${id}" type="time" name="${f.path}" value="${val}"${invalid(f)}>`;
-    return html`<input id="${id}" type="text" name="${f.path}" value="${val}" inputmode="decimal"${invalid(f)}>`;
+    const l = lim[f.path] ?? {};
+    const range = `${l.min !== undefined ? ` min="${l.min}"` : ''}${l.max !== undefined ? ` max="${l.max}"` : ''}`;
+    return html`<input id="${id}" type="number" name="${f.path}" value="${val}" inputmode="decimal" step="${f.kind === 'int' ? '1' : 'any'}"${rawHtml(range)}${invalid(f)}>`;
   };
   const hintOf = (f: Field, extra = ''): string => {
     const cur = currentValue(f, cfg, o);
@@ -269,7 +289,7 @@ function settingsForm(ctx: Ctx, cfg: Config, o: Record<string, unknown>, activeI
   const timeVal = (f: Field, i: number) => (submitted ? (submitted.getAll(f.path)[i] ?? '') : (((currentValue(f, cfg, o) as string[]) ?? [])[i] ?? ''));
   const times = html`<h3>Post times</h3><p class="hint">Each day makes Post 1 and Post 2. Each one goes out to every platform that is on, at the time in its column. Leave Post 2 empty for one post a day.</p>
 <div class="scroll"><table class="times"><thead><tr><th scope="col"><span class="vh">Daily post</span></th>${PLATFORMS.map((p) => html`<th scope="col">${PNAME[p]}</th>`)}</tr></thead><tbody>
-${Array.from({ length: nPosts }, (_, i) => html`<tr><th scope="row" class="nw">Post ${i + 1}</th>${timeFields.map((f, k) => html`<td><label class="vh" for="${fid(f.path)}-${i}">${PNAME[PLATFORMS[k]]}, Post ${i + 1} time</label><input id="${fid(f.path)}-${i}" type="time" name="${f.path}" value="${timeVal(f, i)}"${invalid(f)}></td>`)}</tr>`)}
+${Array.from({ length: nPosts }, (_, i) => html`<tr><th scope="row" class="nw">Post ${i + 1}</th>${timeFields.map((f, k) => html`<td data-label="${PNAME[PLATFORMS[k]]}"><label class="vh" for="${fid(f.path)}-${i}">${PNAME[PLATFORMS[k]]}, Post ${i + 1} time</label><input id="${fid(f.path)}-${i}" type="time" name="${f.path}" value="${timeVal(f, i)}"${invalid(f)}></td>`)}</tr>`)}
 </tbody></table></div>${errLines(timeFields)}`;
 
   const where = PLATFORMS.map((p) => {
@@ -294,7 +314,7 @@ ${PLATFORMS.map((p) => html`<tr><th scope="row">${PNAME[p]}</th>${EDGES.map((e) 
     ...other.map((msg) => ({ msg })),
   ];
   return html`${errSummary(summary)}
-<form method="post" action="/settings/preview">${csrfField(ctx)}<input type="hidden" name="base_id" value="${activeId ?? ''}">
+<form method="post" action="/settings/preview" novalidate>${csrfField(ctx)}${submitted?.get('note') ? html`<input type="hidden" name="note" value="${submitted.get('note')}">` : ''}<input type="hidden" name="base_id" value="${activeId ?? ''}">
 <section class="card" id="when"><h2>When videos go out</h2>${row(fieldOf('produceAt')!, `Time zone: ${cfg.timezone}.`)}${times}</section>
 <section class="card" id="where"><h2>Where videos go</h2><p class="hint">Turning every platform off pauses the factory.</p>${where}</section>
 <section class="card" id="money"><h2>Spending limits</h2>${rows('money')}</section>
@@ -330,7 +350,8 @@ export async function settingsPage(ctx: Ctx): Promise<Res> {
   return layout(ctx, 'Settings', '/settings', html`${settingsFlash(ctx, cfg)}<p class="muted">Products and the logo are on <a href="/products">Products</a>. Every saved change is kept on <a href="/history">Change history</a>.</p>${settingsForm(ctx, cfg, o, id, null, new Map(), [])}`);
 }
 
-function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>): unknown {
+// lim: the allowed ranges, so every field is checked in one pass and the owner sees all problems at once.
+function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>, lim: Record<string, { min?: number; max?: number }> = {}): unknown {
   const v = (form.get(f.path) ?? '').trim();
   const bad = (m: string) => (errs.set(f.path, [m]), undefined);
   switch (f.kind) {
@@ -339,12 +360,17 @@ function parseField(f: Field, form: URLSearchParams, errs: Map<string, string[]>
       // One input per daily post, in order. A comma list in one input is read the same way.
       const all = form.getAll(f.path).map((s) => s.trim());
       if (all.length > 1 && !all[0] && all.slice(1).some(Boolean)) return bad('Fill in Post 1 first.');
-      return all.flatMap((s) => s.split(/[\s,]+/)).filter(Boolean);
+      const times = all.flatMap((s) => s.split(/[\s,]+/)).filter(Boolean);
+      const most = lim[f.path]?.max;
+      if (most !== undefined && times.length > most) return bad(`Use at most ${most} times.`);
+      return times;
     }
     case 'int': case 'num': {
       const n = Number(v);
-      if (v === '' || !Number.isFinite(n)) return bad('must be a number');
-      if (f.kind === 'int' && !Number.isInteger(n)) return bad('must be a whole number');
+      if (v === '' || !Number.isFinite(n)) return bad('Enter a number.');
+      if (f.kind === 'int' && !Number.isInteger(n)) return bad('Enter a whole number.');
+      const l = lim[f.path];
+      if (l && ((l.min !== undefined && n < l.min) || (l.max !== undefined && n > l.max))) return bad(`Use ${limitText(l)}${f.unit ? ` ${f.unit}` : ''}.`);
       return n;
     }
     default: return v;
@@ -356,9 +382,12 @@ function draftFrom(form: URLSearchParams, active: Record<string, unknown>, errs:
   const preset = form.get('tiers.t2Preset') ?? undefined;
   // The form shows the old preset's caps. Switching preset must not carry them over as overrides of the new one.
   const oldPreset = String(active['tiers.t2Preset'] ?? fileDefault(presetField));
+  const lim = limits(fileRaw, preset ?? oldPreset, customs) as Record<string, { min?: number; max?: number }>;
   for (const f of FIELDS) {
     delete draft[f.path];
-    const v = parseField(f, form, errs);
+    // A cap that is still the old preset's value is not checked against the new preset's limit.
+    const carried = f.path.startsWith('tiers.t2.') && preset !== undefined && preset !== oldPreset && Number(form.get(f.path)) === fileDefault(f, oldPreset, customs);
+    const v = parseField(f, form, errs, carried ? {} : lim);
     if (v !== undefined && !same(v, fileDefault(f, preset, customs)) && !(f.path.startsWith('tiers.t2.') && preset !== oldPreset && same(v, fileDefault(f, oldPreset, customs)))) draft[f.path] = v;
   }
   return draft;
@@ -376,7 +405,8 @@ function matchErrors(errors: string[], errs: Map<string, string[]>): string[] {
 
 const newlyPublic = (before: Config, after: Config) => PLATFORMS.filter((p) => after.platforms[p].visibility === 'public' && (before.platforms[p].visibility !== 'public' || (!before.platforms[p].enabled && after.platforms[p].enabled)));
 
-export async function settingsPreview(ctx: Ctx): Promise<Res> {
+// notice: why the owner is back here (the public-post box was not ticked).
+export async function settingsPreview(ctx: Ctx, notice: string | null = null): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const { id, o } = activeOverrides(ctx.db);
   const errs = new Map<string, string[]>();
@@ -400,33 +430,77 @@ export async function settingsPreview(ctx: Ctx): Promise<Res> {
     const f = fieldOf(p);
     return p in src ? showVal(f, src[p], names) : `Default (${f ? showVal(f, fileDefault(f, preset, customs), names) : ''})`;
   };
-  return layout(ctx, 'Check your changes', '/settings', html`<p>Nothing is saved until you press <strong>Save changes</strong>.</p>
+  const res = layout(ctx, 'Check your changes', '/settings', html`${notice ? errSummary([{ id: 'cp', msg: notice }]) : ''}<p>Nothing is saved until you press <strong>Save changes</strong>.</p>
 <div class="scroll"><table class="stack"><thead><tr><th scope="col">Setting</th><th scope="col">Now</th><th scope="col">New</th></tr></thead><tbody>
 ${paths.map((p) => html`<tr data-path="${p}"><td data-label="Setting">${labelOf(p)}</td><td data-label="Now">${cell(p, o)}</td><td data-label="New"><strong>${cell(p, draft)}</strong></td></tr>`)}
 </tbody></table></div>
-<form method="post" action="/settings/save" class="card">${csrfField(ctx)}<input type="hidden" name="base_id" value="${id ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}">
-${pub.length ? html`<div class="form-row"><span class="lbl">Public posts</span><div class="ctl"><label class="check" for="cp"><input id="cp" type="checkbox" name="confirm_public" value="1"> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</label></div></div>` : ''}
-${formRow({ id: 'note', label: 'Note for yourself (optional)', control: html`<input id="note" type="text" name="note" maxlength="200">`, hint: 'Shown on Change history, to remember why.' })}
-<div class="actions"><button class="primary" type="submit">Save changes</button><a href="/settings">Go back</a></div></form>`);
+<form method="post" action="/settings/save" class="card">${csrfField(ctx)}<input type="hidden" name="base_id" value="${(ctx.form.has('base_id') ? baseOf(ctx.form) : id) ?? ''}"><input type="hidden" name="draft" value="${JSON.stringify(draft)}"><input type="hidden" name="orig" value="${origOf(ctx.form)}">
+${pub.length ? html`<div class="form-row"><span class="lbl">Public posts</span><div class="ctl"><label class="check" for="cp"><input id="cp" type="checkbox" name="confirm_public" value="1" required> I understand that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts that anyone can see.</label></div></div>` : ''}
+${formRow({ id: 'note', label: 'Note for yourself (optional)', control: html`<input id="note" type="text" name="note" maxlength="200" value="${ctx.form.get('note') ?? ''}">`, hint: 'Shown on Change history, to remember why.' })}
+<div class="actions"><button class="primary" type="submit">Save changes</button><button type="submit" formaction="/settings/edit" formnovalidate>Go back and edit</button></div></form>`);
+  return notice ? { ...res, status: 422 } : res;
+}
+
+// Back to the form with the owner's entries kept (the Go back button of the review page).
+export async function settingsEdit(ctx: Ctx): Promise<Res> {
+  const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+  const { id, o } = activeOverrides(ctx.db);
+  const orig = new URLSearchParams(ctx.form.get('orig') ?? '');
+  if (ctx.form.get('note')) orig.set('note', ctx.form.get('note')!);
+  return layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, orig.size ? orig : null, new Map(), []));
 }
 
 
+// The form as the owner sent it, without the token, so a failed save can show it again.
+const origOf = (form: URLSearchParams) => new URLSearchParams([...form].filter(([k]) => k !== 'csrf')).toString();
 const baseOf = (form: URLSearchParams) => idOrNull(form.get('base_id') || null);
 
 export async function settingsSave(ctx: Ctx): Promise<Res> {
-  const fail = (m: string[]): Res => ({ ...layout(ctx, 'Not saved', '/settings', html`${errSummary(m.map((msg) => ({ msg })))}<p><a class="btn" href="/settings">Back to Settings</a></p>`), status: 422 });
+  const orig = new URLSearchParams(ctx.form.get('orig') ?? '');
+  if (ctx.form.get('note')) orig.set('note', ctx.form.get('note')!);
+  // Any failure shows the form again with the owner's entries and the reasons inline; nothing is lost.
   let draft: unknown;
+  const fail = async (m: string[]): Promise<Res> => {
+    const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
+    const { id, o } = activeOverrides(ctx.db);
+    const errs = new Map<string, string[]>();
+    let sub = orig.size ? orig : null;
+    if (m.some((e) => /changed since/.test(e))) {
+      // Another tab saved first. Fields the owner did not touch show the stored values now; the owner's own edits stay.
+      const baseO = overridesById(ctx.db, baseOf(ctx.form));
+      const mine = draft && typeof draft === 'object' ? (draft as Record<string, unknown>) : {};
+      const theirs = FIELDS.filter((f) => !same(baseO[f.path], o[f.path])).map((f) => f.label);
+      m = [`Someone saved Settings in another tab. Check the values below, then save again.${theirs.length ? ` Changed there: ${theirs.slice(0, 5).join(', ')}${theirs.length > 5 ? ` and ${theirs.length - 5} more` : ''}.` : ''}`];
+      if (sub) {
+        sub = new URLSearchParams(sub);
+        for (const f of FIELDS.filter((x) => same(mine[x.path], baseO[x.path]))) {
+          const cur = currentValue(f, cfg, o);
+          sub.delete(f.path);
+          if (f.kind === 'bool') { if (cur === true) sub.append(f.path, '1'); }
+          else if (f.kind === 'times') for (const t of (cur as string[]) ?? []) sub.append(f.path, t);
+          else sub.append(f.path, String(cur ?? ''));
+        }
+      }
+    }
+    const other = matchErrors(m, errs);
+    return { ...layout(ctx, 'Settings', '/settings', settingsForm(ctx, cfg, o, id, sub, errs, other)), status: 422 };
+  };
   try {
     draft = JSON.parse(ctx.form.get('draft') ?? '');
   } catch {
-    return fail(['The draft was not understood. Start again from Settings.']);
+    return fail(['The draft was not understood. Check the values and press Review changes again.']);
   }
-  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return fail(['The draft was not understood. Start again from Settings.']);
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return fail(['The draft was not understood. Check the values and press Review changes again.']);
   const r = effectiveConfig(fileRaw, draft as Record<string, unknown>, customsOf(ctx.db));
   if ('errors' in r) return fail(r.errors);
+  // Another tab saved first: say so before anything else, so a re-render can never carry a stale base forward.
+  if (baseOf(ctx.form) !== versionId(ctx.db, 'config_active')) return fail(['the settings changed since you opened them']);
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const pub = newlyPublic(cfg, r.config);
-  if (pub.length && ctx.form.get('confirm_public') !== '1') return fail([`Tick the confirmation to make ${pub.map((p) => PNAME[p]).join(', ')} public.`]);
+  if (pub.length && ctx.form.get('confirm_public') !== '1') {
+    const msg = `Tick the box to confirm that ${pub.map((p) => PNAME[p]).join(', ')} will publish posts anyone can see.`;
+    return orig.size ? settingsPreview({ ...ctx, form: orig }, msg) : fail([msg]);
+  }
   const prev = versionId(ctx.db, 'config_active');
   const res = saveConfig(ctx.db, draft as Record<string, unknown>, baseOf(ctx.form), (ctx.form.get('note') ?? '').slice(0, 200), ctx.now);
   if ('errors' in res) return fail(res.errors);
@@ -442,12 +516,14 @@ const LOCKED_PROMPTS: [string, string, string][] = [['claims', 'Claim check', 'M
 const productTitle = (db: Db, handle: string): string => (db.prepare('SELECT title FROM products WHERE handle = ?').get(handle) as { title: string } | undefined)?.title ?? handle;
 const textName = (db: Db, key: string) => (key.startsWith('note:') ? `Look of ${productTitle(db, key.slice(5))}` : (TEXT_NAME[key] ?? key));
 const textUse = (key: string) => (key.startsWith('note:') ? 'How the product looks in the video' : (TEXT_USE[key] ?? ''));
+// Product looks belong to Products in the menu and in the way back.
+const areaOf = (key: string) => (key.startsWith('note:') ? '/products' : '/prompts');
 const inUse = (id: number | null) => (id === null ? 'Built-in' : `Your version ${id}`);
 
 export function promptsPage(ctx: Ctx): Res {
   const links = (key: string) => html`<a href="/prompts/edit?key=${encodeURIComponent(key)}">Edit</a> · <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a>`;
   const hs = handles(ctx.db);
-  return layout(ctx, 'Writing instructions', '/prompts', html`${flash('info', 'Most owners never need this page.', html`To describe how a product looks, use <a href="/products">Products</a>.`)}
+  return layout(ctx, 'Writing instructions', '/prompts', html`${flash('info', 'Most owners never need this page.', html`To describe how a product looks, use <a class="tap" href="/products">Products</a>.`)}
 <section><h2>Texts the writers follow</h2><div class="scroll"><table class="stack"><thead><tr><th scope="col">Text</th><th scope="col">Used for</th><th scope="col">In use</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
 ${EDITABLE_TEXT.map((k) => html`<tr><td data-label="Text">${TEXT_NAME[k]}</td><td data-label="Used for">${TEXT_USE[k]}</td><td data-label="In use">${inUse(activeText(ctx.db, k).id)}</td><td class="nw">${links(k)}</td></tr>`)}</tbody></table></div></section>
 <section><h2>Product looks</h2>${hs.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Product</th><th scope="col">In use</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>${hs.map((h) => html`<tr><td data-label="Product">${productTitle(ctx.db, h)}</td><td data-label="In use">${inUse(activeText(ctx.db, `note:${h}`).id)}</td><td class="nw">${links(`note:${h}`)}</td></tr>`)}</tbody></table></div>` : empty('No products yet.', html`<a class="btn" href="/products">Go to Products</a>`)}</section>
@@ -464,12 +540,13 @@ export function promptView(ctx: Ctx): Res {
 export function promptEdit(ctx: Ctx, key: string | null = ctx.query.get('key'), body: string | null = null, errors: string[] = []): Res {
   if (!validKey(ctx.db, key)) return notFound(ctx);
   const a = activeText(ctx.db, key);
-  return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, '/prompts', html`<p class="muted">Used for: ${textUse(key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
+  const note = key.startsWith('note:');
+  return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, areaOf(key), html`<p class="muted">Used for: ${textUse(key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
 ${errSummary(errors.map((msg) => ({ id: 'body', msg })))}
 <form method="post" action="/prompts/preview">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}">
 <p class="hint">House style, scene and product look texts are checked: prices, discounts and links are refused, even in an instruction not to use them.</p>
-<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">Text</label><div class="ctl"><textarea id="body" name="body" rows="24">${body ?? a.body}</textarea></div></div>
-<div class="actions"><button class="primary" type="submit">Preview changes</button><a href="/prompts">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
+<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">${note ? 'How it looks (colour, material, shape, what is in the box)' : 'Text'}</label><div class="ctl">${note ? html`<span class="hint">For example: A matte black steel bottle with a screw lid, about 25 cm tall. The box holds the bottle and a cleaning brush.</span>` : ''}<textarea id="body" name="body" rows="${note ? 8 : 24}">${body ?? a.body}</textarea></div></div>
+<div class="actions"><button class="primary" type="submit">Preview changes</button><a href="${note ? '/products' : '/prompts'}">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
 }
 
 // Runs saveText's own checks without touching the real tables: a scratch database holds a copy of the briefs.
@@ -517,12 +594,19 @@ export async function promptPreview(ctx: Ctx): Promise<Res> {
   const price = PRICES[model]?.cacheWrite;
   const sys = renderedSystem(ctx.db, key, body);
   const changed = diff.some((d) => d.op !== ' ');
-  return layout(ctx, `Review: ${textName(ctx.db, key)}`, '/prompts', html`<section><h2>Changes against the text in use</h2>${changed ? diffView(diff) : flash('info', 'No changes.', 'The text is the same as the one in use.')}</section>
+  return layout(ctx, `Review: ${textName(ctx.db, key)}`, areaOf(key), html`<section><h2>Changes against the text in use</h2>${changed ? diffView(diff) : flash('info', 'No changes.', 'The text is the same as the one in use.')}</section>
 <section><h2>Text the AI receives</h2>${sys ? html`<pre>${sys}</pre>` : html`<p class="muted">${(WRITERS as readonly string[]).includes(key) || key === 'house' ? 'No product is stored yet, so the full text cannot be shown.' : 'This text is added to another instruction when a video is made; see the changes above.'}</p>`}</section>
 <details class="tech"><summary>Technical details</summary><p>About ${tokens} tokens (characters / 4). ${price === undefined ? '' : `The first AI call after a change costs about ${money((tokens * price) / 1e6)} extra at ${model} prices.`}</p></details>
 ${changed ? html`<form method="post" action="/prompts/save" class="card">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}"><input type="hidden" name="body" value="${body}">
 ${formRow({ id: 'note', label: 'Note for yourself (optional)', control: html`<input id="note" type="text" name="note" maxlength="200">` })}
-<div class="actions"><button class="primary" type="submit">Save this text</button><a href="/prompts/edit?key=${encodeURIComponent(key)}">Go back</a></div></form>` : html`<p><a class="btn" href="/prompts/edit?key=${encodeURIComponent(key)}">Go back</a></p>`}`);
+<div class="actions"><button class="primary" type="submit">Save this text</button><button type="submit" formaction="/prompts/back" formnovalidate>Go back and edit</button></div></form>` : html`<form method="post" action="/prompts/back">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="body" value="${body}"><button type="submit">Go back and edit</button></form>`}`);
+}
+
+// The review page's Go back: the editor again with the typed text.
+export function promptBack(ctx: Ctx): Res {
+  const key = ctx.form.get('key');
+  if (!validKey(ctx.db, key)) return notFound(ctx);
+  return promptEdit(ctx, key, ctx.form.get('body') ?? '');
 }
 
 export function promptSave(ctx: Ctx): Res {
@@ -531,6 +615,7 @@ export function promptSave(ctx: Ctx): Res {
   const prev = versionId(ctx.db, `text_active:${key}`);
   const r = saveText(ctx.db, key, ctx.form.get('body') ?? '', baseOf(ctx.form), (ctx.form.get('note') ?? '').slice(0, 200), ctx.now);
   if ('errors' in r) return promptEdit(ctx, key, ctx.form.get('body') ?? '', r.errors);
+  if (key.startsWith('note:')) return redirect('/products?msg=look');
   return redirect(`/prompts/history?key=${encodeURIComponent(key)}&saved=${r.id}${prev === null ? '' : `&prev=${prev}`}`);
 }
 
@@ -545,7 +630,7 @@ export async function promptHistory(ctx: Ctx): Promise<Res> {
   const saved = idOrNull(ctx.query.get('saved'));
   const k = encodeURIComponent(key);
   const act = (id: string, label: string) => html`<form method="post" action="/prompts/activate">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="id" value="${id}"><button type="submit">${label}</button></form>`;
-  return layout(ctx, `History of ${textName(ctx.db, key)}`, '/prompts', html`${saved !== null ? flash('ok', 'Saved.', 'The writers use it from the next video. A video already being made finishes with the old text.') : ''}
+  return layout(ctx, `History of ${textName(ctx.db, key)}`, areaOf(key), html`${saved !== null ? flash('ok', 'Saved.', 'The writers use it from the next video. A video already being made finishes with the old text.') : ''}
 <div class="section-head"><p>In use: <strong>${inUse(a.id)}</strong>.</p><div class="section-actions"><a class="btn" href="/prompts/edit?key=${k}">Edit</a>${a.id === null ? '' : act('', 'Go back to the built-in text')}</div></div>
 ${vr ? html`<section><h2>Version ${view} compared with the text in use</h2>${diffView(lineDiff(a.body, vr.body))}</section>` : ''}
 <section><h2>Saved versions</h2>${rows.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">Version</th><th scope="col">Saved</th><th scope="col">Note</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
@@ -618,23 +703,24 @@ export async function overviewPage(ctx: Ctx): Promise<Res> {
   const refused = typeof cv === 'string' && cv.startsWith('refused');
   const today = localDateOf(ctx.now, tz);
   const made = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE local_date = ? AND status IN ('ready','done')").get(today) as { n: number }).n;
-  const posted = (ctx.db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'published' AND published_at >= ?").get(new Date(ctx.now.getTime() - 86_400_000).toISOString()) as { n: number }).n;
+  // Posts sent today (the shop's day), the same window as the videos made.
+  const posted = (ctx.db.prepare("SELECT published_at FROM publications WHERE state = 'published' AND published_at >= ?").all(new Date(ctx.now.getTime() - 2 * 86_400_000).toISOString()) as { published_at: string }[]).filter((r) => localDateOf(new Date(r.published_at), tz) === today).length;
   const waiting = (ctx.db.prepare("SELECT COUNT(*) AS n FROM slots WHERE hold = 'waiting'").get() as { n: number }).n;
   const llm = monthSpend(ctx.db, ctx.now);
   const clips = monthSpendUsd(ctx.db, 't2', ctx.now);
   const alive = age !== null && age <= 300;
-  const needs = attention + waiting;
-  const headline = age === null ? 'The factory has not started yet.' : !alive ? 'The factory has stopped.' : needs ? `${needs} thing${needs === 1 ? ' needs' : 's need'} you.` : 'All good.';
-  const nextText = next ? `${PNAME[next.platform] ?? next.platform} ${fmtLocal(next.scheduled_at, tz)}` : null;
+  // A factory that is not running needs the owner too; the headline says so, and the badge only shows when all is running.
+  const down = age === null ? 'has not started yet' : !alive ? 'has stopped' : null;
+  const needs = attention + waiting + (down ? 1 : 0);
+  const headline = down ? `The factory ${down}.` : needs ? `${needs} thing${needs === 1 ? ' needs' : 's need'} you.` : 'All good.';
   const tile = (cls: string, label: string, value: string, sub: string, href: string) => html`<a class="tile ${cls}" href="${href}"><span class="tile-l">${label}</span><span class="tile-v">${value}</span><span class="tile-s">${sub}</span></a>`;
   return layout(ctx, 'Home', '/overview', html`${st.dryRun ? flash('warn', 'Practice mode is on.', 'Videos are made, and paid clips still cost money, but nothing is posted.') : ''}
 ${refused ? flash('bad', 'Your saved settings could not be used, so the defaults are running.', html`Open <a href="/history">Change history</a>.`) : ''}
-<div class="headline"><p>${headline}</p>${age === null ? badge('neutral', 'Factory not started') : alive ? badge('ok', 'Factory running') : badge('bad', 'Factory stopped')}</div>
-<p class="next-line">${nextText ? `Next post: ${nextText}.` : 'No post is scheduled yet.'}</p>
+<div class="headline"><p>${headline}</p>${alive ? badge('ok', 'Factory running') : ''}</div>
 <div class="tiles">
-${tile(attention ? 'bad' : waiting ? 'warn' : 'ok', 'Needs you', needs ? String(needs) : 'Nothing', attention ? `${attention} post${attention === 1 ? '' : 's'} need checking` : waiting ? `${waiting} video${waiting === 1 ? '' : 's'} waiting for Post it or Discard` : 'All clear', attention ? '/activity' : '/posts')}
+${tile(attention || (age !== null && !alive) ? 'bad' : waiting || down ? 'warn' : 'ok', 'Needs you', needs ? String(needs) : 'Nothing', attention ? `${attention} post${attention === 1 ? '' : 's'} need checking` : down ? `The factory ${down}` : waiting ? `${waiting} video${waiting === 1 ? '' : 's'} waiting for Post it or Discard` : 'All clear', attention ? '/activity' : waiting ? '/posts' : down ? '/factory' : '/posts')}
 ${tile('', 'Next post', next ? fmtLocal(next.scheduled_at, tz) : 'None', next ? (PNAME[next.platform] ?? next.platform) : 'Nothing is scheduled', '/activity')}
-${tile('', 'Last 24 hours', `${made} made · ${posted} posted`, 'Videos finished today, posts sent', '/activity')}
+${tile('', 'Today', `${made} made · ${posted} posted`, 'Videos made, posts sent', '/activity')}
 ${tile(llm + clips > 0.9 * (cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2) ? 'warn' : '', 'Spent this month', `${money(llm + clips)} of $${cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2}`, `AI writing ${money(llm)} · Video clips ${money(clips)}`, '/activity')}
 </div>
 <h2>Shortcuts</h2>
@@ -669,9 +755,24 @@ export async function activityPage(ctx: Ctx): Promise<Res> {
   const caption = (m: string | null) => {
     try { return JSON.parse(m ?? 'null')?.concept?.caption ?? ''; } catch { return ''; }
   };
-  type PubRow = { slot_id: string; platform: string; state: string; scheduled_at: string; published_at: string | null; post_url: string | null; error: string | null; idx: number; kind: string; title: string | null };
-  const pubQ = (where: string, order: string, limit: number, ...a: string[]) => ctx.db.prepare(`SELECT p.slot_id, p.platform, p.state, p.scheduled_at, p.published_at, p.post_url, p.error, s.idx, s.kind, pr.title FROM publications p JOIN slots s ON s.id = p.slot_id LEFT JOIN products pr ON pr.handle = s.product_handle WHERE ${where} ORDER BY ${order} LIMIT ${limit}`).all(...a) as PubRow[];
-  const upcoming = pubQ("p.state = 'pending'", 'p.scheduled_at', 10);
+  type PubRow = { slot_id: string; platform: string; state: string; scheduled_at: string; published_at: string | null; post_url: string | null; error: string | null; idx: number; kind: string; sstatus: string; shold: string | null; title: string | null };
+  const pubQ = (where: string, order: string, limit: number, ...a: string[]) => ctx.db.prepare(`SELECT p.slot_id, p.platform, p.state, p.scheduled_at, p.published_at, p.post_url, p.error, s.idx, s.kind, s.status AS sstatus, s.hold AS shold, pr.title FROM publications p JOIN slots s ON s.id = p.slot_id LEFT JOIN products pr ON pr.handle = s.product_handle WHERE ${where} ORDER BY ${order} LIMIT ${limit}`).all(...a) as PubRow[];
+  const nowIso = ctx.now.toISOString();
+  // Late: due more than 15 minutes ago and not held back for a reason the owner already sees (waiting for Post it, or a "Make a video now" video still being made).
+  const lateBefore = new Date(ctx.now.getTime() - 15 * 60_000).toISOString();
+  const pending = pubQ("p.state = 'pending'", 'p.scheduled_at', 100);
+  const isLate = (p: PubRow) => p.scheduled_at <= lateBefore && p.shold !== 'waiting' && !(p.kind === 'manual' && (p.sstatus === 'planned' || p.sstatus === 'producing'));
+  const upcoming = pending.filter((p) => !isLate(p)).slice(0, 10);
+  // One row per video, listing its platforms; newest first.
+  const lateBy = new Map<string, { p: PubRow; platforms: string[] }>();
+  for (const p of pending.filter(isLate).reverse()) {
+    const g = lateBy.get(p.slot_id);
+    if (g) g.platforms.push(PNAME[p.platform] ?? p.platform);
+    else lateBy.set(p.slot_id, { p, platforms: [PNAME[p.platform] ?? p.platform] });
+  }
+  const late = [...lateBy.values()];
+  const hb = kvGet(ctx.db, 'heartbeat');
+  const factoryUp = !!hb && ctx.now.getTime() - Date.parse(hb) <= 300_000;
   const problems = pubQ("p.state = 'needs_attention'", 'p.scheduled_at DESC', 30);
   const posted = pubQ("p.state = 'published' AND p.published_at >= ?", 'p.published_at DESC', 50, weekAgo);
   const failed = slots.filter((s) => s.status === 'failed');
@@ -679,11 +780,16 @@ export async function activityPage(ctx: Ctx): Promise<Res> {
   const events = ctx.db.prepare('SELECT ts, kind, key, message, delivered FROM events ORDER BY id DESC LIMIT 50').all() as { ts: string; kind: string; key: string; message: string; delivered: number }[];
   const t2n = (ctx.db.prepare("SELECT COUNT(*) AS n FROM spend WHERE tier = 't2' AND state != 'rejected' AND created_at >= ?").get(new Date(Date.UTC(ctx.now.getUTCFullYear(), ctx.now.getUTCMonth(), 1)).toISOString()) as { n: number }).n;
   const raw = (e: string | null) => (e ? html`<details><summary>What the system said</summary><code>${e}</code></details>` : '');
+  // One list, newest first, whatever kind of problem it is.
+  const problemRows = [
+  ...problems.map((p) => ({ t: p.scheduled_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${PNAME[p.platform] ?? p.platform}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('bad', 'Needs you')}</td><td data-label="To do">Check the post on ${PNAME[p.platform] ?? p.platform}; if it is not there, ask for help. It is never re-posted automatically.${raw(p.error)}</td></tr>` })),
+  ...failed.map((s) => ({ t: s.updated_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(s.updated_at, tz)}</td><td data-label="What">${postName(s.kind, s.idx)} video</td><td data-label="Status">${badge('bad', 'Failed')}</td><td data-label="To do">The video could not be made, so nothing was posted. Nothing to do unless it keeps happening.${raw(s.error)}</td></tr>` })),
+  ...late.map(({ p, platforms }) => ({ t: p.scheduled_at, row: html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${platforms.join(', ')}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('warn', 'Late: not sent yet')}</td><td data-label="To do">${factoryUp ? html`This post was due and has not gone out. The factory sends it on its next check; if it is still here in an hour, ask for help.` : html`This post was due, and the factory is not running. Start the factory (see <a href="/overview">Home</a>), then ask for help if it is still here.`}</td></tr>` })),
+  ].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
   return layout(ctx, 'Activity log', '/activity', html`
 <section><h2>Coming up</h2>${upcoming.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th><th scope="col">Product</th></tr></thead><tbody>${upcoming.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${postName(p.kind, p.idx)}</td><td data-label="Product">${p.title ?? ''}</td></tr>`)}</tbody></table></div>` : empty(`Nothing is scheduled yet. Tomorrow's videos are made at ${cfg.produceAt}.`)}</section>
-<section><h2>Problems</h2>${problems.length || failed.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Status</th><th scope="col">What to do</th></tr></thead><tbody>
-${problems.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.scheduled_at, tz)}</td><td data-label="What">${PNAME[p.platform] ?? p.platform}, ${postName(p.kind, p.idx)}${p.title ? ` (${p.title})` : ''}</td><td data-label="Status">${badge('bad', 'Needs you')}</td><td data-label="To do">Check the post on ${PNAME[p.platform] ?? p.platform}; if it is not there, ask for help. It is never re-posted automatically.${raw(p.error)}</td></tr>`)}
-${failed.map((s) => html`<tr><td data-label="When" class="nw">${fmtLocal(s.updated_at, tz)}</td><td data-label="What">${postName(s.kind, s.idx)} video</td><td data-label="Status">${badge('bad', 'Failed')}</td><td data-label="To do">The video could not be made, so nothing was posted. Nothing to do unless it keeps happening.${raw(s.error)}</td></tr>`)}
+<section><h2>Problems</h2>${problems.length || failed.length || late.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Status</th><th scope="col">What to do</th></tr></thead><tbody>
+${problemRows.map((r) => r.row)}
 </tbody></table></div>` : empty('No problems this week.')}</section>
 <section><h2>Posted</h2>${posted.length ? html`<div class="scroll"><table class="stack"><thead><tr><th scope="col">When</th><th scope="col">Platform</th><th scope="col">Post</th></tr></thead><tbody>${posted.map((p) => html`<tr><td data-label="When" class="nw">${fmtLocal(p.published_at, tz)}</td><td data-label="Platform">${PNAME[p.platform] ?? p.platform}</td><td data-label="Post">${link(p.post_url, 'Open post') || postName(p.kind, p.idx)}</td></tr>`)}</tbody></table></div>` : empty('Nothing was posted this week.')}</section>
 <section><h2>Spending this month</h2><div class="card"><p>AI writing: <strong>${money(monthSpend(ctx.db, ctx.now))}</strong> of $${cfg.llm.monthlyCapUsd}</p><p>Video clips: <strong>${money(monthSpendUsd(ctx.db, 't2', ctx.now))}</strong> of $${cfg.tiers.capsUsd.t2} (${t2n} clip${t2n === 1 ? '' : 's'})</p></div></section>
