@@ -179,20 +179,20 @@ async function readShop(db: Db, config: Config, now: Date, deps: IngestDeps): Pr
       }
     }
   }
-  sweepIncoming(env.dataDir());
+  sweepIncoming(env.dataDir(), now);
   kvSet(db, 'shop_synced_at', now.toISOString());
   return out;
 }
 
 // Upload leftovers (admin photo and logo staging) older than a day; an upload in progress is minutes old.
-// File ages are wall-clock mtimes, so they are compared with the system clock: a --now override cannot remove an upload in progress.
-export function sweepIncoming(dataDir: string): void {
+// File ages are mtimes compared with `now`, as sweepMusic does. A --now far ahead of the clock can remove an upload in progress.
+export function sweepIncoming(dataDir: string, now: Date): void {
   const root = resolve(dataDir);
   const ls = (d: string) => { try { return readdirSync(d); } catch { return []; } };
   const dirs = [...ls(join(root, 'assets')).map((h) => join(root, 'assets', h, '.incoming')), join(root, LOGO_DIR, '.incoming')];
   for (const d of dirs) for (const n of ls(d)) {
     const f = join(d, n);
-    try { if (Date.now() - statSync(f).mtimeMs > 86_400_000) rmSync(f, { force: true }); } catch { /* gone or unreadable: next hour */ }
+    try { if (now.getTime() - statSync(f).mtimeMs > 86_400_000) rmSync(f, { force: true }); } catch { /* gone or unreadable: next hour */ }
   }
 }
 

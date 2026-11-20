@@ -6,6 +6,7 @@ import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { callJson } from '../llm/client.ts';
 import { activeText, promptText, systemPrompt } from '../llm/prompts.ts';
+import { videoStyle, type VideoStyle } from '../shopify/catalog.ts';
 import { dollarProblems, judgeTexts, languageProblems, norm, textProblems, urlsIn, words } from './claims.ts';
 
 export class ConceptRejectedError extends Error {
@@ -36,7 +37,8 @@ const SPEECH = /\b(says?|said|saying|tells?|told|telling|asks?|asked|asking|shou
 const squash = (s: string): string => norm(s).toLowerCase().replace(EMOJI, ' ').replace(/[\p{P}\p{S}️]/gu, ' ').replace(/\s+/g, ' ').trim();
 
 // `years` are the only numbers a caption may carry ("the coziest gift of 2026"): a year is not a product claim.
-export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, recentCaptions: string[], years: number[] = []): string[] {
+// An 'asmr' concept has no spoken line and shows only hands, so it has no woman to check and up to 6 shots.
+export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, recentCaptions: string[], years: number[] = [], style: VideoStyle = 'story'): string[] {
   const p: string[] = [];
   const caption = norm(c.caption);
   if ([...caption].length > 60) p.push(`caption is ${[...caption].length} characters, at most 60`);
@@ -49,6 +51,7 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
   const key = squash(c.caption);
   if (recentCaptions.some((r) => squash(r) === key)) p.push('caption repeats a recent caption');
 
+  if (style === 'asmr' && c.line.trim()) p.push('line must be empty: nobody speaks in an ASMR video');
   if (words(c.line) > 9) p.push(`line is ${words(c.line)} words, at most 9`);
   p.push(...textProblems(brief, c.line, NO_NUMBERS, 'line'));
   // A clip is posted again for weeks and a price in it goes stale (D-42): no currency sign or code next to a digit.
@@ -59,6 +62,7 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
 
   if (!brief.product.colors.some((x) => x.toLowerCase() === c.color.toLowerCase())) p.push(`color "${c.color}" is not one of ${brief.product.colors.join(', ')}`);
 
+  if (style === 'story' && c.shots.length > 5) p.push(`${c.shots.length} shots, at most 5`);
   const total = c.shots.reduce((a, s) => a + s.seconds, 0);
   if (total !== seconds) p.push(`shot seconds add up to ${total}, want ${seconds}`);
   c.shots.forEach((s, i) => {
@@ -75,11 +79,16 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
     if (SPEECH.test(text)) p.push(`${where}: speech in the scene text; the one spoken line belongs in the line field`);
   }
 
-  if (!/\bwoman\b/i.test(c.person)) p.push('person must be a woman');
+  if (style === 'story' && !/\bwoman\b/i.test(c.person)) p.push('person must be a woman');
   return p;
 }
 
-export async function writeConcept(db: Db, config: Config, brief: Brief, recent: { caption: string; setting: string }[], now: Date, slotId: string): Promise<UgcConcept> {
+// A story video is asked for 3 to 5 shots; the stored type allows the 6 an ASMR video may have.
+const StoryConcept = UgcConcept.extend({ shots: UgcConcept.shape.shots.max(5) });
+
+// `recent` holds earlier concepts of the same style. 'asmr' uses the ugc-asmr instructions and never speaks.
+export async function writeConcept(db: Db, config: Config, brief: Brief, recent: { caption: string; setting: string }[], now: Date, slotId: string, style: VideoStyle = videoStyle(db, brief.product)): Promise<UgcConcept> {
+  const purpose = style === 'asmr' ? 'ugc-asmr' : 'ugc';
   const seconds = config.tiers.clipSeconds;
   const month = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: config.timezone }).format(now);
   const year = Number(new Intl.DateTimeFormat('en-US', { year: 'numeric', timeZone: config.timezone }).format(now));
@@ -93,18 +102,20 @@ export async function writeConcept(db: Db, config: Config, brief: Brief, recent:
     const c = await callJson(
       db,
       config,
-      { purpose: 'ugc', model: config.llm.models.script, system: systemPrompt('ugc', brief), user, schema: UgcConcept, maxTokens: 3000, effort: 'medium', slotId },
+      { purpose, model: config.llm.models.script, system: systemPrompt(purpose, brief), user, schema: style === 'asmr' ? UgcConcept : StoryConcept, maxTokens: 3000, effort: 'medium', slotId },
       now,
     );
-    problems = conceptProblems(brief, c, seconds, recent.map((r) => r.caption), [year, year + 1]);
+    if (style === 'asmr') c.line = ''; // nobody speaks, whatever the model wrote
+    problems = conceptProblems(brief, c, seconds, recent.map((r) => r.caption), [year, year + 1], style);
     if (!problems.length) problems = await judgeTexts(db, config, brief, [{ label: 'caption', text: c.caption }, { label: 'line', text: c.line }], now, slotId);
     if (!problems.length) return c;
   }
   throw new ConceptRejectedError(problems);
 }
 
-export function buildClipPrompt(brief: Brief, c: UgcConcept, refNotes: string[], opts: { look: string | null; brand: string; logo: boolean }): { prompt: string; shots: { prompt: string; seconds: number }[] } {
-  const line = c.line.replaceAll('"', '').trim();
+export function buildClipPrompt(brief: Brief, c: UgcConcept, refNotes: string[], opts: { look: string | null; brand: string; logo: boolean; style?: VideoStyle }): { prompt: string; shots: { prompt: string; seconds: number }[] } {
+  const asmr = opts.style === 'asmr';
+  const line = asmr ? '' : c.line.replaceAll('"', '').trim();
   const n = refNotes.length;
   const product = [
     `The product is the ${c.color} ${brief.product.title} shown in the first ${n} reference ${n === 1 ? 'image' : 'images'}.`,
@@ -122,10 +133,13 @@ export function buildClipPrompt(brief: Brief, c: UgcConcept, refNotes: string[],
   });
   const prompt = [
     promptText('video'),
+    ...(asmr ? ['An ASMR unboxing filmed first person: the camera is her eyes looking down at her lap or desk. Only her hands and forearms are ever visible, never a face, a full body or a mirror. Only the items shown in the reference images and listed in the product note come out of the box, and their printed designs appear exactly as in the reference images; nothing else in the scene carries writing.'] : []),
     `Setting: ${c.setting}\nPerson: ${c.person}`,
     product,
     shotLines.join('\n'),
-    `Audio: natural room sound that fits the setting. ${line ? 'The only spoken words in the whole video are her line in shot 1.' : 'Nobody speaks.'}`,
+    asmr
+      ? 'Audio: close, crisp ASMR handling sounds only, from what her hands touch in each shot: unwrapping, paper, fingertips on the product. Nobody speaks. No music, no humming, no voice-over.'
+      : `Audio: natural room sound that fits the setting. ${line ? 'The only spoken words in the whole video are her line in shot 1.' : 'Nobody speaks.'}`,
   ].join('\n\n');
   return { prompt, shots };
 }

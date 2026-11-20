@@ -125,13 +125,14 @@ export type RenderProps = z.infer<typeof RenderProps>;
 
 export const FRAME = { width: 1080, height: 1920, fps: 30 } as const;
 
-// What the concept writer returns for a UGC-style video. See prompts/ugc.md.
+// What the concept writer returns for a UGC-style video. See prompts/ugc.md and prompts/ugc-asmr.md.
+// Up to 6 shots for an ASMR video (D-46: Kling 3.0 takes up to 6 cuts); a story video is asked for 3 to 5.
 export const UgcConcept = z.object({
   caption: z.string().min(1),
   line: z.string(),
   color: z.string().min(1),
   setting: z.string().min(1),
   person: z.string().min(1),
-  shots: z.array(z.object({ seconds: z.number().int().min(2).max(8), action: z.string().min(1) })).min(3).max(5),
+  shots: z.array(z.object({ seconds: z.number().int().min(2).max(8), action: z.string().min(1) })).min(3).max(6),
 });
 export type UgcConcept = z.infer<typeof UgcConcept>;

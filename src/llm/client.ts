@@ -139,7 +139,7 @@ export async function callJson<T>(db: Db, config: Config, req: LlmRequest<T>, no
     if (req.purpose === 'claims' && judged) fixture.verdicts = fixture.verdicts.filter((v: { chunk: number }) => v.chunk <= judged);
     for (const v of fixture.verdicts ?? []) if (!known.has(v.factId)) v.factId = [...known][0] ?? null;
     // One fixture caption would be refused as a repeat from the second slot on, so each slot gets its own lead.
-    if (req.purpose === 'ugc' && req.slotId) fixture.caption = fixture.caption.replace('POV', ['POV', 'Okay', 'Update', 'Listen', 'Honestly', 'Seriously', 'Real talk'][Number(req.slotId.replace(/\D/g, '')) % 7]);
+    if ((req.purpose === 'ugc' || req.purpose === 'ugc-asmr') && req.slotId) fixture.caption = fixture.caption.replace('POV', ['POV', 'Okay', 'Update', 'Listen', 'Honestly', 'Seriously', 'Real talk'][Number(req.slotId.replace(/\D/g, '')) % 7]);
     const out = req.schema.parse(fixture);
     record(db, now, req, 'stub', { input_tokens: 0, output_tokens: 0 }, 0);
     return out;

@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { activateText, EDITABLE_TEXT, fileText as promptFile, isEditable, loadPrompts, saveText, systemPrompt, usePrompts } from '../llm/prompts.ts';
 import { PRICES, monthSpend } from '../llm/client.ts';
 import { productLook } from '../creative/ugc.ts';
+import { videoStyle } from '../shopify/catalog.ts';
 import { buildSummary } from '../ops/summary.ts';
 import { monthSpendUsd } from '../router/index.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
@@ -515,13 +516,15 @@ export async function settingsSave(ctx: Ctx): Promise<Res> {
 
 // ---------- writing instructions (prompts) ----------
 
-const TEXT_NAME: Record<string, string> = { ugc: 'Video script', hooks: 'Opening lines (ad mode)', script: 'Ad script (ad mode)', copy: 'Captions and titles', video: 'Scene description for the video model', house: 'House style (all writers)' };
-const TEXT_USE: Record<string, string> = { ugc: 'Writing what each video shows and says', hooks: 'Ad mode only: the first line of an ad', script: 'Ad mode only: the ad script', copy: 'Checking facts, and writing captions and titles', video: 'What the video model is asked to film', house: 'Added before every writer' };
+const TEXT_NAME: Record<string, string> = { ugc: 'Video script', 'ugc-asmr': 'Video script (ASMR unboxing)', hooks: 'Opening lines (ad mode)', script: 'Ad script (ad mode)', copy: 'Captions and titles', video: 'Scene description for the video model', house: 'House style (all writers)' };
+const TEXT_USE: Record<string, string> = { ugc: 'Writing what each video shows and says', 'ugc-asmr': 'Writing the hands-only unboxing videos of products whose Video style is ASMR unboxing (set on Products)', hooks: 'Ad mode only: the first line of an ad', script: 'Ad mode only: the ad script', copy: 'Checking facts, and writing captions and titles', video: 'What the video model is asked to film', house: 'Added before every writer' };
 const LOCKED_PROMPTS: [string, string, string][] = [['claims', 'Claim check', 'Makes sure ads claim only what the product facts say.'], ['copycheck', 'Caption check', 'Checks captions and titles against the product facts.'], ['vision', 'Frame check', 'Compares the video with the product photos; tested with its model (D-28).']];
 
 const productTitle = (db: Db, handle: string): string => (db.prepare('SELECT title FROM products WHERE handle = ?').get(handle) as { title: string } | undefined)?.title ?? handle;
-const textName = (db: Db, key: string) => (key.startsWith('note:') ? `Look of ${productTitle(db, key.slice(5))}` : (TEXT_NAME[key] ?? key));
-const textUse = (key: string) => (key.startsWith('note:') ? 'How the product looks in the video' : (TEXT_USE[key] ?? ''));
+// A product note's wording follows the product's saved video style (D-46).
+const noteAsmr = (db: Db, key: string) => key.startsWith('note:') && videoStyle(db, { handle: key.slice(5), title: productTitle(db, key.slice(5)) }) === 'asmr';
+const textName = (db: Db, key: string) => (key.startsWith('note:') ? `${noteAsmr(db, key) ? 'Look and theme' : 'Look'} of ${productTitle(db, key.slice(5))}` : (TEXT_NAME[key] ?? key));
+const textUse = (db: Db, key: string) => (key.startsWith('note:') ? (noteAsmr(db, key) ? 'How the product and its unboxing scene look' : 'How the product looks in the video') : (TEXT_USE[key] ?? ''));
 // Product looks belong to Products in the menu and in the way back.
 const areaOf = (key: string) => (key.startsWith('note:') ? '/products' : '/prompts');
 const inUse = (id: number | null) => (id === null ? 'Built-in' : `Your version ${id}`);
@@ -547,11 +550,15 @@ export function promptEdit(ctx: Ctx, key: string | null = ctx.query.get('key'), 
   if (!validKey(ctx.db, key)) return notFound(ctx);
   const a = activeText(ctx.db, key);
   const note = key.startsWith('note:');
-  return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, areaOf(key), html`<p class="muted">Used for: ${textUse(key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
+  const asmr = noteAsmr(ctx.db, key);
+  const example = asmr
+    ? 'For example: In the box: a green notebook with a gold snake emblem, a tasselled bookmark, two sticker sheets, three washi tape rolls, wish cards and a pen, in a gift box tied with a velvet ribbon. Scene: deep green and gold, glossy nude nails, a candle and old books, a slow rainy evening. Name everything in the box: the video shows only those items.'
+    : 'For example: A matte black steel bottle with a screw lid, about 25 cm tall. The box holds the bottle and a cleaning brush.';
+  return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, areaOf(key), html`<p class="muted">Used for: ${textUse(ctx.db, key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
 ${errSummary(errors.map((msg) => ({ id: 'body', msg })))}
 <form method="post" action="/prompts/preview">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}">
 <p class="hint">House style, scene and product look texts are checked: prices, discounts and links are refused, even in an instruction not to use them.</p>
-<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">${note ? 'How it looks (colour, material, shape, what is in the box)' : 'Text'}</label><div class="ctl">${note ? html`<span class="hint">For example: A matte black steel bottle with a screw lid, about 25 cm tall. The box holds the bottle and a cleaning brush.</span>` : ''}<textarea id="body" name="body" rows="${note ? 8 : 24}">${body ?? a.body}</textarea></div></div>
+<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">${asmr ? 'How it looks and the setting (colours, what is in the box, props, mood)' : note ? 'How it looks (colour, material, shape, what is in the box)' : 'Text'}</label><div class="ctl">${note ? html`<span class="hint">${example}</span>` : ''}<textarea id="body" name="body" rows="${note ? 8 : 24}">${body ?? a.body}</textarea></div></div>
 <div class="actions"><button class="primary" type="submit">Preview changes</button><a href="${note ? '/products' : '/prompts'}">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
 }
 
@@ -569,7 +576,7 @@ function validateText(db: Db, key: string, body: string, now: Date): string[] {
   }
 }
 
-const WRITERS = ['ugc', 'copy', 'hooks', 'script'] as const;
+const WRITERS = ['ugc', 'ugc-asmr', 'copy', 'hooks', 'script'] as const;
 
 function renderedSystem(db: Db, key: string, draft: string): string | null {
   const purpose = (WRITERS as readonly string[]).includes(key) ? key : key === 'house' ? 'ugc' : null;

@@ -103,6 +103,28 @@ export function slotProducts(db: Db): Record<string, string[]> {
   }
 }
 
+// How a product's videos are made (D-46): 'story' is the everyday-problem scene, 'asmr' a hands-only unboxing.
+export type VideoStyle = 'story' | 'asmr';
+export const VIDEO_STYLES: readonly VideoStyle[] = ['story', 'asmr'];
+
+// The styles chosen on the Products page: {"handle": "asmr"}. A malformed value or entry is ignored.
+export function videoStyles(db: Db): Record<string, VideoStyle> {
+  try {
+    const o = JSON.parse(kvGet(db, 'video_styles') ?? '{}');
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+    return Object.fromEntries(Object.entries(o).filter(([, v]) => (VIDEO_STYLES as readonly unknown[]).includes(v))) as Record<string, VideoStyle>;
+  } catch {
+    return {};
+  }
+}
+
+// The stored choice, else ASMR for a notebook or journal, else the story.
+export const defaultStyle = (title: string): VideoStyle => (/notebook|journal/i.test(title) ? 'asmr' : 'story');
+export function videoStyle(db: Db, product: { handle: string; title: string }): VideoStyle {
+  const stored = videoStyles(db);
+  return Object.hasOwn(stored, product.handle) ? stored[product.handle] : defaultStyle(product.title);
+}
+
 // Pure. A post with its own products takes turns among them by `turn` (earlier slots with the same index);
 // a post with none, or whose products are all gone, uses the general pool by `ordinal` (every earlier slot).
 // A post with no stored choice uses the "Any post" products, else the products chosen for any post, else every

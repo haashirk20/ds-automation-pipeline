@@ -644,3 +644,32 @@ test('a track that vanishes between the pick and the render is not recorded as u
   assert.equal((db.prepare('SELECT last_used_at FROM music_tracks WHERE sha256 = ?').get(sha) as any).last_used_at, null);
   assert.equal(slot(db).held_at, null);
 });
+
+test('an asmr product: the writer is asked for asmr with asmr history only, no music is mixed, the style is stored, only asmr clips are reused', async () => {
+  process.env.LLM_STUB = '1';
+  const db = setup();
+  track(db, 1);
+  db.prepare("INSERT INTO kv (key, value) VALUES ('video_styles', ?)").run(JSON.stringify({ [brief.product.handle]: 'asmr' }));
+  const asmrConcept = UgcConcept.parse(JSON.parse(readFileSync(new URL('./fixtures/llm/ugc-asmr.json', import.meta.url), 'utf8')));
+  stored(db, '2026-10-01#1', '2026-10-01', concept('an old story caption'), clipFile('old-story'));
+  db.prepare("INSERT INTO slots (id, local_date, idx, status, product_handle, master_json, created_at, updated_at) VALUES ('2026-10-02#1','2026-10-02',1,'done',?,?,'t','t')")
+    .run(brief.product.handle, JSON.stringify({ mode: 'ugc', style: 'asmr', concept: { ...asmrConcept, caption: 'an old asmr caption' }, clipFile: null, reusedFrom: null, factTexts: allFacts() }));
+  const asked: { style: unknown; recent: string[] }[] = [];
+  const music: unknown[] = [];
+  const { deps } = rig({ deps: {
+    concept: async (_db, _c, _b, recent, _n, _s, style) => { asked.push({ style, recent: recent.map((r) => r.caption) }); return asmrConcept; },
+    renderUgc: async (o) => { music.push(o.music); writeFileSync(o.outFile, 'v'); },
+  } });
+  await produceSlot(db, config, ID, T, deps);
+  const s = slot(db);
+  assert.equal(s.status, 'ready', s.error);
+  assert.deepEqual(asked, [{ style: 'asmr', recent: ['an old asmr caption'] }]);
+  assert.deepEqual(music, [null]);
+  const m = JSON.parse(s.master_json);
+  assert.equal(m.style, 'asmr');
+  assert.equal(m.music, null);
+  for (const r of db.prepare('SELECT ai_json FROM renders WHERE slot_id = ?').all(ID) as { ai_json: string }[]) assert.deepEqual(JSON.parse(r.ai_json), { visuals: true, voice: false, music: false });
+  assert.equal((db.prepare('SELECT last_used_at FROM music_tracks').get() as any).last_used_at, null);
+  // The older story clip is not posted again for a product now set to asmr; the new asmr clip is.
+  assert.equal(pickStoredClip(db, config, brief, T, '2026-11-30')?.slotId, ID);
+});

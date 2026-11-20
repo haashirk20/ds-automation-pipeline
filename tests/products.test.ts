@@ -263,6 +263,52 @@ test('products page: choose products per daily post, preview matches pickBrief, 
   assert.equal((await send('GET', '/products', { cookie })).status, 200);
 });
 
+test('products page: a video style per product, saved with the choices; a choice equal to the title default is not stored', async () => {
+  const { cookie, csrf } = await login();
+  const row = db.prepare('SELECT json FROM briefs LIMIT 1').get() as { json: string } | undefined;
+  const base = row ? JSON.parse(row.json) : seedBrief(db);
+  for (const [h, title] of [['pa', 'Title pa'], ['pn', 'Magic World Notebook Kit']]) {
+    const bb = { ...base, product: { ...base.product, handle: h, title } };
+    db.prepare("INSERT OR REPLACE INTO products (handle, title, raw_json, fetched_at) VALUES (?, ?, '{}', 't')").run(h, title);
+    db.prepare("INSERT OR REPLACE INTO briefs (handle, source_hash, json, built_at) VALUES (?, 'h', ?, 't')").run(h, JSON.stringify(bb));
+  }
+  kvSet(db, 'video_styles', '{}');
+  const page = await send('GET', '/products', { cookie });
+  assert.match(page.text, /<label for="s-pn">Video style<\/label><div class="ctl"><select id="s-pn" name="style\.pn"><option value="story">Everyday story<\/option><option value="asmr" selected>ASMR unboxing \(suggested\)<\/option><\/select><span class="hint">Everyday story: a person uses it/);
+  assert.match(page.text, /<option value="story" selected>Everyday story \(suggested\)<\/option>/);
+  assert.match(page.text, /note%3Apn">Describe its look and theme</);
+  assert.match(page.text, /note%3Apa">Describe how it looks</);
+  const save = (pairs: string[][]) => send('POST', '/products/select', { cookie, body: new URLSearchParams([['csrf', csrf], ['use.pa', 'any'], ['use.pn', 'any'], ...pairs]).toString() });
+  // A saved style is stored even when it equals the title default, so a rename never flips it.
+  assert.equal((await save([['style.pa', 'asmr'], ['style.pn', 'asmr']])).status, 303);
+  assert.deepEqual(JSON.parse(kvGet(db, 'video_styles')!), { pa: 'asmr', pn: 'asmr' });
+  assert.equal((await save([['style.pa', 'story'], ['style.pn', 'story']])).status, 303);
+  assert.deepEqual(JSON.parse(kvGet(db, 'video_styles')!), { pa: 'story', pn: 'story' });
+  assert.equal((await save([['style.pa', 'loud']])).status, 303); // a bad or missing value keeps what is stored
+  assert.deepEqual(JSON.parse(kvGet(db, 'video_styles')!), { pa: 'story', pn: 'story' });
+  const after = (await send('GET', '/products', { cookie })).text;
+  assert.match(after, /<select id="s-pn" name="style\.pn"><option value="story" selected>Everyday story<\/option><option value="asmr">ASMR unboxing<\/option><\/select>/);
+  // A rejected save shows the unsaved choice, keeps the link on the saved style and asks to save first.
+  const bad = await send('POST', '/products/select', { cookie, body: new URLSearchParams([['csrf', csrf], ['use.pa', 'none'], ['use.pn', 'none'], ['style.pn', 'asmr']]).toString() });
+  assert.equal(bad.status, 422);
+  assert.match(bad.text, /<option value="asmr" selected>ASMR unboxing<\/option><\/select><span class="hint">[^<]*<strong>Save choices first to describe the theme\.<\/strong>/);
+  assert.match(bad.text, /note%3Apn">Describe how it looks</);
+  // Without the CSRF token nothing is saved.
+  assert.notEqual((await send('POST', '/products/select', { cookie, body: new URLSearchParams([['use.pn', 'any'], ['style.pn', 'asmr']]).toString() })).status, 303);
+  assert.deepEqual(JSON.parse(kvGet(db, 'video_styles')!), { pa: 'story', pn: 'story' });
+  // An ASMR product's look editor shows an ASMR theme example.
+  kvSet(db, 'video_styles', '{}');
+  const edit = await send('GET', `/prompts/edit?key=${encodeURIComponent('note:pn')}`, { cookie });
+  assert.match(edit.text, /Scene: deep green and gold, glossy nude nails/);
+  assert.match(edit.text, /Look and theme of Magic World Notebook Kit/);
+  assert.match(edit.text, /Used for: How the product and its unboxing scene look\./);
+  assert.match(edit.text, /How it looks and the setting \(colours, what is in the box, props, mood\)/);
+  assert.doesNotMatch(edit.text, /caption/i);
+  const plainEdit = (await send('GET', `/prompts/edit?key=${encodeURIComponent('note:pa')}`, { cookie })).text;
+  assert.doesNotMatch(plainEdit, /Scene:/);
+  assert.match(plainEdit, /Look of Title pa/);
+});
+
 test('plain words for a failed store read', async () => {
   const { plainSyncError } = await import('../src/admin/products.ts');
   assert.equal(plainSyncError('Error: ingest: HTTP 401 for https://x'), "Shopify refused the app's key. Check the Shopify app connection.");

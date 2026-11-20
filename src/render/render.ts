@@ -103,19 +103,27 @@ function stageFiles(bundleDir: string, files: { from: string; to: string }[]) {
   }
 }
 
-// Two-pass loudnorm to -14 LUFS / -1 dBTP; video is copied. Returns the measured input loudness.
+// The true-peak target for an ASMR clip (D-46). Close handling sounds have sharp peaks and no music under
+// them: aiming at -1 dBTP, loudnorm's dynamic mode and the AAC encode land above the QA gate's -0.7.
+export const ASMR_TRUE_PEAK_DB = -2;
+
+// A pass has landed when it is within 1 LU of -14 LUFS and its peak is at or below the stop line:
+// -0.75 dBTP for the -1 target (the QA gate allows -0.7), 1 dB above a lower target.
+export const loudnessLanded = (lufs: number, truePeak: number, targetTp = -1): boolean => Math.abs(lufs + 14) <= 1 && truePeak <= Math.min(-0.75, targetTp + 1);
+
+// Two-pass loudnorm to -14 LUFS / -1 dBTP (or `truePeakDb`); video is copied. Returns the measured input loudness.
 // A clip with one loud line and quiet room sound cannot reach the target in one pass without clipping,
 // and this FFmpeg build has no limiter, so the pass is repeated (at most three times) until the result
 // is inside the band the QA gate checks.
-export async function normalizeLoudness(inFile: string, outFile: string): Promise<{ inputLufs: number }> {
-  const target = 'I=-14:TP=-1:LRA=11';
+export async function normalizeLoudness(inFile: string, outFile: string, truePeakDb = -1): Promise<{ inputLufs: number }> {
+  const target = `I=-14:TP=${truePeakDb}:LRA=11`;
   let src = inFile;
   let inputLufs = NaN;
   for (let pass = 0; pass < 3; pass++) {
     const m = await ff('ffmpeg', ['-hide_banner', '-nostdin', '-i', src, '-vn', '-af', `loudnorm=${target}:print_format=json`, '-f', 'null', '-']);
     const json = JSON.parse(m.stderr.slice(m.stderr.lastIndexOf('{'), m.stderr.lastIndexOf('}') + 1));
     if (pass === 0) inputLufs = Number(json.input_i);
-    else if (Math.abs(Number(json.input_i) + 14) <= 1 && Number(json.input_tp) <= -0.75) break; // the last pass landed
+    else if (loudnessLanded(Number(json.input_i), Number(json.input_tp), truePeakDb)) break; // the last pass landed
     const af = `loudnorm=${target}:measured_I=${json.input_i}:measured_TP=${json.input_tp}:measured_LRA=${json.input_lra}:measured_thresh=${json.input_thresh}:offset=${json.target_offset}:linear=true`;
     const out = `${outFile}.pass${pass}.mp4`;
     await ff('ffmpeg', ['-hide_banner', '-nostdin', '-y', '-i', src, '-map', '0:v', '-map', '0:a', '-c:v', 'copy', '-af', af, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', out]);
@@ -127,7 +135,7 @@ export async function normalizeLoudness(inFile: string, outFile: string): Promis
 }
 
 // Stages files under <bundle>/public/s/<id>/, renders one composition, loudness-normalises into outFile, and always cleans up.
-async function renderStaged(o: { composition: string; id: string; files: { from: string; to: string }[]; inputProps: Record<string, unknown>; outFile: string; config: Config; signal?: AbortSignal }): Promise<void> {
+async function renderStaged(o: { composition: string; id: string; files: { from: string; to: string }[]; inputProps: Record<string, unknown>; outFile: string; config: Config; signal?: AbortSignal; truePeakDb?: number }): Promise<void> {
   const { composition: compositionId, id, inputProps, outFile } = o;
   const serveUrl = await getBundle(o.config.render.produceTimeoutMinutes * 60000);
   const stagedDir = path.join(serveUrl, 'public', 's', id);
@@ -141,7 +149,7 @@ async function renderStaged(o: { composition: string; id: string; files: { from:
     if (o.signal?.aborted) cancel();
     o.signal?.addEventListener('abort', cancel, { once: true });
     await renderMedia({ composition, serveUrl, inputProps, codec: 'h264', pixelFormat: 'yuv420p', audioCodec: 'aac', outputLocation: raw, logLevel: 'error', cancelSignal });
-    await normalizeLoudness(raw, outFile);
+    await normalizeLoudness(raw, outFile, o.truePeakDb);
   } finally {
     rmSync(stagedDir, { recursive: true, force: true });
     rmSync(raw, { force: true });
@@ -174,7 +182,7 @@ export function ugcDurationMs(v: { width: number; height: number; seconds: numbe
 }
 
 // One AI clip with its own sound and a single caption at the top.
-export async function renderUgc(opts: { clip: string; caption: string; config: Config; outFile: string; music?: { file: string; gainDb: number; duckDb: number; duckUntilMs: number } | null; signal?: AbortSignal }): Promise<void> {
+export async function renderUgc(opts: { clip: string; caption: string; config: Config; outFile: string; music?: { file: string; gainDb: number; duckDb: number; duckUntilMs: number } | null; signal?: AbortSignal; truePeakDb?: number }): Promise<void> {
   const outFile = assertInside(opts.outFile, env.outDir());
   const durationMs = ugcDurationMs(await probeVideo(opts.clip));
   const id = randomBytes(6).toString('hex');
@@ -187,7 +195,7 @@ export async function renderUgc(opts: { clip: string; caption: string; config: C
     music = { src: `s/${id}/music.m4a`, ...mix };
   }
   const inputProps = { clipSrc: to, caption: opts.caption, top: ugcTop(opts.config), fontPx: opts.config.ugc.captionPx, durationMs, music };
-  await renderStaged({ composition: 'Ugc', id, files, inputProps, outFile, config: opts.config, signal: opts.signal });
+  await renderStaged({ composition: 'Ugc', id, files, inputProps, outFile, config: opts.config, signal: opts.signal, truePeakDb: opts.truePeakDb });
 }
 
 // Lays out already-extracted 270x480 PNGs 4x2 in one 1080x960 PNG using the "Sheet" composition.

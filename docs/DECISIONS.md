@@ -1072,6 +1072,70 @@ schema change, no config version and no restart.
 
 **Cost.** No dependency. About 60 lines of code.
 
+## D-46 ASMR unboxing style per product (2026-11-20)
+
+**Chosen.** Each product has a video style, `story` (the everyday-problem scene of D-33) or `asmr`
+(a first-person, hands-only unboxing with no speech and no music). The Products page has a "Video
+style" choice on every card (Everyday story / ASMR unboxing), saved with "Save choices" into
+`kv video_styles` (`{"handle": "asmr"}`), the same pattern as `slot_products`. `videoStyle(db,
+product)` in `src/shopify/catalog.ts` is the one resolver: the stored choice, else `asmr` when the
+title matches `/notebook|journal/i`, else `story`. A choice equal to that default is not stored, so the
+default keeps following the title.
+
+- **Writer.** An `asmr` product's concept uses `prompts/ugc-asmr.md`, an editable text like `ugc`
+  (purpose `ugc-asmr`, house text first). The owner's theme (palette, nails, props, mood, caption
+  angle) goes in the product's "Describe its look and theme" note, which reaches the writer as the
+  `Product note:` line. Code sets `line` to `""` after the model answers. `conceptProblems` skips the
+  woman rule for `asmr`, keeps the speech-verb rule, and allows up to 6 shots; a story concept is
+  asked for 3 to 5 (the stored type allows 6).
+- **Shots.** Up to 6 for `asmr`, at least 2 s each. Source: https://higgsfield.ai/kling-3.0, read
+  2026-11-20: "Up to 6 camera cuts in a single generation." fal.ai's Kling O3 API lists per-shot
+  durations of 1 to 15 s, but that is another host, so the 2 s minimum stays. The default model,
+  Wan 3.0, takes the shots in the prompt text only.
+- **Clip prompt.** `asmr` adds a first-person line (only hands and forearms, never a face) and asks
+  for close handling sounds only: nobody speaks, no music, no humming.
+- **Music.** No owner track is mixed under an `asmr` clip; the clip's own sound is the hook.
+- **Variety and reuse.** Recent captions and settings are listed per style, since an ASMR caption and
+  a story caption never collide and the other style's list only spends prompt. A stored clip is
+  posted again only when its style is the product's current style. `master_json` carries `style`; a
+  row without it is a story.
+- **Frame check.** One request still. The verdict adds `handFault` (extra, missing or fused fingers,
+  melting rings) and `faceVisible`; a face fails only an `asmr` clip. Writing gets a `product` kind
+  for lettering printed on the product as in the references. It fails a clip only when it fails the
+  claim checks or carries a digit, `%` or currency sign; invented or garbled lettering stays `prominent`.
+- **Products page.** Video style is a two-option select with a plain hint. The default from the title
+  is marked "(suggested)" until the owner saves; every saved style is then stored, so a later rename
+  never flips it. The note link ("Describe its look and theme") is on every product, owner-added ones
+  too, and its wording follows the saved style only.
+- **Product note.** It describes the look and the scene, never what a caption may claim. It reaches the
+  concept writer (the `Product note:` line), the clip prompt and the frame check, never the copy
+  writer or a claim judge, which see only the brief's facts (D-39). For `asmr` the owner lists what is
+  in the box; the clip prompt and `ugc-asmr.md` name no fixed accessory and use a beat only when the
+  note lists its item.
+- **AI flags.** An `asmr` post sets `ai.voice` false: nobody speaks.
+- **Franchise names.** `languageProblems` refuses harry potter, hogwarts, slytherin, gryffindor,
+  ravenclaw, hufflepuff, quidditch and muggle (whole words) in every caption, line, scene text, post copy, and the
+  video, house and note texts. The shop has no licence for them.
+
+**Alternatives.** A shop-wide mode switch: the shop sells notebooks and other products, and a switch
+would put every product in one style. A separate creative mode `asmr` in the config: it goes through
+the versioned config flow and applies to the whole shop, like the switch. Only an owner-typed prompt:
+the story rules in code (a woman in the person, a spoken line, music under the clip) would still
+fight it.
+
+**Why.** The owner's two sample videos for the notebook kits are hands-only ASMR unboxings, and that
+format does not fit the woman-with-a-problem story.
+
+- **Loudness.** An `asmr` render aims loudnorm at -2 dBTP (`ASMR_TRUE_PEAK_DB`) and stops a pass at
+  -1 dBTP or lower. At -1 dBTP the owner's two sample clips landed at -0.39 and -0.63 dBTP after the
+  passes and the AAC encode, above the QA gate's -0.7; the bundled FFmpeg has no limiter. At -2 they
+  land at -1.23 and -1.44 dBTP, -14.9 and -14.3 LUFS. The QA limit is unchanged.
+
+**Risk.** loudnorm's dynamic mode overshot its target by up to 1.5 dB on one pass of a sample, so a
+peakier real clip can still fail QA as a rejected clip. Watch the first real ASMR jobs.
+
+**Cost.** No dependency.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

@@ -30,6 +30,8 @@ const URGENCY = /limited time|today only|last chance|hurry|selling fast|while su
 const REVIEW = /review|rated|\bstars?\b|customers (say|love)/i;
 const BANNED = /best.?sell|#\s?1|number one|guarantee|\bcure|\bheal|pain relief|medical|doctor/i;
 const FREE_SHIPPING = /free\s+(shipping|delivery)/i;
+// Names from a franchise the shop has no licence for (D-46): a trademark risk on a paid product post.
+const FRANCHISE = /\b(?:harry\s*potter|hogwarts|slytherin|gryffindor|ravenclaw|hufflepuff|quidditch|muggles?)\b/i;
 
 // The matched phrase with a little context, at most 80 characters, so an error never echoes a whole text.
 const snip = (text: string, re: RegExp): string => {
@@ -47,6 +49,7 @@ export function languageProblems(brief: Brief, raw: string, where: string): stri
   if (!brief.rules.discountClaims && (DISCOUNT.test(text) || URGENCY.test(text))) out.push(`${where}: discount or urgency language "${snip(text, URGENT_OR_DISCOUNT(text))}"`);
   if (!brief.rules.reviewClaims && REVIEW.test(text)) out.push(`${where}: review language "${snip(text, REVIEW)}"`);
   if (BANNED.test(text)) out.push(`${where}: banned phrase "${snip(text, BANNED)}"`);
+  if (FRANCHISE.test(text)) out.push(`${where}: franchise name "${snip(text, FRANCHISE)}"; the shop has no licence for it`);
   // A look-alike letter from another script ("bеstseller" with a Cyrillic е) reads the same and matches no pattern.
   if (/[^\p{Script=Latin}\P{L}]/u.test(text)) out.push(`${where}: non-Latin letters in "${snip(text, /[^\p{Script=Latin}\P{L}]/u)}"`);
   if (FREE_SHIPPING.test(text) && !brief.facts.some((f) => FREE_SHIPPING.test(norm(f.text)))) out.push(`${where}: free shipping is not in the facts: "${snip(text, FREE_SHIPPING)}"`);

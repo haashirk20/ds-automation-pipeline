@@ -7,9 +7,9 @@ import { dollarProblems, languageProblems, urlsIn } from '../creative/claims.ts'
 import { kvGet, type Db } from '../db/index.ts';
 
 // The texts the admin page may change. claims, copycheck and vision are never editable.
-export const EDITABLE_TEXT = ['ugc', 'copy', 'hooks', 'script', 'video', 'house'] as const;
-const WRITERS: readonly string[] = ['ugc', 'copy', 'hooks', 'script']; // these get the house text first
-const LIMITS: Record<string, number> = { ugc: 20000, copy: 20000, hooks: 20000, script: 20000, video: 4000, house: 4000, note: 1000 };
+export const EDITABLE_TEXT = ['ugc', 'ugc-asmr', 'copy', 'hooks', 'script', 'video', 'house'] as const;
+const WRITERS: readonly string[] = ['ugc', 'ugc-asmr', 'copy', 'hooks', 'script']; // these get the house text first
+const LIMITS: Record<string, number> = { ugc: 20000, 'ugc-asmr': 20000, copy: 20000, hooks: 20000, script: 20000, video: 4000, house: 4000, note: 1000 };
 const LINTED = ['video', 'house', 'note'];
 
 const isNote = (key: string) => key.startsWith('note:') && key.length > 5;
@@ -36,7 +36,7 @@ export const promptText = (key: string): string => (activeText(key) ?? fileText(
 
 // The system text for a purpose: the rules plus the brief, with the house text first for the writers.
 // Fixed key order and no timestamps, so it is byte-identical across calls.
-export function systemPrompt(purpose: 'hooks' | 'script' | 'claims' | 'copy' | 'copycheck' | 'ugc' | 'vision', brief: Brief): string {
+export function systemPrompt(purpose: 'hooks' | 'script' | 'claims' | 'copy' | 'copycheck' | 'ugc' | 'ugc-asmr' | 'vision', brief: Brief): string {
   const house = WRITERS.includes(purpose) ? promptText('house') : '';
   const rules = (house ? `${house}\n\n` : '') + promptText(purpose);
   const b = {

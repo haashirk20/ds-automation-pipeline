@@ -60,7 +60,7 @@ The whole flow, top to bottom. Text boxes name the config key of the model that 
  config/photo-tags.json --> text-free crops of the photos
    |
    v
- CONCEPT WRITER    llm.models.script   system: house + ugc + brief
+ CONCEPT WRITER    llm.models.script   system: house + ugc (or ugc-asmr, D-46) + brief
                                        user: length, month, product note, recent captions
    | code checks: numbers, prices, banned phrases, repeats
    v
@@ -75,7 +75,7 @@ The whole flow, top to bottom. Text boxes name the config key of the model that 
  FRAME CHECK (locked)  llm.models.qa  system: vision + brief
                        user: 8 frames, reference photos, product note; verdict in code
    v
- CAPTION RENDER  Remotion Ugc: clip + caption + owner track (rotated, dips in shot 1)
+ CAPTION RENDER  Remotion Ugc: clip + caption + owner track (rotated, dips in shot 1; none for asmr)
                  -> loudness -14 LUFS -> QA gate (10 checks)
    v
  COPY WRITER   llm.models.copy  system: house + copy + brief   user: what the video shows
@@ -137,7 +137,11 @@ Every system text ends with the brief JSON (`systemPrompt`).
    tier 2. It falls back to tier 0, which means "reuse a stored clip", when the provider is not
    signed in or the monthly cap is reached. A manual slot (see "Posts on demand") is forced to
    tier 2, and the model is the one chosen on the Posts page.
-5. **Concept.** The script model writes a concept as structured JSON: a setting, one woman, a
+5. **Concept.** The product's video style (D-46, `videoStyle`: the Products page choice in
+   `kv video_styles`, else `asmr` for a notebook or journal title, else `story`) picks the
+   instructions: `ugc` for a story, `ugc-asmr` for a first-person, hands-only unboxing with no spoken
+   line (code empties `line`), up to six shots, no woman rule and no music. Recent captions and
+   settings are listed per style, and `master_json` stores the style. For a story, the script model writes a concept as structured JSON: a setting, one woman, a
    product colour, one caption of at most 12 words, at most one spoken line of at most 9 words, and
    three to five shots whose seconds add up to the clip length. Code checks the caption and line
    against the brief (numbers, any price: a currency sign or the shop's currency code next to a digit, banned phrases, repeats of recent captions), then the claim

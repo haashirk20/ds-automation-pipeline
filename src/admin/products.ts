@@ -10,7 +10,7 @@ import { env } from '../config/index.ts';
 import { kvGet, kvSet, type Db } from '../db/index.ts';
 import { MAX_IMAGE, MAX_PHOTOS } from './upload.ts';
 import { log } from '../ops/log.ts';
-import { activeHandles, brandLogoFile, isLogoKey, LOGO_DIR, NoBriefError, OwnerProduct, ownerBrief, OWN_PREFIX, pickBrief, SAFE_HANDLE, shopOf, slotProducts, slugHandle, staleSelections } from '../shopify/catalog.ts';
+import { activeHandles, brandLogoFile, isLogoKey, LOGO_DIR, NoBriefError, OwnerProduct, ownerBrief, OWN_PREFIX, pickBrief, SAFE_HANDLE, shopOf, slotProducts, slugHandle, staleSelections, videoStyle, videoStyles, VIDEO_STYLES, type VideoStyle } from '../shopify/catalog.ts';
 import { enabledPlatforms } from '../scheduler/planner.ts';
 import { addDays, localDateOf, localToUtc } from '../scheduler/time.ts';
 import type { Config } from '../config/index.ts';
@@ -150,8 +150,10 @@ function shopStatus(db: Db, tz: string): Raw {
   return html`<span class="hint">${line}${pending ? html` <strong>Check pending…</strong>` : ''} Shopify is also checked every hour.</span>${tech}${trunc && typeof trunc === 'object' && trunc.total ? html`<span class="hint"><strong>Your store has ${n(trunc.total)} products; only the first ${n(trunc.kept)} are used.</strong></span>` : ''}`;
 }
 
-// `chosen` is what a rejected save submitted (handle to use), so the radios show the owner's choices, not the stored ones.
-export async function productsPage(ctx: Ctx, error: string | null = null, status = 200, chosen: Map<string, string> | null = null): Promise<Res> {
+const STYLE_LABEL: Record<VideoStyle, string> = { story: 'Everyday story', asmr: 'ASMR unboxing' };
+
+// `chosen` and `chosenStyle` are what a rejected save submitted (handle to choice), so the radios show the owner's choices, not the stored ones.
+export async function productsPage(ctx: Ctx, error: string | null = null, status = 200, chosen: Map<string, string> | null = null, chosenStyle: Map<string, string> | null = null): Promise<Res> {
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const tz = cfg.timezone;
   const list = items(ctx.db);
@@ -162,6 +164,7 @@ export async function productsPage(ctx: Ctx, error: string | null = null, status
   const m = ctx.query.get('msg');
   const uploaded = kvGet(ctx.db, 'brand_logo');
   const hasLogo = !!brandLogoFile(ctx.db, cfg, ROOT);
+  const storedStyles = videoStyles(ctx.db);
   const useFor = (h: string) => (chosen?.get(h) as Use | undefined) ?? useOf(h, pool, perPost);
   const used = (h: string) => useFor(h) !== 'none';
   const nOn = list.filter((x) => used(x.handle)).length;
@@ -170,12 +173,21 @@ export async function productsPage(ctx: Ctx, error: string | null = null, status
   const card = (x: Item, i: number) => {
     const u = useFor(x.handle);
     const name = `use.${x.handle}`;
+    // `saved` is what the factory uses now; the note wording follows it, not an unsaved choice.
+    const saved = videoStyle(ctx.db, x.brief.product);
+    const isStored = Object.hasOwn(storedStyles, x.handle);
+    const sent = chosenStyle?.get(x.handle);
+    const st: VideoStyle = sent === 'story' || sent === 'asmr' ? sent : saved;
+    const sid = `s-${x.handle}`;
+    const styleHint = html`Everyday story: a person uses it in a short everyday scene. ASMR unboxing: only hands, no talking, quiet unboxing sounds.${st !== saved ? html` <strong>Save choices first to describe the theme.</strong>` : ''}`;
+    const noteLink = html`<a href="/prompts/edit?key=${encodeURIComponent('note:' + x.handle)}">${saved === 'asmr' ? 'Describe its look and theme' : 'Describe how it looks'}</a>`;
     return html`<li class="pcard${u !== 'none' ? ' on' : ''}">
 <div class="pcard-img">${photoOk(x) ? html`<img src="/media/photo?handle=${x.handle}" alt="${x.brief.product.title}" loading="lazy" width="160" height="120">` : html`<span class="muted">No photo${!x.own && x.skipped > 0 ? '. Photos could not be downloaded from Shopify; they are tried again at the next check.' : ''}</span>`}</div>
 <div class="pcard-body">${x.own ? badge('neutral', 'Added by you') : badge('ok', 'From Shopify')}
 <strong>${x.brief.product.title}</strong><span class="pcard-price">${x.brief.product.priceText}</span>
 <fieldset><legend>Use in videos</legend>${choices.map(([v, label]) => html`<label class="check" for="u-${x.handle}-${v}"><input id="u-${x.handle}-${v}" type="radio" name="${name}" value="${v}"${u === v ? raw(' checked') : ''}> ${label}</label>`)}</fieldset>
-<div class="pcard-act">${x.own ? html`<a href="/products/edit?handle=${x.handle}">Edit</a>${confirmRemove('Remove…', html`<button class="danger" type="submit" form="del-${i}">Yes, remove ${x.brief.product.title}</button>`)}` : html`<a href="/prompts/edit?key=${encodeURIComponent('note:' + x.handle)}">Describe how it looks</a>`}</div></div></li>`;
+${formRow({ id: sid, label: 'Video style', control: html`<select id="${sid}" name="style.${x.handle}">${VIDEO_STYLES.map((v) => html`<option value="${v}"${st === v ? raw(' selected') : ''}>${STYLE_LABEL[v]}${!isStored && v === saved ? ' (suggested)' : ''}</option>`)}</select>`, hint: styleHint })}
+<div class="pcard-act">${x.own ? html`<a href="/products/edit?handle=${x.handle}">Edit</a>${noteLink}${confirmRemove('Remove…', html`<button class="danger" type="submit" form="del-${i}">Yes, remove ${x.brief.product.title}</button>`)}` : noteLink}</div></div></li>`;
   };
   // "Any post" products are unused by daily posts when every post has a product of its own (chooseBrief).
   const title = (h: string) => list.find((x) => x.handle === h)?.brief.product.title;
@@ -206,7 +218,8 @@ ${uploaded ? html`<form method="post" action="/brand/logo/reset">${csrfField(ctx
 }
 
 export async function productsSelect(ctx: Ctx): Promise<Res> {
-  const known = items(ctx.db).map((x) => x.handle);
+  const all = items(ctx.db);
+  const known = all.map((x) => x.handle);
   const cfg = await loadEffectiveConfig(ctx.db, ctx.now);
   const nPosts = postTimes(cfg).length;
   // The page sends one choice per product (use.<handle>); plain sel / postN fields are read too.
@@ -220,10 +233,17 @@ export async function productsSelect(ctx: Ctx): Promise<Res> {
   }
   const pool = [...sel].filter((h) => known.includes(h)).sort();
   const lists = Object.fromEntries(Object.entries(posts).map(([k, s]) => [k, [...s].filter((h) => known.includes(h)).sort()]));
-  if (!pool.length && !Object.values(lists).some((l) => l.length)) return productsPage(ctx, 'Choose at least one product for a post or for "Any post". With none chosen there is nothing to make videos for.', 422, new Map(known.map((h) => [h, ctx.form.get(`use.${h}`) ?? 'none'])));
+  if (!pool.length && !Object.values(lists).some((l) => l.length)) return productsPage(ctx, 'Choose at least one product for a post or for "Any post". With none chosen there is nothing to make videos for.', 422, new Map(known.map((h) => [h, ctx.form.get(`use.${h}`) ?? 'none'])), new Map(known.map((h) => [h, ctx.form.get(`style.${h}`) ?? ''])));
+  // Every saved style is stored, so a later rename of the product never flips it (D-46).
+  const styles = videoStyles(ctx.db);
+  for (const h of known) {
+    const v = ctx.form.get(`style.${h}`);
+    if (v === 'story' || v === 'asmr') styles[h] = v;
+  }
   kvSet(ctx.db, 'products_active', JSON.stringify(pool));
   kvSet(ctx.db, 'slot_products', JSON.stringify(lists));
-  audit(ctx.db, 'admin', 'products.select', 'products', { selected: pool, posts: lists }, ctx.now);
+  kvSet(ctx.db, 'video_styles', JSON.stringify(styles));
+  audit(ctx.db, 'admin', 'products.select', 'products', { selected: pool, posts: lists, styles }, ctx.now);
   return redirect('/products?msg=selected');
 }
 

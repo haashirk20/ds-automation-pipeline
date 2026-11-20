@@ -6,13 +6,16 @@ import { z } from 'zod';
 import type { Brief, UgcConcept } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
+import { dollarProblems, languageProblems } from '../creative/claims.ts';
 import { productLook } from '../creative/ugc.ts';
+import type { VideoStyle } from '../shopify/catalog.ts';
 import { callJson } from '../llm/client.ts';
 import { systemPrompt } from '../llm/prompts.ts';
 import { ff } from '../render/ffmpeg.ts';
 
-const Writing = z.object({ text: z.string(), kind: z.enum(['overlay', 'prominent', 'background']) });
-export const VisionVerdict = z.object({ productVisible: z.boolean(), productMatches: z.boolean(), writing: z.array(Writing), brandMisspelled: z.boolean(), bodyGlitch: z.boolean(), reason: z.string() });
+// 'product': lettering printed on the product itself, matching the reference photos. It never fails a clip.
+const Writing = z.object({ text: z.string(), kind: z.enum(['overlay', 'prominent', 'background', 'product']) });
+export const VisionVerdict = z.object({ productVisible: z.boolean(), productMatches: z.boolean(), writing: z.array(Writing), brandMisspelled: z.boolean(), bodyGlitch: z.boolean(), handFault: z.boolean(), faceVisible: z.boolean(), reason: z.string() });
 
 // Letters and digits only, lower case, no spaces, without a leading "the": "The Merry Marts" is the shop "Merry Marts".
 const plain = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/^the /, '').replace(/ /g, '');
@@ -59,7 +62,7 @@ const image = (file: string) => ({ mediaType: (extname(file).toLowerCase() === '
 export async function checkClip(
   db: Db,
   config: Config,
-  input: { clipFile: string; refImages: string[]; brief: Brief; concept: UgcConcept },
+  input: { clipFile: string; refImages: string[]; brief: Brief; concept: UgcConcept; style?: VideoStyle },
   now: Date,
   slotId: string,
   deps: { frames?: (file: string, n: number) => Promise<Buffer[]> } = {},
@@ -71,6 +74,7 @@ export async function checkClip(
   const user =
     `Shop name: ${brief.shop.name}\nThe first ${refs.length} images are REFERENCE photos of the product. The other ${frames.length} images are frames from the video, in time order.\n` +
     `Owner's note on the product: ${look ?? 'none'}\n` +
+    `Style: ${input.style === 'asmr' ? 'asmr (first person, only hands and forearms may be visible)' : 'story'}\n` +
     `Plan:\nSetting: ${concept.setting}\nPerson: ${concept.person}\nColour: ${concept.color}\n` +
     concept.shots.map((s, i) => `Shot ${i + 1} (${s.seconds}s): ${s.action}`).join('\n');
   const verdict = await callJson(
@@ -103,5 +107,13 @@ export async function checkClip(
   if (nearMiss.length) problems.push(`writing that nearly spells the shop's name: ${nearMiss.map(quote).join(', ')}`);
   if (verdict.brandMisspelled) problems.push('the shop name or logo is misspelled or distorted');
   if (verdict.bodyGlitch) problems.push('a generation fault such as a bad hand or face');
+  if (verdict.handFault) problems.push('a malformed hand: extra, missing or fused fingers, or a melting ring or nail');
+  // Lettering read as the product's own printing still gets the claim checks: the model may file an invented "50% OFF" as product.
+  for (const w of verdict.writing.filter((x) => x.kind === 'product')) {
+    const bad = [...languageProblems(brief, w.text, 'product writing'), ...dollarProblems(brief, w.text, 'product writing')];
+    if (/[\d%\p{Sc}]/u.test(w.text)) bad.push(`product writing ${quote(w)} has a number, % or currency sign`);
+    problems.push(...bad);
+  }
+  if (input.style === 'asmr' && verdict.faceVisible) problems.push('a face is visible in an ASMR clip, which shows only hands');
   return { pass: !problems.length, problems, verdict };
 }
