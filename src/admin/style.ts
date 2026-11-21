@@ -219,8 +219,9 @@ video{width:100%;max-width:14rem;background:#000;border-radius:var(--radius)}
 .logo-box{display:grid;place-items:center;aspect-ratio:1;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2)}
 .logo-box img{width:100%;height:100%;object-fit:contain}
 .logo-box .muted{color:var(--muted)}
-.logo-panel .form-row{grid-template-columns:1fr}
-.logo-panel .form-row>label{padding-top:0}
+.logo-panel .form-row,.pcard .form-row{grid-template-columns:1fr}
+.logo-panel .form-row>label,.pcard .form-row>label{padding-top:0}
+.pcard select{width:100%}
 .thumbs{display:flex;flex-wrap:wrap;gap:var(--space-3)}
 .thumb{display:flex;flex-direction:column;align-items:center;gap:var(--space-1);font-size:.9375rem}
 .thumb img{width:96px;height:96px;object-fit:contain;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2)}
