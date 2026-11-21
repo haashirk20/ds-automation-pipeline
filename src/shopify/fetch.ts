@@ -57,7 +57,12 @@ const RawProduct = z.object({
   product_type: z.string().default(''),
   tags: z.union([z.array(z.string()), z.string()]).default([]),
   options: z.array(z.object({ name: z.string(), values: z.array(z.string()) })).default([]),
-  variants: z.array(z.object({ title: z.string(), price: z.string(), compare_at_price: z.string().nullable().default(null), available: z.boolean().default(true) })),
+  variants: z.array(z.object({
+    title: z.string(), price: z.string(), compare_at_price: z.string().nullable().default(null), available: z.boolean().default(true),
+    // The public feed's variant fields (tests/fixtures/shopify/products.json): option values by position and the variant's photo.
+    option1: z.string().nullish(), option2: z.string().nullish(), option3: z.string().nullish(),
+    featured_image: z.object({ src: z.string() }).nullish(),
+  })),
   images: z.array(z.object({ src: z.string(), width: z.number().int().positive(), height: z.number().int().positive() })).default([]),
 });
 export type RawProduct = z.infer<typeof RawProduct>;

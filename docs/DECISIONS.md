@@ -1136,6 +1136,50 @@ peakier real clip can still fail QA as a rejected clip. Watch the first real ASM
 
 **Cost.** No dependency.
 
+## D-47 One note section per colour, and the colour chosen in code (2026-11-21)
+
+**Chosen.** The owner's store has one Shopify product, "Enchanted Academy Journal Gift Box", whose
+colour variants are four different kits that need four different ASMR themes. D-46 has one note per
+product, so every concept saw every kit's theme.
+
+- **Note format.** Lines before any colour heading apply to every colour. A line that is exactly
+  `<colour>:` (case and surrounding spaces ignored, the name one of `brief.product.colors`), or
+  `<colour>: text`, starts that colour's section until the next colour heading. A heading that names no
+  colour of the product, such as `In the box:`, is ordinary text. `lookFor(note, colour, colours)` in
+  `src/creative/ugc.ts` returns the shared part plus that colour's section, trimmed, or null when
+  empty. A note with no colour heading is returned unchanged, so D-46 notes behave as before.
+- **Colour choice.** `pickColour` in `src/render/produce-ugc.ts` picks the colour before the concept
+  is written, once per run: a colour never used by this product's earlier slots (`product_handle`,
+  concept colour in `master_json`) first, in brief order, else the one whose latest use is oldest. The
+  request says `Colour: X — use this colour.` and code sets `concept.color` to it after the model
+  answers, as it empties `line` for ASMR. Overriding instead of adding a `conceptProblems` rule spends
+  no retry on a field the model was told outright; the scene text is still checked as before. Both
+  styles rotate. A product with fewer than two colours gets no `Colour:` line and picks as before. A
+  resumed job keeps the concept, and so the colour, stored in the row.
+- **Where the note goes.** The concept writer's `Product note:` line, the clip prompt's look and the
+  frame check's owner note get `lookFor(note, colour, colours)`, never the whole note, so another kit's
+  theme never reaches a model. Without a chosen colour a sectioned note sends only its shared part.
+- **Variant photos.** Ingest reads each variant's photo: the public feed's `variants[].featured_image.src`
+  with `option1..3`, and in the Admin API `selectedOptions { value }` and `media(first: 1) { ... on
+  MediaImage { image { url } } }`. `ProductVariant` has no `image` field in the Admin schema; this was checked
+  with the Shopify schema tool on 2026-11-21. An untagged product photo whose file name matches a variant's
+  photo, ignoring the query and any `_WxH` size suffix, gets that variant's colour as `variant`.
+  `photo-tags.json` still wins. When a colour has no photo, the producer falls back to the first
+  product photo as before, and the frame check is told that the reference photos may show another colour,
+  so the colour is not judged.
+- **Review lint.** A star counts as review language only as a rating: a number or number word before
+  it ("5 stars", "five-star", "4.8/5 stars"), "star rating", or a star symbol. Decorative stars in a
+  theme ("gold stars", "starry", "star-shaped") pass.
+- **Editor.** For a product with two or more colours the note editor lists them and shows the format:
+  shared `In the box:` first, then two colour sections. The lint on save is unchanged.
+
+**Alternatives.** Split the product into four owner-added products: it loses the Shopify data and
+the variant photos. One note per variant key (`note:<handle>:<colour>`): four editor pages and a
+migration for one shared box list. Let the model pick the colour: it saw every theme and tended to
+repeat one.
+
+**Cost.** No dependency, no model call.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).

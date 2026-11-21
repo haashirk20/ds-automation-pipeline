@@ -4,7 +4,7 @@ import path from 'node:path';
 import { env, type Config, type PlatformName } from '../config/index.ts';
 import { UgcConcept, type Brief } from '../contracts.ts';
 import { aboutConcept } from '../creative/copy.ts';
-import { buildClipPrompt, conceptProblems, productLook } from '../creative/ugc.ts';
+import { buildClipPrompt, conceptProblems, lookFor, productLook } from '../creative/ugc.ts';
 import type { Db } from '../db/index.ts';
 import { RetryableLlmError, monthSpend } from '../llm/client.ts';
 import { alert } from '../ops/alert.ts';
@@ -60,6 +60,18 @@ export function pickStoredClip(db: Db, config: Config, brief: Brief, now: Date, 
   return eligible.length ? { clipFile: eligible[0][0], ...eligible[0][1] } : null;
 }
 
+// The colour of the next concept (D-47): one never used for this product first, in brief order, else the one used longest ago.
+// Null for a product with fewer than two colours, whose concept picks its colour as before.
+export function pickColour(db: Db, brief: Brief, slotId: string): string | null {
+  const colours = brief.product.colors;
+  if (colours.length < 2) return null;
+  const rows = db.prepare('SELECT master_json FROM slots WHERE id != ? AND product_handle = ? AND master_json IS NOT NULL ORDER BY local_date DESC, idx DESC LIMIT 200').all(slotId, brief.product.handle) as { master_json: string }[];
+  const age = new Map<string, number>(); // colour -> position of its latest use, 0 = newest
+  rows.forEach((r, i) => { const c = storedConcept(r.master_json)?.color.trim().toLowerCase(); if (c && !age.has(c)) age.set(c, i); });
+  const ageOf = (c: string) => age.get(c.trim().toLowerCase()) ?? Infinity;
+  return colours.reduce((best, c) => (ageOf(c) > ageOf(best) ? c : best));
+}
+
 export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string, token: string, now: Date, d: ProduceDeps): Promise<void> {
   const t0 = Date.now();
   const hold = holdOf(db, slot, token, d);
@@ -100,6 +112,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
   // Per style: an ASMR caption and a story caption never look alike, so comparing them only spends prompt.
   const recent = (db.prepare("SELECT master_json FROM slots WHERE id != ? AND master_json LIKE '%\"mode\":\"ugc\"%' AND coalesce(CASE WHEN json_valid(master_json) THEN json_extract(master_json, '$.style') END, 'story') = ? ORDER BY local_date DESC, idx DESC LIMIT ?").all(slot.id, style, RECENT) as { master_json: string }[])
     .flatMap((r) => { const c = storedConcept(r.master_json); return c ? [{ caption: c.caption, setting: c.setting }] : []; });
+  const kit = pickColour(db, brief, slot.id); // one pick per run, so a retry keeps it
   if (tier !== 't0') {
     for (let attempt = 0; attempt < config.tiers.maxJobsPerSlot && !made; attempt++) {
       // A job in the ledger belongs to the concept stored in the row: resume with it and do not write a new one.
@@ -110,7 +123,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
       const conceptStyle: VideoStyle = found ? styleOf(row.master_json!) : style;
       if (!found) {
         try {
-          found = await d.concept(db, config, brief, recent.slice(0, RECENT), now, slot.id, style);
+          found = await d.concept(db, config, brief, recent.slice(0, RECENT), now, slot.id, style, kit);
         } catch (e) {
           if (d.signal?.aborted) throw e;
           log.warn('concept writer failed, no new clip', { slot: slot.id, error: String(e) });
@@ -149,7 +162,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
         const logoFile = brandLogoFile(db, config, ROOT);
         const logo = !!logoFile && existsSync(logoFile);
         if (logo) images.push(logoFile!);
-        const { prompt, shots } = buildClipPrompt(brief, concept, refShots.map((s) => s.note), { look: productLook(handle), brand: brief.shop.name, logo, style: conceptStyle });
+        const { prompt, shots } = buildClipPrompt(brief, concept, refShots.map((s) => s.note), { look: lookFor(productLook(handle), concept.color, brief.product.colors), brand: brief.shop.name, logo, style: conceptStyle });
         hold();
         ok = await generateClip(db, config, d.providers, { slotId: slot.id, tier, images, prompt, shots, outFile: clipFile, signal }, now);
       } catch (e) {
@@ -172,7 +185,7 @@ export async function produceUgc(db: Db, config: Config, slot: Slot, dir: string
       }
       let check;
       try {
-        check = await d.checkClip(db, config, { clipFile, refImages: images.slice(0, refShots.length), brief, concept, style: conceptStyle }, now, slot.id);
+        check = await d.checkClip(db, config, { clipFile, refImages: images.slice(0, refShots.length), brief, concept, style: conceptStyle, refsShowColour: colour.length > 0 || brief.product.colors.length < 2 }, now, slot.id);
       } catch (e) {
         if (d.signal?.aborted || e instanceof ClaimLostError) throw e;
         if (e instanceof RetryableLlmError) throw new DeferSlotError(`the frame check is unavailable, the paid clip is kept: ${e}`); // the spend row stays 'succeeded', so the next run checks the same clip

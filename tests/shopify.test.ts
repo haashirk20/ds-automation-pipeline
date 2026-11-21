@@ -97,6 +97,22 @@ test('photo tags: applied, empty removes, untagged default, duplicate fails', ()
   assert.throws(() => buildBrief(p, meta, config, JSON.stringify({ [a]: { shots: [{ id: 1 }] } })));
 });
 
+test('variant photos tag untagged product photos with their colour; photo-tags.json wins; size suffix and query ignored', () => {
+  // The fixture is a real public feed: Beige, Green and Red each have a featured_image that is one of the product photos.
+  const raw = rawProduct();
+  const key = (u: string) => u.split('?')[0].split('/').pop()!;
+  const byColour = Object.fromEntries(raw.variants.map((v) => [v.option1, key(v.featured_image!.src)]));
+  const br = buildBrief(normalize(raw, SHOP), meta, config, null);
+  for (const c of ['Beige', 'Green', 'Red']) assert.equal(br.shots.find((s) => s.file.endsWith('/' + byColour[c]))?.variant, c, c);
+  assert.ok(br.shots.some((s) => s.variant === null)); // photos no variant points at stay untagged
+  // A tag in photo-tags.json overrides the variant photo.
+  const tags = JSON.stringify({ [byColour.Green]: { shots: [{ id: 'g', kind: 'lifestyle', variant: 'Red', crop: null, note: '' }] } });
+  assert.equal(buildBrief(normalize(raw, SHOP), meta, config, tags).shots.find((s) => s.id === 'g')?.variant, 'Red');
+  // A variant image URL with a size suffix still matches.
+  const sized = { ...raw, variants: raw.variants.map((v) => ({ ...v, featured_image: { src: v.featured_image!.src.replace(/\.jpg/, '_800x800.jpg') } })) };
+  assert.equal(buildBrief(normalize(sized, SHOP), meta, config, null).shots.find((s) => s.file.endsWith('/' + byColour.Red))?.variant, 'Red');
+});
+
 test('ingest stores a valid brief and downloads photos', async () => {
   const { db, deps, calls } = setup();
   const [b] = await ingest(db, config, NOW, deps);
@@ -222,7 +238,7 @@ const TOKEN = 'shpat_access_token_value';
 const gqlProduct = {
   title: 'Lamp', handle: 'lamp', descriptionHtml: '<p>A lamp</p>', updatedAt: '2026-11-01T00:00:00Z', vendor: 'V', productType: 'Lighting', tags: ['a'],
   options: [{ name: 'Color', values: ['Red'] }],
-  variants: { nodes: [{ title: 'Red', price: '10.00', compareAtPrice: null, availableForSale: true }] },
+  variants: { nodes: [{ title: 'Red', price: '10.00', compareAtPrice: null, availableForSale: true, selectedOptions: [{ value: 'Red' }], media: { nodes: [{ image: { url: 'https://cdn.shopify.com/s/files/a.jpg?v=2' } }] } }] },
   images: { nodes: [{ url: 'https://cdn.shopify.com/s/files/a.jpg', width: 100, height: 200 }, { url: 'https://cdn.shopify.com/s/files/b.jpg', width: null, height: null }] },
 };
 
@@ -266,9 +282,12 @@ test('admin mode: token request, GraphQL mapping to RawProduct, no secret in log
   assert.deepEqual(r.products[0], {
     title: 'Lamp', handle: 'lamp', body_html: '<p>A lamp</p>', updated_at: '2026-11-01T00:00:00Z', vendor: 'V', product_type: 'Lighting', tags: ['a'],
     options: [{ name: 'Color', values: ['Red'] }],
-    variants: [{ title: 'Red', price: '10.00', compare_at_price: null, available: true }],
+    variants: [{ title: 'Red', price: '10.00', compare_at_price: null, available: true, option1: 'Red', option2: null, option3: null, featured_image: { src: 'https://cdn.shopify.com/s/files/a.jpg?v=2' } }],
     images: [{ src: 'https://cdn.shopify.com/s/files/a.jpg', width: 100, height: 200 }],
   });
+  assert.match(String(reqs[1].init.body), /selectedOptions \{ value \} media\(first: 1\) \{ nodes \{ \.\.\. on MediaImage \{ image \{ url \} \} \} \}/);
+  // The variant photo tags the matching product photo with the variant's colour (D-47).
+  assert.equal(buildBrief(normalize(r.products[0], SHOP), r.meta, config, null).shots[0].variant, 'Red');
   const { out, err } = await captureStderr(() => ingest(db, config, NOW, deps));
   assert.equal(out.length, 1);
   assert.ok(!err.includes(SECRET) && !err.includes(TOKEN));

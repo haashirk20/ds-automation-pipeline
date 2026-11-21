@@ -673,3 +673,33 @@ test('an asmr product: the writer is asked for asmr with asmr history only, no m
   // The older story clip is not posted again for a product now set to asmr; the new asmr clip is.
   assert.equal(pickStoredClip(db, config, brief, T, '2026-11-30')?.slotId, ID);
 });
+
+test('colour rotation (D-47): the least recently used colour is picked and stored; the clip prompt gets only its note section', async () => {
+  process.env.LLM_STUB = '1';
+  const { usePrompts } = await import('../src/llm/prompts.ts');
+  usePrompts({ [`note:${brief.product.handle}`]: 'Shared kit.\nBeige: oat theme.\nGreen: moss theme.\nRed: cherry theme.' });
+  try {
+    const db = setup();
+    // Green was used longest ago and Red most recently; Beige was used in between.
+    stored(db, '2026-11-08#1', '2026-11-08', { ...good, caption: 'g', color: 'Green' }, null);
+    stored(db, '2026-11-09#1', '2026-11-09', { ...good, caption: 'b', color: 'beige' }, null);
+    stored(db, '2026-11-10#1', '2026-11-10', { ...good, caption: 'r', color: 'Red' }, null);
+    const asked: (string | null)[] = [];
+    const prompts: string[] = [];
+    const { providers } = provider();
+    const p = { ...providers.higgsfield, submit: async (job: { prompt: string }) => { prompts.push(job.prompt); return providers.higgsfield.submit(job as any); } };
+    const deps = (caption: string) => rig({ providers: { higgsfield: p }, deps: { concept: async (_db, _c, _b, _r, _n, _s, _st, colour) => { asked.push(colour ?? null); return { ...good, caption, color: colour ?? good.color }; } } }).deps;
+    await produceSlot(db, config, ID, T, deps('first caption'));
+    assert.equal(slot(db).status, 'ready', slot(db).error);
+    await produceSlot(db, config, '2026-11-12#2', T, deps('second caption'));
+    assert.deepEqual(asked, ['Green', 'Beige']);
+    assert.equal(JSON.parse(slot(db).master_json).concept.color, 'Green');
+    assert.equal(JSON.parse((db.prepare("SELECT master_json FROM slots WHERE id = '2026-11-12#2'").get() as any).master_json).concept.color, 'Beige');
+    assert.match(prompts[0], /Shared kit\.\smoss theme\./);
+    assert.match(prompts[1], /Shared kit\.\soat theme\./);
+    assert.doesNotMatch(prompts[0], /oat|cherry/);
+    assert.doesNotMatch(prompts[1], /moss|cherry/);
+  } finally {
+    usePrompts({});
+  }
+});

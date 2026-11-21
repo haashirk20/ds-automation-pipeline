@@ -26,7 +26,11 @@ const Data = z.object({
           productType: z.string(),
           tags: z.array(z.string()),
           options: z.array(z.object({ name: z.string(), values: z.array(z.string()) })),
-          variants: z.object({ nodes: z.array(z.object({ title: z.string(), price: z.string(), compareAtPrice: Money, availableForSale: z.boolean() })) }),
+          variants: z.object({ nodes: z.array(z.object({
+            title: z.string(), price: z.string(), compareAtPrice: Money, availableForSale: z.boolean(),
+            selectedOptions: z.array(z.object({ value: z.string() })).default([]),
+            media: z.object({ nodes: z.array(z.object({ image: z.object({ url: z.string() }).nullish() })) }).default({ nodes: [] }),
+          })) }),
           images: z.object({ nodes: z.array(z.object({ url: z.string(), width: z.number().nullable(), height: z.number().nullable() })) }),
         }),
       ),
@@ -42,7 +46,7 @@ const QUERY = `query {
   shop { name currencyCode primaryDomain { host } shipsToCountries }
   products(first: ${MAX_PRODUCTS + 1}, query: "${FILTER}") { nodes {
     title handle descriptionHtml updatedAt vendor productType tags options { name values }
-    variants(first: 100) { nodes { title price compareAtPrice availableForSale } }
+    variants(first: 100) { nodes { title price compareAtPrice availableForSale selectedOptions { value } media(first: 1) { nodes { ... on MediaImage { image { url } } } } } }
     images(first: ${MAX_PHOTOS}) { nodes { url width height } }
   } }
 }`;
@@ -80,7 +84,12 @@ export async function fetchShopAdmin(shop: string, clientId: string, clientSecre
         product_type: p.productType,
         tags: p.tags,
         options: p.options,
-        variants: p.variants.nodes.map((v) => ({ title: v.title, price: v.price, compare_at_price: v.compareAtPrice, available: v.availableForSale })),
+        // Mapped to the public feed's shape: option values by position, the first variant photo as featured_image.
+        variants: p.variants.nodes.map((v) => ({
+          title: v.title, price: v.price, compare_at_price: v.compareAtPrice, available: v.availableForSale,
+          option1: v.selectedOptions[0]?.value ?? null, option2: v.selectedOptions[1]?.value ?? null, option3: v.selectedOptions[2]?.value ?? null,
+          featured_image: v.media.nodes[0]?.image ? { src: v.media.nodes[0].image.url } : null,
+        })),
         images: p.images.nodes.flatMap((i) => (i.width && i.height ? [{ src: i.url, width: i.width, height: i.height }] : [])),
       })),
     }).products,

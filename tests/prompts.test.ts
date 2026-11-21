@@ -78,6 +78,15 @@ test('the lint refuses a price, a discount, a link or a long text', () => {
   assert.ok('errors' in long && long.errors.length > 0 && long.errors.every((m) => m.length <= 160), JSON.stringify(long));
   assert.ok('errors' in saveText(db, 'house', 'Everything is half price today', null, '', NOW));
   assert.ok('id' in (note('A waffle-knit shawl with a zip and one round button.') as object));
+  // Decorative stars are scene text; star ratings are review language (D-47).
+  for (const ok of ['Navy and gold stars on the cover.', 'A starry night, star-shaped confetti.', 'Silver star stickers.']) {
+    const r = note(ok); // a save after the first one may be refused as stale, never for review language
+    assert.ok(!('errors' in r) || !r.errors.some((m) => /review language/.test(m)), `${ok}: ${JSON.stringify(r)}`);
+  }
+  for (const bad of ['Rated 5 stars.', 'A five-star kit.', 'Loved: ★★★★★', '4.8 stars from buyers.', '4.8/5 stars.', 'Read the reviews.', 'A 5-star gift.']) {
+    const r = note(bad);
+    assert.ok('errors' in r && r.errors.some((m) => /review language/.test(m)), bad);
+  }
   assert.ok('id' in (saveText(db, 'house', '', null, '', NOW) as object)); // an empty house text is allowed
   assert.ok('errors' in saveText(db, 'ugc', '', null, '', NOW));
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM audit').get() as any).n, 2);

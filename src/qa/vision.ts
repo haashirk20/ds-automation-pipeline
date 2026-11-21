@@ -7,7 +7,7 @@ import type { Brief, UgcConcept } from '../contracts.ts';
 import type { Config } from '../config/index.ts';
 import type { Db } from '../db/index.ts';
 import { dollarProblems, languageProblems } from '../creative/claims.ts';
-import { productLook } from '../creative/ugc.ts';
+import { lookFor, productLook } from '../creative/ugc.ts';
 import type { VideoStyle } from '../shopify/catalog.ts';
 import { callJson } from '../llm/client.ts';
 import { systemPrompt } from '../llm/prompts.ts';
@@ -62,7 +62,7 @@ const image = (file: string) => ({ mediaType: (extname(file).toLowerCase() === '
 export async function checkClip(
   db: Db,
   config: Config,
-  input: { clipFile: string; refImages: string[]; brief: Brief; concept: UgcConcept; style?: VideoStyle },
+  input: { clipFile: string; refImages: string[]; brief: Brief; concept: UgcConcept; style?: VideoStyle; refsShowColour?: boolean },
   now: Date,
   slotId: string,
   deps: { frames?: (file: string, n: number) => Promise<Buffer[]> } = {},
@@ -70,12 +70,12 @@ export async function checkClip(
   const { brief, concept } = input;
   const frames = await (deps.frames ?? defaultFrames)(input.clipFile, FRAME_COUNT);
   const refs = input.refImages.map(image);
-  const look = productLook(brief.product.handle);
+  const look = lookFor(productLook(brief.product.handle), concept.color, brief.product.colors);
   const user =
     `Shop name: ${brief.shop.name}\nThe first ${refs.length} images are REFERENCE photos of the product. The other ${frames.length} images are frames from the video, in time order.\n` +
     `Owner's note on the product: ${look ?? 'none'}\n` +
     `Style: ${input.style === 'asmr' ? 'asmr (first person, only hands and forearms may be visible)' : 'story'}\n` +
-    `Plan:\nSetting: ${concept.setting}\nPerson: ${concept.person}\nColour: ${concept.color}\n` +
+    `Plan:\nSetting: ${concept.setting}\nPerson: ${concept.person}\nColour: ${concept.color}${input.refsShowColour === false ? ' (no reference photo is tagged with this colour: they may show another colour of the same product, so a different colour is not a mismatch; judge the shape and details)' : ''}\n` +
     concept.shots.map((s, i) => `Shot ${i + 1} (${s.seconds}s): ${s.action}`).join('\n');
   const verdict = await callJson(
     db,

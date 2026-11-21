@@ -28,6 +28,25 @@ export function productLook(handle: string, file: string = NOTES): string | null
   return Object.hasOwn(notes, handle) ? (notes[handle].look ?? null) : null;
 }
 
+// The part of a product note for one colour (D-47). Lines before any colour heading are shared; a line
+// `<colour>:` (or `<colour>: text`) that names one of `colours` starts that colour's section. Other text is kept as is.
+export function lookFor(note: string | null, colour: string, colours: string[]): string | null {
+  if (!note) return null;
+  if (colours.length < 2) return note; // one colour: no sections, the note is used whole (as before D-47)
+  const names = new Set(colours.map((c) => c.trim().toLowerCase()));
+  const want = colour.trim().toLowerCase();
+  const out: string[] = [];
+  let section: string | null = null; // null: the shared part
+  for (const line of note.split('\n')) {
+    const m = /^\s*([^:]+?)\s*:(.*)$/.exec(line);
+    if (m && names.has(m[1].toLowerCase())) {
+      section = m[1].toLowerCase();
+      if (section === want && m[2].trim()) out.push(m[2].trim());
+    } else if (section === null || section === want) out.push(line);
+  }
+  return out.join('\n').trim() || null;
+}
+
 const EMOJI = /\p{Extended_Pictographic}/gu;
 const NO_NUMBERS = new Set<string>();
 const EQUIPMENT = /\b(phone|smartphone|tripod|selfie stick|camera crew)\b/i;
@@ -87,14 +106,16 @@ export function conceptProblems(brief: Brief, c: UgcConcept, seconds: number, re
 const StoryConcept = UgcConcept.extend({ shots: UgcConcept.shape.shots.max(5) });
 
 // `recent` holds earlier concepts of the same style. 'asmr' uses the ugc-asmr instructions and never speaks.
-export async function writeConcept(db: Db, config: Config, brief: Brief, recent: { caption: string; setting: string }[], now: Date, slotId: string, style: VideoStyle = videoStyle(db, brief.product)): Promise<UgcConcept> {
+// `colour` is chosen in code (D-47): the model is told to use it, the answer is set to it, and only its part of the note is sent.
+export async function writeConcept(db: Db, config: Config, brief: Brief, recent: { caption: string; setting: string }[], now: Date, slotId: string, style: VideoStyle = videoStyle(db, brief.product), colour: string | null = null): Promise<UgcConcept> {
   const purpose = style === 'asmr' ? 'ugc-asmr' : 'ugc';
   const seconds = config.tiers.clipSeconds;
   const month = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: config.timezone }).format(now);
   const year = Number(new Intl.DateTimeFormat('en-US', { year: 'numeric', timeZone: config.timezone }).format(now));
   const list = (xs: string[]) => (xs.length ? xs.map((x) => `- ${x}`).join('\n') : '(none)');
   const base =
-    `Write the concept for this video.\nVideo length: ${seconds} seconds.\nMonth: ${month} ${year}.\nProduct note: ${productLook(brief.product.handle) ?? 'none'}\n` +
+    `Write the concept for this video.\nVideo length: ${seconds} seconds.\nMonth: ${month} ${year}.\n${colour ? `Colour: ${JSON.stringify(colour)} — use this colour.\n` : ''}` +
+    `Product note: ${lookFor(productLook(brief.product.handle), colour ?? '', brief.product.colors) ?? 'none'}\n` +
     `Recent captions, do not reuse:\n${list(recent.map((r) => r.caption))}\nRecent settings, do not reuse:\n${list(recent.map((r) => r.setting))}`;
   let problems: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -106,6 +127,7 @@ export async function writeConcept(db: Db, config: Config, brief: Brief, recent:
       now,
     );
     if (style === 'asmr') c.line = ''; // nobody speaks, whatever the model wrote
+    if (colour) c.color = colour; // the photos and the note part were chosen for this colour, whatever the model wrote
     problems = conceptProblems(brief, c, seconds, recent.map((r) => r.caption), [year, year + 1], style);
     if (!problems.length) problems = await judgeTexts(db, config, brief, [{ label: 'caption', text: c.caption }, { label: 'line', text: c.line }], now, slotId);
     if (!problems.length) return c;

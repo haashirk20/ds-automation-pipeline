@@ -521,6 +521,10 @@ const TEXT_USE: Record<string, string> = { ugc: 'Writing what each video shows a
 const LOCKED_PROMPTS: [string, string, string][] = [['claims', 'Claim check', 'Makes sure ads claim only what the product facts say.'], ['copycheck', 'Caption check', 'Checks captions and titles against the product facts.'], ['vision', 'Frame check', 'Compares the video with the product photos; tested with its model (D-28).']];
 
 const productTitle = (db: Db, handle: string): string => (db.prepare('SELECT title FROM products WHERE handle = ?').get(handle) as { title: string } | undefined)?.title ?? handle;
+const productColours = (db: Db, handle: string): string[] => {
+  const r = db.prepare('SELECT json FROM briefs WHERE handle = ?').get(handle) as { json: string } | undefined;
+  return r ? ((JSON.parse(r.json) as Brief).product?.colors ?? []) : [];
+};
 // A product note's wording follows the product's saved video style (D-46).
 const noteAsmr = (db: Db, key: string) => key.startsWith('note:') && videoStyle(db, { handle: key.slice(5), title: productTitle(db, key.slice(5)) }) === 'asmr';
 const textName = (db: Db, key: string) => (key.startsWith('note:') ? `${noteAsmr(db, key) ? 'Look and theme' : 'Look'} of ${productTitle(db, key.slice(5))}` : (TEXT_NAME[key] ?? key));
@@ -551,14 +555,20 @@ export function promptEdit(ctx: Ctx, key: string | null = ctx.query.get('key'), 
   const a = activeText(ctx.db, key);
   const note = key.startsWith('note:');
   const asmr = noteAsmr(ctx.db, key);
+  // A product whose colours are different kits gets one note section per colour (D-47).
+  const colours = note ? productColours(ctx.db, key.slice(5)) : [];
+  const [c1, c2] = colours;
   const example = asmr
-    ? 'For example: In the box: a green notebook with a gold snake emblem, a tasselled bookmark, two sticker sheets, three washi tape rolls, wish cards and a pen, in a gift box tied with a velvet ribbon. Scene: deep green and gold, glossy nude nails, a candle and old books, a slow rainy evening. Name everything in the box: the video shows only those items.'
+    ? colours.length > 1
+      ? `For example: In the box: a notebook, a tasselled bookmark, two sticker sheets, washi tape rolls and a pen, in a gift box tied with a velvet ribbon. Name everything in the box: the video shows only those items.\n${c1}: deep green and gold, a gold snake emblem on the cover, glossy nude nails, a candle and old books, a slow rainy evening.\n${c2}: soft lilac and silver, a crescent moon on the cover, pale pink nails, fairy lights and dried flowers, a quiet morning.`
+      : 'For example: In the box: a green notebook with a gold snake emblem, a tasselled bookmark, two sticker sheets, three washi tape rolls, wish cards and a pen, in a gift box tied with a velvet ribbon. Scene: deep green and gold, glossy nude nails, a candle and old books, a slow rainy evening. Name everything in the box: the video shows only those items.'
     : 'For example: A matte black steel bottle with a screw lid, about 25 cm tall. The box holds the bottle and a cleaning brush.';
+  const sections = colours.length > 1 ? `This product comes in: ${colours.join(', ')}. Write what is the same for all first, then one section per colour starting with its name and a colon. ` : '';
   return { ...layout(ctx, `Edit: ${textName(ctx.db, key)}`, areaOf(key), html`<p class="muted">Used for: ${textUse(ctx.db, key)}. In use: ${inUse(a.id)}. <a href="/prompts/history?key=${encodeURIComponent(key)}">History</a></p>
 ${errSummary(errors.map((msg) => ({ id: 'body', msg })))}
 <form method="post" action="/prompts/preview">${csrfField(ctx)}<input type="hidden" name="key" value="${key}"><input type="hidden" name="base_id" value="${a.id ?? ''}">
 <p class="hint">House style, scene and product look texts are checked: prices, discounts and links are refused, even in an instruction not to use them.</p>
-<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">${asmr ? 'How it looks and the setting (colours, what is in the box, props, mood)' : note ? 'How it looks (colour, material, shape, what is in the box)' : 'Text'}</label><div class="ctl">${note ? html`<span class="hint">${example}</span>` : ''}<textarea id="body" name="body" rows="${note ? 8 : 24}">${body ?? a.body}</textarea></div></div>
+<div class="form-row${errors.length ? ' has-error' : ''}"><label for="body">${asmr ? 'How it looks and the setting (colours, what is in the box, props, mood)' : note ? 'How it looks (colour, material, shape, what is in the box)' : 'Text'}</label><div class="ctl">${note ? html`<span class="hint">${sections}${example.split('\n').map((l, i) => (i ? html`<br>${l}` : l))}</span>` : ''}<textarea id="body" name="body" rows="${note ? 8 : 24}">${body ?? a.body}</textarea></div></div>
 <div class="actions"><button class="primary" type="submit">Preview changes</button><a href="${note ? '/products' : '/prompts'}">Cancel</a></div></form>`), status: errors.length ? 422 : 200 };
 }
 

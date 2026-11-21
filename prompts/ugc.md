@@ -17,7 +17,7 @@ The owner's own videos follow one pattern. Keep to it.
 
 `line`: what she says in shot 1, at most 9 words, or an empty string when silence is funnier. Plain speech, no product name, no claim.
 
-`color`: the product colour shown. It must be one of the colours in the brief.
+`color`: the product colour shown. It must be one of the colours in the brief. When the request has a `Colour:` line, use exactly that colour.
 
 `setting`: one sentence. Where and when: the room, the season or time of day, two or three concrete details that make it look lived in. Use the month given in the request to pick a season that fits.
 

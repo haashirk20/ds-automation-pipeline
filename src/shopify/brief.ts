@@ -16,7 +16,7 @@ export type Product = {
   descriptionLines: string[];
   url: string;
   options: { name: string; values: string[] }[];
-  variants: { title: string; price: number; compareAtPrice: number | null; available: boolean }[];
+  variants: { title: string; price: number; compareAtPrice: number | null; available: boolean; color?: string | null; image?: string | null }[];
   images: { url: string; width: number; height: number; basename: string }[];
 };
 
@@ -50,7 +50,12 @@ export function imageBasename(url: string): string {
   return url.split('?')[0].split('#')[0].split('/').pop() ?? '';
 }
 
+// A photo's key for matching a variant photo to a product photo: the file name without query and size suffix.
+export const photoKey = (url: string): string => imageBasename(url).replace(/_(\d+x\d*|\d*x\d+)(?=\.[^.]+$)/, '').toLowerCase();
+
 export function normalize(raw: RawProduct, shop: string): Product {
+  const colorAt = raw.options.findIndex((o) => /colou?r/i.test(o.name));
+  const opt = (v: RawProduct['variants'][number]) => (colorAt >= 0 && colorAt < 3 ? [v.option1, v.option2, v.option3][colorAt] ?? null : null);
   return {
     handle: raw.handle,
     title: raw.title,
@@ -61,7 +66,7 @@ export function normalize(raw: RawProduct, shop: string): Product {
     descriptionLines: limitLines(descriptionLines(raw.body_html ?? ''), raw.handle),
     url: `https://${shop}/products/${raw.handle}`,
     options: raw.options.map((o) => ({ name: o.name, values: o.values })),
-    variants: raw.variants.map((v) => ({ title: v.title, price: Number(v.price), compareAtPrice: v.compare_at_price == null ? null : Number(v.compare_at_price), available: v.available })),
+    variants: raw.variants.map((v) => ({ title: v.title, price: Number(v.price), compareAtPrice: v.compare_at_price == null ? null : Number(v.compare_at_price), available: v.available, ...(colorAt >= 0 ? { color: opt(v), image: v.featured_image ? photoKey(v.featured_image.src) : null } : {}) })),
     images: raw.images.map((i) => ({ url: i.src, width: i.width, height: i.height, basename: imageBasename(i.src) })),
   };
 }
@@ -98,13 +103,16 @@ export function buildBrief(p: Product, shop: ShopMeta, config: Config, tagsText:
   p.descriptionLines.forEach((l, i) => facts.push({ id: `f-desc-${i + 1}`, text: l, source: 'body_html' }));
   if (shop.ships_to_countries.length) facts.push({ id: 'f-ships', text: `Ships to: ${shop.ships_to_countries.join(', ')}`, source: 'meta.json' });
 
+  // An untagged photo that is a colour variant's photo shows that colour; photo-tags.json still wins.
+  const variantColour = new Map<string, string>();
+  for (const v of p.variants) if (v.color && v.image && !variantColour.has(v.image)) variantColour.set(v.image, v.color);
   const shots: Shot[] = [];
   p.images.forEach((img, index) => {
     const file = `assets/${p.handle}/${img.basename}`;
     const entry = tags[img.basename];
     const mine = entry
       ? entry.shots.map((s) => ({ ...s, file, width: img.width, height: img.height }))
-      : [{ id: `photo-${index}`, file, width: img.width, height: img.height, kind: 'product' as const, variant: null, crop: null, note: '' }];
+      : [{ id: `photo-${index}`, file, width: img.width, height: img.height, kind: 'product' as const, variant: variantColour.get(photoKey(img.url)) ?? null, crop: null, note: '' }];
     shots.push(...mine);
   });
   const ids = new Set<string>();

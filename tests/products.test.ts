@@ -299,7 +299,9 @@ test('products page: a video style per product, saved with the choices; a choice
   // An ASMR product's look editor shows an ASMR theme example.
   kvSet(db, 'video_styles', '{}');
   const edit = await send('GET', `/prompts/edit?key=${encodeURIComponent('note:pn')}`, { cookie });
-  assert.match(edit.text, /Scene: deep green and gold, glossy nude nails/);
+  // Its brief has three colours, so the hint asks for one section per colour (D-47).
+  assert.match(edit.text, /This product comes in: Beige, Green, Red\. Write what is the same for all first, then one section per colour starting with its name and a colon\./);
+  assert.match(edit.text, /For example: In the box: [^<]*<br>Beige: deep green and gold, [^<]*<br>Green: /);
   assert.match(edit.text, /Look and theme of Magic World Notebook Kit/);
   assert.match(edit.text, /Used for: How the product and its unboxing scene look\./);
   assert.match(edit.text, /How it looks and the setting \(colours, what is in the box, props, mood\)/);
@@ -307,6 +309,12 @@ test('products page: a video style per product, saved with the choices; a choice
   const plainEdit = (await send('GET', `/prompts/edit?key=${encodeURIComponent('note:pa')}`, { cookie })).text;
   assert.doesNotMatch(plainEdit, /Scene:/);
   assert.match(plainEdit, /Look of Title pa/);
+  // A one-colour ASMR product keeps the D-46 example and no section hint.
+  db.prepare("INSERT OR REPLACE INTO products (handle, title, raw_json, fetched_at) VALUES ('p1', 'One Journal', '{}', 't')").run();
+  db.prepare("INSERT OR REPLACE INTO briefs (handle, source_hash, json, built_at) VALUES ('p1', 'h', ?, 't')").run(JSON.stringify({ ...base, product: { ...base.product, handle: 'p1', title: 'One Journal', colors: ['Green'] } }));
+  const one = (await send('GET', `/prompts/edit?key=${encodeURIComponent('note:p1')}`, { cookie })).text;
+  assert.match(one, /Scene: deep green and gold, glossy nude nails/);
+  assert.doesNotMatch(one, /This product comes in/);
 });
 
 test('plain words for a failed store read', async () => {

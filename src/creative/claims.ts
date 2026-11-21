@@ -27,7 +27,9 @@ export const norm = (s: string): string => s.normalize('NFKC').replace(/\p{Cf}/g
 
 const DISCOUNT = /% off|\b\d+\s*off\b|half[\s-]*(off|price)|\bbogo\b|buy (one|1)\b|clearance|discount|\bsales?\b|save \$|was \$|(?<!\bbig )\bdeals?\b(?! with\b)/i; // not "no big deal" or "deal with it"
 const URGENCY = /limited time|today only|last chance|hurry|selling fast|while supplies last|\bact now\b|ends (soon|tonight)/i;
-const REVIEW = /review|rated|\bstars?\b|customers (say|love)/i;
+// A star is a rating only with a number or rating words ("5 stars", "five-star", "4.8/5 stars", "star rating") or as ★;
+// a decorative star ("gold stars on the cover", "starry", "star-shaped") is scene text.
+const REVIEW = /review|rated|customers (say|love)|(\b\d+(\.\d+)?|\b(one|two|three|four|five))(\s*\/\s*\d+)?[\s-]*stars?\b|\bstars? ratings?\b|\bratings?\b|[★☆⭐🌟]/iu;
 const BANNED = /best.?sell|#\s?1|number one|guarantee|\bcure|\bheal|pain relief|medical|doctor/i;
 const FREE_SHIPPING = /free\s+(shipping|delivery)/i;
 // Names from a franchise the shop has no licence for (D-46): a trademark risk on a paid product post.

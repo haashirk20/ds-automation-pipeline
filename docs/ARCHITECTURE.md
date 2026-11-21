@@ -141,7 +141,10 @@ Every system text ends with the brief JSON (`systemPrompt`).
    `kv video_styles`, else `asmr` for a notebook or journal title, else `story`) picks the
    instructions: `ugc` for a story, `ugc-asmr` for a first-person, hands-only unboxing with no spoken
    line (code empties `line`), up to six shots, no woman rule and no music. Recent captions and
-   settings are listed per style, and `master_json` stores the style. For a story, the script model writes a concept as structured JSON: a setting, one woman, a
+   settings are listed per style, and `master_json` stores the style. For a product with two or more
+   colours, code picks the colour first (D-47, `pickColour`: never used, else used longest ago) and the
+   concept is told to use it; the product note reaches the writer, the clip prompt and the frame check
+   only as its shared part plus that colour's section (`lookFor`). For a story, the script model writes a concept as structured JSON: a setting, one woman, a
    product colour, one caption of at most 12 words, at most one spoken line of at most 9 words, and
    three to five shots whose seconds add up to the clip length. Code checks the caption and line
    against the brief (numbers, any price: a currency sign or the shop's currency code next to a digit, banned phrases, repeats of recent captions), then the claim
