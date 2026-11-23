@@ -122,15 +122,15 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   headers `Authorization: OAuth <token>`, `offset: 0`, `file_size`; poll `GET /{container}?fields=status_code`
   every 10 s up to 10 min until FINISHED (ERROR/EXPIRED => fail); `POST /{ig}/media_publish` creation_id. Return media id.
   Uses the Page token (Facebook Login for Business).
-- YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per file
-  (publicUrl cached by file path); the account list is fetched once. Each platform is its own POST /posts with
+- YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per slot
+  (publicUrl cached for the current slot only); the account list is fetched once per slot. Each platform is its own POST /posts with
   `Idempotency-Key: <slot id>-<platform>`. YouTube entry: platforms:[{platform:"youtube", accountId,
   platformSpecificData:{title: Title, visibility: Privacy, madeForKids:false}}], content = Text with `<` `>` stripped.
 - TikTok via Zernio (base `https://zernio.com/api/v1`, `Authorization: Bearer <key>`; reference
   implementation: /home/haashir/cs_projects/automated_upload_pipeline/src/publish/bridge.ts):
   GET /accounts → the active tiktok account; GET /accounts/{id}/tiktok/creator-info?mediaType=video →
-  privacy must offer PUBLIC_TO_EVERYONE else fail; POST /media/presign {filename, contentType:"video/mp4", size}
-  → PUT file to uploadUrl (no Authorization header) → POST /posts with `Idempotency-Key: <slot id>-tiktok`,
+  privacy must offer PUBLIC_TO_EVERYONE else fail; media from the shared slot upload (POST /media/presign, then PUT
+  to uploadUrl with no Authorization header) → POST /posts with `Idempotency-Key: <slot id>-tiktok`,
   {content: Text, publishNow: true, platforms:[{platform:"tiktok", accountId}], mediaItems:[{type:"video", url: publicUrl}],
   tiktokSettings:{privacy_level, allow_comment, allow_duet, allow_stitch (from creator-info interactionSettings, default true),
   content_preview_confirmed:true, express_consent_given:true, video_made_with_ai:false, commercialContentType:"brand_organic"}}.

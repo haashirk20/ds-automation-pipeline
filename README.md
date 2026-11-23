@@ -36,6 +36,8 @@ export GOOGLE_CLIENT_SECRET=...
 
 8. It prints a link. Open it, sign in, allow access. The terminal then prints a refresh token.
    Copy it. This is `GOOGLE_REFRESH_TOKEN`. Treat it like a password.
+   Already made a refresh token with an earlier version (it also asked for YouTube)? It still works.
+   Running `auth-google` again is optional.
 
 ### b. Google Drive
 
