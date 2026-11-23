@@ -174,6 +174,9 @@ paused = no
 
 ## 6. Risks
 
+- Never run this workflow and the Oracle VM version (branch `batch-vm`) against the same Drive folder.
+  They do not share a lock, so both could post the same slot.
+
 - Music from your Drive may get the video muted on TikTok business accounts (TikTok limits business
   accounts to its commercial music library), or claimed by Content ID on YouTube. Use music you own or
   that is cleared for use.
