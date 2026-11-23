@@ -17,7 +17,7 @@ import (
 const (
 	googleTokenURL = "https://oauth2.googleapis.com/token"
 	googleAuthURL  = "https://accounts.google.com/o/oauth2/v2/auth"
-	googleScopes   = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/youtube.upload"
+	googleScopes   = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"
 )
 
 type googleAuth struct {

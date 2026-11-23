@@ -30,7 +30,7 @@ Root folder (DRIVE_ROOT_ID, made by the owner). `init` creates inside it, once, 
 `init` is idempotent: it finds existing items by name (`'ROOT' in parents and name='x' and trashed=false`)
 and creates only what's missing. It refuses if there are duplicates of a name.
 `tick` never creates any of these; it finds them by name and fails if a name is missing or duplicated.
-OAuth scopes: `https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/youtube.upload`.
+OAuth scopes: `https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file`. Google is used for Drive only; YouTube posts through Zernio.
 Docs are read with `files/{id}/export?mimeType=text/plain`; strip a UTF-8 BOM and `\r`.
 Listing: `pageSize=1000`, follow `nextPageToken`, `trashed=false`, videos `mimeType contains 'video/'`,
 music `mimeType contains 'audio/'`. Download `files/{id}?alt=media` streamed to disk.
@@ -112,9 +112,6 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
 (client_id, client_secret, refresh_token, grant_type=refresh_token) and caches until expiry-60s.
 
 ## Publishers
-- YouTube: resumable upload `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`
-  with JSON snippet{title, description=Text, categoryId "22"}, status{privacyStatus, selfDeclaredMadeForKids:false};
-  then PUT the file to the Location URL. Return video id.
 - Facebook Page Reels (Graph API version: one constant `graphVersion = "v26.0"`; v26.0 is the newest seen on the versions page snippet 2026-11-22, unverified):
   `POST https://graph.facebook.com/{ver}/{page}/video_reels` upload_phase=start → video_id, upload_url;
   `POST https://rupload.facebook.com/video-upload/{ver}/{video_id}` headers `Authorization: OAuth <token>`,
@@ -125,6 +122,10 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   headers `Authorization: OAuth <token>`, `offset: 0`, `file_size`; poll `GET /{container}?fields=status_code`
   every 10 s up to 10 min until FINISHED (ERROR/EXPIRED => fail); `POST /{ig}/media_publish` creation_id. Return media id.
   Uses the Page token (Facebook Login for Business).
+- YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per file
+  (publicUrl cached by file path); the account list is fetched once. Each platform is its own POST /posts with
+  `Idempotency-Key: <slot id>-<platform>`. YouTube entry: platforms:[{platform:"youtube", accountId,
+  platformSpecificData:{title: Title, visibility: Privacy, madeForKids:false}}], content = Text with `<` `>` stripped.
 - TikTok via Zernio (base `https://zernio.com/api/v1`, `Authorization: Bearer <key>`; reference
   implementation: /home/haashir/cs_projects/automated_upload_pipeline/src/publish/bridge.ts):
   GET /accounts → the active tiktok account; GET /accounts/{id}/tiktok/creator-info?mediaType=video →

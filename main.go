@@ -91,7 +91,6 @@ func run(ctx, stopNew context.Context, cmd string, now time.Time, clock func() t
 		return nil
 	}
 
-	t.pubs["youtube"] = newYouTube(auth, hc)
 	if page, tok := getenv("META_PAGE_ID"), getenv("META_PAGE_TOKEN"); page != "" && tok != "" {
 		t.pubs["facebook"] = newFacebook(page, tok, hc)
 		if ig := getenv("META_IG_USER_ID"); ig != "" {
@@ -99,7 +98,8 @@ func run(ctx, stopNew context.Context, cmd string, now time.Time, clock func() t
 		}
 	}
 	if key := getenv("ZERNIO_API_KEY"); key != "" {
-		t.pubs["tiktok"] = newTikTok(key, hc)
+		z := newZernio(key, hc)
+		t.pubs["youtube"], t.pubs["tiktok"] = z.youtube(), z.tiktok()
 	}
 	if cmd == "serve" {
 		return serveCmd(ctx, stopNew, t, clock, getenv)

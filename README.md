@@ -10,15 +10,15 @@ the admin page (settings, captions, upload, Post now).
 **WARNING: never run the GitHub Actions workflow (branch `batch-actions`) and this VM on the same Drive
 folder.** They would both post the same slots.
 
-Cost: $0 on Oracle Always Free. Zernio is free for up to 2 connected accounts (only TikTok connects there).
-YouTube, Facebook and Instagram use their official APIs, which are free.
+Cost: $0 on Oracle Always Free. Zernio is free for up to 2 connected accounts (YouTube and TikTok connect there).
+Facebook and Instagram use their official APIs, which are free.
 
 ## 2. Setup (once)
 
-### a. Google Cloud (YouTube and Drive)
+### a. Google Cloud (Drive)
 
 1. Go to https://console.cloud.google.com and create a project.
-2. Enable two APIs: Google Drive API and YouTube Data API v3.
+2. Enable one API: Google Drive API. You do not need the YouTube Data API.
 3. Open the OAuth consent screen. Choose user type External. Add your own Google account as a user.
 4. Publish the app: set the status to "In production". Do not leave it in "Testing". In Testing, Google
    says the app "is issued a refresh token expiring in 7 days", and posting would stop after a week.
@@ -86,10 +86,10 @@ Verify in Meta's UI. Menus change often.
 6. The token stops working if you change your Facebook password or remove the app from your account.
    The next post then fails (see the logs). Repeat step 3 and update `META_PAGE_TOKEN` in `/etc/uploader.env`.
 
-### d. Zernio (TikTok)
+### d. Zernio (YouTube and TikTok)
 
 1. Sign up at https://zernio.com.
-2. Connect your TikTok account. Connect only TikTok.
+2. Connect your YouTube channel and your TikTok account. These are your 2 free accounts. Connect no others.
 3. Create an API key. This is `ZERNIO_API_KEY`.
 
 ### e. Oracle VM
@@ -192,7 +192,7 @@ paused = no
 - Music from your Drive may get the video muted on TikTok business accounts (TikTok limits business
   accounts to its commercial music library), or claimed by Content ID on YouTube. Use music you own or
   that is cleared for use.
-- Daily limits: YouTube allows about 100 uploads a day on the default quota. Facebook allows 30 Reels a
+- Daily limits: Zernio posts are unlimited, but YouTube's own daily upload limits still apply. Facebook allows 30 Reels a
   day. Instagram allows about 50 posts a day. Normal use is far below these.
 - Tokens: the Meta token can die (see 2c). The Google refresh token dies if the app goes back to
   Testing or if you revoke access.
