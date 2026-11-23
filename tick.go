@@ -8,7 +8,9 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +23,50 @@ type ticker struct {
 	log     *slog.Logger
 	ffmpeg  string
 	ffprobe string
+
+	mu    sync.Mutex
+	ids   map[string]string    // resolved Drive IDs, dropped when Drive answers 404
+	retry map[string]time.Time // slot ID -> do not try again before this time
+}
+
+const retryDelay = 20 * time.Minute
+
+// resolveIDs returns the Drive IDs of the named root items, asking Drive only for names not cached.
+func (t *ticker) resolveIDs(ctx context.Context, names ...string) (map[string]string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := map[string]string{}
+	var missing []string
+	for _, n := range names {
+		if id := t.ids[n]; id != "" {
+			out[n] = id
+		} else {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		got, err := t.d.resolve(ctx, t.root, missing...)
+		if err != nil {
+			return nil, err
+		}
+		if t.ids == nil {
+			t.ids = map[string]string{}
+		}
+		for k, v := range got {
+			t.ids[k], out[k] = v, v
+		}
+	}
+	return out, nil
+}
+
+// fix drops the ID cache when err is a Drive 404 (item deleted or replaced) and returns err.
+func (t *ticker) fix(err error) error {
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		t.mu.Lock()
+		t.ids = nil
+		t.mu.Unlock()
+	}
+	return err
 }
 
 type loaded struct {
@@ -30,10 +76,20 @@ type loaded struct {
 	due []slot
 }
 
-// load reads settings and state and works out the due slots. It is all `due` needs.
-func (t *ticker) load(ctx context.Context, now time.Time) (loaded, error) {
+// load reads settings and, when a slot is in its window (or force), state, and works out the due slots.
+// A stale cached ID is dropped and the load tried once more.
+func (t *ticker) load(ctx context.Context, now time.Time, force bool) (loaded, error) {
+	l, err := t.load1(ctx, now, force)
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		t.fix(err)
+		return t.load1(ctx, now, force)
+	}
+	return l, err
+}
+
+func (t *ticker) load1(ctx context.Context, now time.Time, force bool) (loaded, error) {
 	var l loaded
-	ids, err := t.d.resolve(ctx, t.root, "settings", "state.json")
+	ids, err := t.resolveIDs(ctx, "settings", "state.json")
 	if err != nil {
 		return l, err
 	}
@@ -44,6 +100,9 @@ func (t *ticker) load(ctx context.Context, now time.Time) (loaded, error) {
 	}
 	if l.set, err = parseSettings(text); err != nil {
 		return l, err
+	}
+	if !force && len(dueSlots(l.set, state{}, now)) == 0 { // nothing in its window, state.json is not needed
+		return l, nil
 	}
 	b, err := t.d.media(ctx, ids["state.json"])
 	if err != nil {
@@ -57,21 +116,33 @@ func (t *ticker) load(ctx context.Context, now time.Time) (loaded, error) {
 }
 
 func (t *ticker) isDue(ctx context.Context, now time.Time) (bool, error) {
-	l, err := t.load(ctx, now)
+	l, err := t.load(ctx, now, false)
 	return len(l.due) > 0, err
 }
 
 // tick runs every due slot. Claim failure aborts; other failures are counted and returned at the end.
-func (t *ticker) tick(ctx context.Context, now time.Time) error {
-	l, err := t.load(ctx, now)
+func (t *ticker) tick(ctx context.Context, now time.Time) error { return t.run(ctx, now, "") }
+
+// run is tick plus, when manual is not empty, one extra slot with that ID (claimed like any slot).
+func (t *ticker) run(ctx context.Context, now time.Time, manual string) error {
+	l, err := t.load(ctx, now, manual != "")
 	if err != nil {
 		return err
 	}
+	t.mu.Lock()
+	l.due = slices.DeleteFunc(l.due, func(sl slot) bool { return t.retry[sl.ID].After(now) })
+	t.mu.Unlock()
+	if manual != "" {
+		if _, done := l.st.Claims[manual]; done {
+			return fmt.Errorf("slot %q is already claimed", manual)
+		}
+		l.due = append(l.due, slot{ID: manual, At: now})
+	}
 	if len(l.due) == 0 {
-		t.log.Info("nothing due")
+		t.log.Debug("nothing due")
 		return nil
 	}
-	rest, err := t.d.resolve(ctx, t.root, "videos", "music", "captions")
+	rest, err := t.resolveIDs(ctx, "videos", "music", "captions")
 	if err != nil {
 		return err
 	}
@@ -88,12 +159,14 @@ func (t *ticker) tick(ctx context.Context, now time.Time) error {
 		post, cleanup, err := t.prepare(ctx, sl, l)
 		if err != nil {
 			cleanup()
-			t.log.Error("slot failed before claim, will retry next run", "slot", sl.ID, "err", err.Error())
+			t.setRetry(sl.ID, now)
+			t.log.Error("slot failed before claim, will retry in 20 min", "slot", sl.ID, "err", t.fix(err).Error())
 			failures++
 			continue
 		}
 		// the claim is written before any publish request: a crash later loses the slot, never doubles it
 		if t.dryRun {
+			t.setRetry(sl.ID, now)
 			t.log.Info("dry run: claim skipped", "slot", sl.ID)
 		} else {
 			claim(&l.st, sl.ID, now)
@@ -110,6 +183,15 @@ func (t *ticker) tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("%d failure(s)", failures)
 	}
 	return nil
+}
+
+func (t *ticker) setRetry(id string, now time.Time) {
+	t.mu.Lock()
+	if t.retry == nil {
+		t.retry = map[string]time.Time{}
+	}
+	t.retry[id] = now.Add(retryDelay)
+	t.mu.Unlock()
 }
 
 func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) int {

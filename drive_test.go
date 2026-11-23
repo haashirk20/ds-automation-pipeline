@@ -31,6 +31,10 @@ type fkDrive struct {
 	failUpdate bool
 	onUpdate   func(id, body string)
 	nextID     int
+	ranges     []string // Content-Range of each resumable chunk
+	upParent   string
+	mediaGets  map[string]int // GET alt=media count per file ID
+	shortRange bool           // answer 308 with a Range that is too short
 	srv        *httptest.Server
 }
 
@@ -116,6 +120,10 @@ func (f *fkDrive) handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":{"message":"not found"}}`, 404)
 			return
 		}
+		if f.mediaGets == nil {
+			f.mediaGets = map[string]int{}
+		}
+		f.mediaGets[x.id]++
 		io.WriteString(w, x.content)
 	case r.Method == "PATCH" && strings.HasPrefix(r.URL.Path, "/upload/drive/v3/files/"):
 		if f.failUpdate {
@@ -144,6 +152,33 @@ func (f *fkDrive) handle(w http.ResponseWriter, r *http.Request) {
 		id := fmt.Sprintf("new%d", f.nextID)
 		f.add(id, meta.Name, meta.MimeType, meta.Parents[0], "")
 		fmt.Fprintf(w, `{"id":%q}`, id)
+	case r.Method == "POST" && r.URL.Query().Get("uploadType") == "resumable":
+		var meta struct {
+			Name, MimeType string
+			Parents        []string
+		}
+		json.NewDecoder(r.Body).Decode(&meta)
+		f.nextID++
+		id := fmt.Sprintf("new%d", f.nextID)
+		f.add(id, meta.Name, meta.MimeType, meta.Parents[0], "")
+		f.upParent = id
+		w.Header().Set("Location", f.srv.URL+"/session/"+id)
+	case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/session/"):
+		x := f.get(strings.TrimPrefix(r.URL.Path, "/session/"))
+		b, _ := io.ReadAll(r.Body)
+		x.content += string(b)
+		cr := r.Header.Get("Content-Range")
+		f.ranges = append(f.ranges, cr)
+		if strings.HasSuffix(cr, "/*") {
+			end := len(x.content) - 1
+			if f.shortRange {
+				end--
+			}
+			w.Header().Set("Range", fmt.Sprintf("bytes=0-%d", end))
+			w.WriteHeader(308)
+			return
+		}
+		fmt.Fprintf(w, `{"id":%q}`, x.id)
 	case r.Method == "POST" && r.URL.Path == "/upload/drive/v3/files":
 		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		mr := multipart.NewReader(r.Body, params["boundary"])

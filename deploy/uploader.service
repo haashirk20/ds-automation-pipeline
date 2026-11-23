@@ -1,0 +1,27 @@
+[Unit]
+Description=uploader (Drive to shorts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=uploader
+EnvironmentFile=/etc/uploader.env
+ExecStart=/usr/local/bin/uploader serve
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=16min
+MemoryMax=800M
+Nice=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=yes
+RuntimeDirectory=uploader
+
+[Install]
+WantedBy=multi-user.target

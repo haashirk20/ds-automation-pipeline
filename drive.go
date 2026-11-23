@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -267,4 +268,92 @@ func initLayout(ctx context.Context, d *drive, root string, out io.Writer) error
 		fmt.Fprintf(out, "%s %s %s\n", it.name, id, state)
 	}
 	return nil
+}
+
+// uploadChunk is the resumable-upload chunk size; Drive wants a multiple of 256 KiB.
+var uploadChunk = 8 << 20
+
+// uploadStream creates a file in parent from r with a resumable upload of unknown length,
+// holding at most one chunk in memory. It returns the new file ID.
+func (d *drive) uploadStream(ctx context.Context, parent, name, mime string, r io.Reader) (string, error) {
+	meta, _ := json.Marshal(map[string]any{"name": name, "mimeType": mime, "parents": []string{parent}})
+	ictx, cancel := context.WithTimeout(ctx, time.Minute)
+	resp, err := d.do(ictx, "POST", d.upload+"/files?uploadType=resumable&fields=id", bytes.NewReader(meta), "application/json; charset=UTF-8")
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	sess := resp.Header.Get("Location")
+	resp.Body.Close()
+	cancel()
+	if sess == "" {
+		return "", fmt.Errorf("drive upload %q: no session URL", name)
+	}
+	br := bufio.NewReader(r)
+	buf := make([]byte, uploadChunk)
+	var sent int64
+	for {
+		n, err := io.ReadFull(br, buf)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return "", fmt.Errorf("drive upload %q: reading: %w", name, err)
+		}
+		_, perr := br.Peek(1)
+		last := perr != nil // a full chunk followed by EOF is also last
+		if perr != nil && perr != io.EOF {
+			return "", fmt.Errorf("drive upload %q: reading: %w", name, perr)
+		}
+		if n == 0 && sent == 0 {
+			return "", fmt.Errorf("drive upload %q: empty file", name)
+		}
+		rng := fmt.Sprintf("bytes %d-%d/*", sent, sent+int64(n)-1)
+		if last {
+			rng = fmt.Sprintf("bytes %d-%d/%d", sent, sent+int64(n)-1, sent+int64(n))
+		}
+		id, err := d.putChunk(ctx, sess, buf[:n], rng, last, sent+int64(n)-1)
+		if err != nil {
+			return "", fmt.Errorf("drive upload %q: %w", name, err)
+		}
+		sent += int64(n)
+		if last {
+			return id, nil
+		}
+	}
+}
+
+func (d *drive) putChunk(ctx context.Context, sess string, chunk []byte, rng string, last bool, end int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	tok, err := d.token(ctx)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "PUT", sess, bytes.NewReader(chunk))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Range", rng)
+	resp, err := httpDo(d.hc, req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if !last {
+		if resp.StatusCode != 308 {
+			return "", apiError("PUT", sess, resp.StatusCode, b)
+		}
+		if got, want := resp.Header.Get("Range"), fmt.Sprintf("bytes=0-%d", end); got != want {
+			return "", fmt.Errorf("Drive stored %q, expected %q", got, want)
+		}
+		return "", nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return "", apiError("PUT", sess, resp.StatusCode, b)
+	}
+	var f driveFile
+	if json.Unmarshal(b, &f) != nil || f.ID == "" {
+		return "", fmt.Errorf("bad response")
+	}
+	return f.ID, nil
 }

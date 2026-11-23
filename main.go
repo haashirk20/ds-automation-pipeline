@@ -16,32 +16,51 @@ const defaultFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: uploader init|due|tick|auth-google")
+		fmt.Fprintln(os.Stderr, "usage: uploader init|due|tick|serve|auth-google")
 		os.Exit(2)
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	var ctx, stopNew context.Context // ctx cancels in-flight work, stopNew only stops starting new work
+	var stop func()
+	if os.Args[1] == "serve" {
+		ctx, stopNew = serveSignals(15 * time.Minute)
+		stop = func() {}
+	} else {
+		ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		stopNew = ctx
+	}
 	defer stop()
-	if err := run(ctx, os.Args[1], time.Now(), os.Getenv); err != nil {
+	if err := run(ctx, stopNew, os.Args[1], time.Now(), time.Now, os.Getenv); err != nil {
 		slog.Error("failed", "cmd", os.Args[1], "err", err.Error())
 		stop()
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cmd string, now time.Time, getenv func(string) string) error {
+func run(ctx, stopNew context.Context, cmd string, now time.Time, clock func() time.Time, getenv func(string) string) error {
 	// tokens ride on these requests, so redirects are never followed
 	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	if cmd == "auth-google" {
 		return authGoogle(ctx, hc, googleTokenURL, getenv("GOOGLE_CLIENT_ID"), getenv("GOOGLE_CLIENT_SECRET"), os.Stdout)
 	}
-	if cmd != "init" && cmd != "due" && cmd != "tick" {
+	if cmd != "init" && cmd != "due" && cmd != "tick" && cmd != "serve" {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	root := getenv("DRIVE_ROOT_ID")
 	if root == "" {
 		return fmt.Errorf("DRIVE_ROOT_ID is not set")
+	}
+	if cmd == "serve" || cmd == "tick" {
+		path := getenv("LOCK_FILE")
+		if path == "" {
+			path = "/run/uploader/lock"
+		}
+		lock, err := lockFile(path)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
 	}
 	auth := &googleAuth{
 		clientID: getenv("GOOGLE_CLIENT_ID"), clientSecret: getenv("GOOGLE_CLIENT_SECRET"),
@@ -81,6 +100,9 @@ func run(ctx context.Context, cmd string, now time.Time, getenv func(string) str
 	}
 	if key := getenv("ZERNIO_API_KEY"); key != "" {
 		t.pubs["tiktok"] = newTikTok(key, hc)
+	}
+	if cmd == "serve" {
+		return serveCmd(ctx, stopNew, t, clock, getenv)
 	}
 	return t.tick(ctx, now)
 }

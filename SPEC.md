@@ -1,4 +1,4 @@
-# uploader — spec (branch batch-actions)
+# uploader — spec (branch batch-vm; see "VM branch" at the end)
 
 Tiny unattended tool. Each posting slot: pick a random video from Google Drive, a random music track,
 a caption (pinned or random), burn the caption onto the video, add the music, and post the result to
@@ -135,3 +135,40 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   content_preview_confirmed:true, express_consent_given:true, video_made_with_ai:false, commercialContentType:"brand_organic"}}.
   409 with details.existingPostId => treat as that post. Then poll GET /posts/{id} every 10 s up to 5 min until
   status published (failed => error, still publishing at timeout => log warning, return id).
+
+## VM branch (batch-vm)
+Runs on an Oracle Cloud VM instead of GitHub Actions. `.github/workflows/post.yml` is removed; `test.yml` stays.
+Slot, claim and 3 h window logic is unchanged.
+
+- `uploader serve`: ticks once at start, then every minute (`time.Ticker`; main passes `time.Now`), running the
+  same code as `tick`. One run at a time (mutex); ffmpeg is a child process, so memory returns after each run.
+  First SIGINT/SIGTERM: no new run starts, the current one finishes. Second signal or 15 min later: its context is cancelled.
+- Admin page in the same process on `ADMIN_ADDR` (default `127.0.0.1:8080`; start refused unless the host is a
+  loopback IP or `localhost`). Reach it with `ssh -L 8080:127.0.0.1:8080 vm` and open `http://localhost:8080`;
+  the local tunnel port must equal the server port, because the Host header is checked against `127.0.0.1:<port>` / `localhost:<port>`.
+  - HTTP basic auth, any user name, password `ADMIN_PASSWORD` (>= 12 chars, required), constant-time compare.
+  - POST only changes things; an Origin header, when present, must be `http://127.0.0.1:<port>` or `http://localhost:<port>`;
+    every POST needs the per-process CSRF token (form field `csrf`; the upload form carries it in the URL).
+  - Pages: Status (slots today, videos per day, counts, last run and error, recent claims, Post now), Settings, Captions
+    (+ add one line), Upload. Settings are validated by `parseSettings` before anything is written.
+  - Docs are written with `files.update` `uploadType=media`, `Content-Type: text/plain`. Unverified against live Drive:
+    it is expected to replace the content of a Google Doc (converted); if Drive rejects it, switch to a multipart update with metadata `mimeType` = Doc and a text/plain part.
+  - Upload: multipart body read as a stream, forwarded to a Drive resumable upload in 8 MiB chunks into `videos/` or `music/`.
+    Extensions: video .mp4 .mov .m4v .webm; music .mp3 .m4a .aac .wav .ogg. Cap `ADMIN_MAX_UPLOAD_MB` (default 500).
+  - Post now: a slot `manual YYYY-MM-DD HH:MM:SS` claimed and published like any slot, ignoring `paused`; refused while a run is going.
+- Env adds: `ADMIN_ADDR`, `ADMIN_PASSWORD`, `ADMIN_MAX_UPLOAD_MB`. See `deploy/uploader.env.example`.
+- Deploy: `deploy/setup.sh` (as root, Ubuntu 24.04), `deploy/uploader.service` (systemd, MemoryMax=800M, hardened).
+- Build: `GOOS=linux GOARCH=arm64 go build -trimpath -ldflags=-s -o uploader .` (Ampere A1);
+  `GOOS=linux GOARCH=amd64 go build -trimpath -ldflags=-s -o uploader .` (E2 micro).
+
+Review changes:
+- Every admin POST answers 303 to a GET; the result is kept in memory and shown once. The Post now form carries a random
+  one-time nonce (new on each status page view); the slot is `manual <nonce>` and an already-claimed ID is refused, so F5 cannot post twice.
+- `serve` and `tick` hold an exclusive `flock` on `LOCK_FILE` (default `/run/uploader/lock`; the unit sets `RuntimeDirectory=uploader`);
+  a second process exits non-zero.
+- A slot that fails before its claim (and, in DRY_RUN, a slot that rendered) is skipped for 20 min, in memory only.
+- Resolved Drive IDs are cached and dropped on a Drive 404. `state.json` is read only when a slot is inside its 3 h window
+  (or for the admin page / a manual post). "Nothing due" logs at debug level.
+- A resumable-upload chunk is accepted only when Drive's 308 reply says `Range: bytes=0-<end of what was sent>`.
+- Admin POST bodies are capped at 1 MiB except `/upload`; the CSRF token is accepted from the URL only on `/upload`. A failed login waits 1 s.
+- Env adds `LOCK_FILE`.
