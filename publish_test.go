@@ -210,9 +210,19 @@ func TestInstagramPublishFailureNotRetried(t *testing.T) {
 	}
 }
 
+// Recorded by zServer; tests in this file do not run in parallel.
+var (
+	gotPosts                     = map[string]map[string]any{}
+	gotKeys                      = map[string]string{}
+	presigns, puts, accountLists atomic.Int32
+)
+
 func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.Int32) (*httptest.Server, *string) {
 	var putAuth string
 	var srv *httptest.Server
+	presigns.Store(0)
+	puts.Store(0)
+	accountLists.Store(0)
 	mux := http.NewServeMux()
 	chk := func(r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+secret {
@@ -221,7 +231,8 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 	}
 	mux.HandleFunc("/accounts", func(w http.ResponseWriter, r *http.Request) {
 		chk(r)
-		writeJSON(w, 200, map[string]any{"accounts": []map[string]any{{"_id": "A0", "platform": "facebook"}, {"_id": "A1", "platform": "tiktok", "isActive": true}}})
+		accountLists.Add(1)
+		writeJSON(w, 200, map[string]any{"accounts": []map[string]any{{"_id": "A0", "platform": "facebook"}, {"_id": "A1", "platform": "tiktok", "isActive": true}, {"_id": "A2", "platform": "youtube"}}})
 	})
 	mux.HandleFunc("/accounts/A1/tiktok/creator-info", func(w http.ResponseWriter, r *http.Request) {
 		chk(r)
@@ -230,9 +241,11 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 	})
 	mux.HandleFunc("/media/presign", func(w http.ResponseWriter, r *http.Request) {
 		chk(r)
+		presigns.Add(1)
 		writeJSON(w, 200, map[string]string{"uploadUrl": srv.URL + "/put", "publicUrl": "https://cdn.example/v.mp4"})
 	})
 	mux.HandleFunc("/put", func(w http.ResponseWriter, r *http.Request) {
+		puts.Add(1)
 		putAuth = r.Header.Get("Authorization")
 		b, _ := io.ReadAll(r.Body)
 		if len(b) != 10 || r.ContentLength != 10 {
@@ -242,14 +255,18 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 	mux.HandleFunc("/posts", func(w http.ResponseWriter, r *http.Request) {
 		chk(r)
 		posts.Add(1)
-		if r.Header.Get("Idempotency-Key") != "2026-11-22 09:00#1-tiktok" {
-			t.Errorf("bad idempotency key")
-		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		ts, _ := body["tiktokSettings"].(map[string]any)
-		if ts["allow_duet"] != false || ts["allow_comment"] != true || ts["privacy_level"] != "PUBLIC_TO_EVERYONE" {
-			t.Errorf("bad tiktokSettings %v", ts)
+		plat := body["platforms"].([]any)[0].(map[string]any)["platform"].(string)
+		gotPosts[plat], gotKeys[plat] = body, r.Header.Get("Idempotency-Key")
+		if gotKeys[plat] != "2026-11-22 09:00#1-"+plat {
+			t.Errorf("bad idempotency key")
+		}
+		if plat == "tiktok" {
+			ts, _ := body["tiktokSettings"].(map[string]any)
+			if ts["allow_duet"] != false || ts["allow_comment"] != true || ts["privacy_level"] != "PUBLIC_TO_EVERYONE" {
+				t.Errorf("bad tiktokSettings %v", ts)
+			}
 		}
 		switch postStatus {
 		case 409:
@@ -267,17 +284,19 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 		if polls.Add(1) >= 2 {
 			st = "published"
 		}
-		writeJSON(w, 200, map[string]any{"post": map[string]any{"_id": id, "platforms": []map[string]string{{"platform": "tiktok", "status": st}}}})
+		writeJSON(w, 200, map[string]any{"post": map[string]any{"_id": id, "platforms": []map[string]string{{"platform": "youtube", "status": st}, {"platform": "tiktok", "status": st}}}})
 	})
 	srv = httptest.NewServer(mux)
 	return srv, &putAuth
 }
 
-func newTT(srv *httptest.Server) *tiktok {
-	tt := newTikTok(secret, srv.Client()).(*tiktok)
-	tt.zernio, tt.pollEvery, tt.pollFor = srv.URL, time.Millisecond, time.Second
-	return tt
+func newZ(srv *httptest.Server) *zernio {
+	z := newZernio(secret, srv.Client())
+	z.base, z.pollEvery, z.pollFor = srv.URL, time.Millisecond, time.Second
+	return z
 }
+
+func newTT(srv *httptest.Server) Publisher { return newZ(srv).tiktok() }
 
 func TestTikTokSuccess(t *testing.T) {
 	var posts, polls atomic.Int32
@@ -313,72 +332,36 @@ func TestTikTokErrorNotRetried(t *testing.T) {
 	}
 }
 
-func ytServer(t *testing.T, putStatus int, puts *atomic.Int32) *httptest.Server {
-	var srv *httptest.Server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if r.Header.Get("Authorization") != "Bearer "+secret || body["snippet"]["title"] != "hello" || body["status"]["privacyStatus"] != "public" || r.Header.Get("X-Upload-Content-Length") != "10" {
-			t.Errorf("bad init: %v %v", r.Header, body)
-		}
-		w.Header().Set("Location", srv.URL+"/session?upload_id=U")
-		w.WriteHeader(200)
-	})
-	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
-		puts.Add(1)
-		b, _ := io.ReadAll(r.Body)
-		if r.Header.Get("Authorization") != "" || len(b) != 10 || r.ContentLength != 10 {
-			t.Errorf("bad put: auth=%q len=%d", r.Header.Get("Authorization"), len(b))
-		}
-		if putStatus != 200 {
-			writeJSON(w, putStatus, map[string]any{"error": map[string]string{"message": "quota"}})
-			return
-		}
-		writeJSON(w, 200, map[string]string{"id": "YT1"})
-	})
-	srv = httptest.NewServer(mux)
-	return srv
-}
-
-func newYT(srv *httptest.Server) *youtube {
-	auth := &googleAuth{tok: secret, exp: time.Unix(1<<40, 0), now: func() time.Time { return time.Unix(0, 0) }}
-	y := newYouTube(auth, srv.Client()).(*youtube)
-	y.ytUpload = srv.URL
-	return y
-}
-
-func TestYouTubeSuccess(t *testing.T) {
-	var puts atomic.Int32
-	srv := ytServer(t, 200, &puts)
+func TestYouTubeViaZernio(t *testing.T) {
+	var posts, polls atomic.Int32
+	srv, _ := zServer(t, 201, &posts, &polls)
 	defer srv.Close()
-	id, err := newYT(srv).Publish(context.Background(), testPost(t))
-	if err != nil || id != "YT1" {
+	p := testPost(t)
+	p.Text = "a <b> c"
+	id, err := newZ(srv).youtube().Publish(context.Background(), p)
+	if err != nil || id != "P1" || posts.Load() != 1 {
 		t.Fatalf("id=%q err=%v", id, err)
 	}
-}
-
-func TestYouTubeErrorNotRetried(t *testing.T) {
-	var puts atomic.Int32
-	srv := ytServer(t, 403, &puts)
-	defer srv.Close()
-	_, err := newYT(srv).Publish(context.Background(), testPost(t))
-	noSecret(t, err)
-	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "quota") || puts.Load() != 1 {
-		t.Fatalf("err=%v puts=%d", err, puts.Load())
+	e := gotPosts["youtube"]["platforms"].([]any)[0].(map[string]any)
+	psd, _ := e["platformSpecificData"].(map[string]any)
+	if e["accountId"] != "A2" || psd["title"] != "hello" || psd["visibility"] != "public" || psd["madeForKids"] != false || gotPosts["youtube"]["content"] != "a b c" || gotKeys["youtube"] != "2026-11-22 09:00#1-youtube" {
+		t.Errorf("bad youtube post %v key=%q", gotPosts["youtube"], gotKeys["youtube"])
 	}
 }
 
-func TestYouTubeSessionTokenHost(t *testing.T) {
-	for loc, want := range map[string]bool{
-		"https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U": true,
-		"http://www.googleapis.com/x":                                     false,
-		"https://evil.example/x":                                          false,
-		"https://www.googleapis.com.evil.example/x":                       false,
-	} {
-		if sessionGetsToken(loc) != want {
-			t.Errorf("%s: want %v", loc, want)
+func TestZernioUploadsFileOnce(t *testing.T) {
+	var posts, polls atomic.Int32
+	srv, _ := zServer(t, 201, &posts, &polls)
+	defer srv.Close()
+	z := newZ(srv)
+	p := testPost(t)
+	for _, pub := range []Publisher{z.youtube(), z.tiktok()} {
+		if _, err := pub.Publish(context.Background(), p); err != nil {
+			t.Fatal(err)
 		}
+	}
+	if presigns.Load() != 1 || puts.Load() != 1 || posts.Load() != 2 || accountLists.Load() != 1 {
+		t.Fatalf("presigns=%d puts=%d posts=%d accountLists=%d", presigns.Load(), puts.Load(), posts.Load(), accountLists.Load())
 	}
 }
 
