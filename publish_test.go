@@ -259,7 +259,7 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		plat := body["platforms"].([]any)[0].(map[string]any)["platform"].(string)
 		gotPosts[plat], gotKeys[plat] = body, r.Header.Get("Idempotency-Key")
-		if gotKeys[plat] != "2026-11-22 09:00#1-"+plat {
+		if k := gotKeys[plat]; k != "2026-11-22 09:00#1-"+plat && k != "2026-11-13 18:00#1-"+plat {
 			t.Errorf("bad idempotency key")
 		}
 		if plat == "tiktok" {
@@ -362,6 +362,14 @@ func TestZernioUploadsFileOnce(t *testing.T) {
 	}
 	if presigns.Load() != 1 || puts.Load() != 1 || posts.Load() != 2 || accountLists.Load() != 1 {
 		t.Fatalf("presigns=%d puts=%d posts=%d accountLists=%d", presigns.Load(), puts.Load(), posts.Load(), accountLists.Load())
+	}
+	// a new slot (same process, as on the VM) must not reuse the previous slot's URL or account list
+	p.SlotID = "2026-11-13 18:00#1"
+	if _, err := z.youtube().Publish(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if presigns.Load() != 2 || puts.Load() != 2 || accountLists.Load() != 2 {
+		t.Fatalf("after new slot: presigns=%d puts=%d accountLists=%d", presigns.Load(), puts.Load(), accountLists.Load())
 	}
 }
 

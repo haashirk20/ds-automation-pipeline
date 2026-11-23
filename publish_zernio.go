@@ -20,8 +20,10 @@ type zernio struct {
 	key, base          string
 	hc                 *http.Client
 	pollEvery, pollFor time.Duration
-	accounts           []zAccount        // cached by the first lookup
-	urls               map[string]string // file path -> presigned publicUrl (valid 7 days)
+	// Caches live for one slot only, so a long-running process never reuses a stale account or URL.
+	slot     string
+	accounts []zAccount // fetched once per slot
+	url      string     // presigned publicUrl of this slot's video
 }
 
 type zAccount struct {
@@ -31,7 +33,7 @@ type zAccount struct {
 }
 
 func newZernio(apiKey string, hc *http.Client) *zernio {
-	return &zernio{key: apiKey, base: "https://zernio.com/api/v1", hc: hc, pollEvery: 10 * time.Second, pollFor: 5 * time.Minute, urls: map[string]string{}}
+	return &zernio{key: apiKey, base: "https://zernio.com/api/v1", hc: hc, pollEvery: 10 * time.Second, pollFor: 5 * time.Minute}
 }
 
 type zPublisher struct {
@@ -95,7 +97,7 @@ func (t *zernio) zOK(ctx context.Context, method, path string, extra map[string]
 	return nil
 }
 
-// account returns the first active account for a platform; the list is fetched once per client.
+// account returns the first active account for a platform; the list is fetched once per slot.
 func (t *zernio) account(ctx context.Context, platform string) (string, error) {
 	if t.accounts == nil {
 		var accs struct {
@@ -114,10 +116,10 @@ func (t *zernio) account(ctx context.Context, platform string) (string, error) {
 	return "", fmt.Errorf("%s: no active %s account", platform, platform)
 }
 
-// mediaURL presigns and uploads a file once; later calls for the same path reuse the URL.
+// mediaURL presigns and uploads the slot's video once; the slot's other platform reuses the URL.
 func (t *zernio) mediaURL(ctx context.Context, path string) (string, error) {
-	if u := t.urls[path]; u != "" {
-		return u, nil
+	if t.url != "" {
+		return t.url, nil
 	}
 	f, size, err := openFile(path)
 	if err != nil {
@@ -138,12 +140,15 @@ func (t *zernio) mediaURL(ctx context.Context, path string) (string, error) {
 	if _, err := callOK(ctx, t.hc, uploadTimeout, "PUT", pre.UploadURL, map[string]string{"Content-Type": "video/mp4"}, f, size); err != nil {
 		return "", err
 	}
-	t.urls[path] = pre.PublicURL
+	t.url = pre.PublicURL
 	return pre.PublicURL, nil
 }
 
 func (t *zPublisher) Publish(ctx context.Context, p Post) (string, error) {
 	z, name := t.z, t.platform
+	if z.slot != p.SlotID {
+		z.slot, z.accounts, z.url = p.SlotID, nil, ""
+	}
 	acct, err := z.account(ctx, name)
 	if err != nil {
 		return "", err
