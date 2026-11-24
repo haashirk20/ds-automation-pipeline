@@ -3,8 +3,8 @@
 ## 1. What it does
 
 Every hour GitHub runs this tool. If a posting time has arrived, it picks a random video and a random
-music track from your Google Drive, burns a caption onto the video, and posts it to YouTube Shorts,
-Instagram Reels, Facebook Page Reels and TikTok. You only add files to Drive and edit two Google Docs.
+music track from your Google Drive, burns a line of text onto the video, and posts it to YouTube Shorts,
+Instagram Reels, Facebook Page Reels and TikTok. You only add files to Drive and edit three Google Docs.
 
 Cost: $0.
 
@@ -56,10 +56,23 @@ export DRIVE_ROOT_ID=<the folder ID>
 `init` creates these inside your folder and prints their IDs. It is safe to run again. It only adds
 what is missing.
 
-- `videos/` folder. Put your videos here.
+- `videos/` folder. Make one subfolder per product, named exactly like the product, and put that product's
+  videos in it. Videos placed directly in `videos/` count as one extra product with no name.
 - `music/` folder. Put your audio tracks here.
 - `settings` Google Doc. See section 3.
-- `captions` Google Doc. One caption per line.
+- `captions` Google Doc. The text burned onto the video, one line per option, for example
+  `comment BOOK if you want one! 📖✨`. Emoji show in colour.
+- `products` Google Doc. The text under the video, one section per product:
+
+```
+# lines starting with "# " are comments
+[Velvet Tarot Deck]
+Hand-gilded tarot deck ✨ Link in bio #tarot
+```
+
+  The name in brackets must match the folder name. The caption can use several lines. The `hashtags`
+  setting is added after it. A video with no entry uses `default_caption`. Two sections with the same
+  name make the run fail.
 - `state.json` file. The tool uses it to remember which slots it already posted. Do not edit it.
   Do not delete it.
 
@@ -125,7 +138,8 @@ ZERNIO_API_KEY
 3. A run only does work when a slot is due. To see it work, set a time in `settings` that is within
    the last hour, then run the workflow and read the log. You should see `dry run, publish skipped`.
 4. You can also dry run on your computer: set all the variables and run `DRY_RUN=1 ./uploader tick`.
-   This needs `ffmpeg` and `ffprobe` installed.
+   This needs `ffmpeg`, `ffprobe`, `pango-view` (package `pango1.0-tools`) and the fonts
+   `fonts-dejavu-core` and `fonts-noto-color-emoji` installed.
 
 ## 3. Settings reference
 
@@ -136,7 +150,8 @@ ignored.
 times = 09:00, 18:00        # each entry is one post; list a time twice for two posts. Required.
 timezone = America/Toronto  # Required.
 platforms = youtube, instagram, facebook, tiktok
-caption =                   # pinned caption; empty means random line from the captions doc
+burn_text =                 # pinned on-video text; empty means random line from the captions doc
+default_caption =           # post text when a product has no entry in the products doc; may be empty
 hashtags = #shorts #fyp     # appended to post text only; never burned on video
 burn_caption = yes
 music_volume = 0.25         # 0..1, only used for _keepaudio videos
@@ -148,8 +163,10 @@ paused = no
   `HH:MM` in the `timezone` you set. To post twice at 09:00, write `09:00, 09:00`.
 - The check runs hourly, so a post can be up to about 1 hour late. A post more than 3 hours late is
   skipped and never made up.
-- `caption`: the pinned caption. If it has text, every post uses it. If it is empty, each post uses a
-  random line from the `captions` doc.
+- `burn_text`: the pinned on-video text. If it has text, every video uses it. If it is empty, each video
+  uses a random line from the `captions` doc. The old `caption` key is no longer allowed.
+- `default_caption`: the post text for a video whose product has no entry in the `products` doc. The log
+  names the product.
 - `paused = yes`: nothing is posted until you set it back to `no`.
 - If any line is wrong (unknown key, bad time, bad timezone, unknown platform), the run posts nothing and
   fails. There are no silent defaults. Fix the doc and the next run works.
@@ -159,8 +176,10 @@ paused = no
 - Videos: upload to the `videos/` folder in Drive. The Drive phone app works. Videos shorter than 3
   seconds are skipped.
 - Music: upload to the `music/` folder.
-- Captions: add a line to the `captions` doc. A literal `\n` inside a line makes a line break. Lines
+- On-video text: add a line to the `captions` doc. A literal `\n` inside a line makes a line break. Lines
   starting with `#` are ignored.
+- Products: make a subfolder in `videos/`, put videos in it, and add a `[folder name]` section to the
+  `products` doc.
 
 ## 5. Troubleshooting
 

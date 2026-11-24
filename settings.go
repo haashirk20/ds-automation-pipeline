@@ -13,7 +13,8 @@ type Settings struct {
 	Times          []string // "HH:MM", order kept, duplicates allowed
 	Loc            *time.Location
 	Platforms      []string
-	Caption        string
+	BurnText       string // pinned on-video text; empty = random line from the captions doc
+	DefaultCaption string // post text when a product has no entry in the products doc
 	Hashtags       string
 	BurnCaption    bool
 	MusicVolume    float64
@@ -63,7 +64,11 @@ func parseSettings(text string) (Settings, error) {
 		case "platforms":
 			s.Platforms, err = parsePlatforms(val)
 		case "caption":
-			s.Caption = val
+			err = fmt.Errorf("caption was split: use burn_text for on-video text; post captions now live in the products doc")
+		case "burn_text":
+			s.BurnText = val
+		case "default_caption":
+			s.DefaultCaption = val
 		case "hashtags":
 			s.Hashtags = val
 		case "burn_caption":

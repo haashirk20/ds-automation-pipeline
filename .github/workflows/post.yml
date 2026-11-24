@@ -45,6 +45,6 @@ jobs:
           echo "$out"
           if [ "$out" = due ]; then echo "due=yes" >> "$GITHUB_OUTPUT"; fi
       - if: steps.due.outputs.due == 'yes'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-color-emoji pango1.0-tools
       - if: steps.due.outputs.due == 'yes'
         run: ./uploader tick
