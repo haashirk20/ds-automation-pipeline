@@ -56,7 +56,7 @@ func TestFFmpegArgsReplace(t *testing.T) {
 
 func TestFFmpegArgsKeepAudio(t *testing.T) {
 	s := baseSpec()
-	s.KeepAudio, s.HasAudio = true, true
+	s.HasAudio = true
 	fc := argAfter(mustArgs(t, s), "-filter_complex")
 	if !strings.Contains(fc, "[1:a]volume=0.25[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]") {
 		t.Errorf("filter %s", fc)
@@ -67,7 +67,7 @@ func TestFFmpegArgsKeepAudio(t *testing.T) {
 	if !strings.Contains(fc, "setsar=1[v];") {
 		t.Errorf("video label %s", fc)
 	}
-	s.HasAudio = false // keepaudio without an audio stream falls back to replace
+	s.HasAudio = false // no audio stream: music only
 	fc = argAfter(mustArgs(t, s), "-filter_complex")
 	if strings.Contains(fc, "amix") || !strings.Contains(fc, "[1:a]anull[a]") {
 		t.Errorf("filter %s", fc)

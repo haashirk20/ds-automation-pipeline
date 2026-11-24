@@ -30,9 +30,10 @@ type loaded struct {
 	set     Settings
 	st      state
 	due     []slot
-	prod    map[string]string // product name -> post caption
-	folders map[string]bool   // product folders in videos/
-	cands   []cand            // products that have videos
+	prod    map[string]string   // product name -> post caption
+	burns   map[string][]string // product name -> burn lines from the captions doc
+	folders map[string]bool     // product folders in videos/
+	cands   []cand              // products that have videos
 	musics  []driveFile
 }
 
@@ -126,6 +127,17 @@ func (t *ticker) tick(ctx context.Context, now time.Time, manual string) error {
 	if l.prod, warns, err = parseProducts(ptext, l.folders); err != nil {
 		return err
 	}
+	if l.set.BurnCaption {
+		ctext, err := t.d.exportText(ctx, l.ids["captions"])
+		if err != nil {
+			return err
+		}
+		var cw []string
+		if l.burns, cw, err = parseCaptions(ctext, l.folders); err != nil {
+			return err
+		}
+		warns = append(warns, cw...)
+	}
 	for _, w := range warns {
 		t.log.Warn(w)
 	}
@@ -203,7 +215,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	// up to 5 tries. A file already tried is never picked twice.
 	vpath := filepath.Join(dir, "video")
 	var pr probeResult
-	var product, vname string
+	var product string
 	picked := false
 	for i := 0; i < 5 && len(cands) > 0 && !picked; i++ {
 		var v driveFile
@@ -220,7 +232,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 			t.log.Warn("video too short, trying another", "slot", sl.ID, "file", v.Name)
 			continue
 		}
-		vname, picked = v.Name, true
+		picked = true
 	}
 	if !picked {
 		return post, cleanup, fmt.Errorf("no usable video after up to 5 tries")
@@ -238,19 +250,14 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	}
 
 	spec := renderSpec{Video: vpath, Music: mpath, Out: filepath.Join(dir, "out.mp4"), Duration: pr.Duration,
-		KeepAudio: strings.Contains(vname, "_keepaudio"), HasAudio: pr.HasAudio, MusicVolume: l.set.MusicVolume}
+		HasAudio: pr.HasAudio, MusicVolume: l.set.MusicVolume}
 	if l.set.BurnCaption {
+		// a random line from the product's captions section, else burn_text
 		text := l.set.BurnText
-		if text == "" {
-			ctext, err := t.d.exportText(ctx, l.ids["captions"])
-			if err != nil {
-				return post, cleanup, err
-			}
-			cs := parseCaptions(ctext)
-			if len(cs) == 0 {
-				return post, cleanup, fmt.Errorf("no burn text: settings burn_text is empty and captions doc has no lines")
-			}
+		if cs := l.burns[product]; len(cs) > 0 {
 			text = cs[rand.IntN(len(cs))]
+		} else if text == "" {
+			return post, cleanup, fmt.Errorf("no burn text for product %q: no lines in its captions section and settings burn_text is empty", product)
 		}
 		if text = burnText(strings.ReplaceAll(text, `\n`, "\n")); text != "" {
 			spec.Overlay = filepath.Join(dir, "text.png")

@@ -33,16 +33,15 @@ func TestRenderReal(t *testing.T) {
 	gen(t, "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "libmp3lame", music) // shorter than video: must loop
 
 	cases := []struct {
-		name      string
-		video     string
-		keep, has bool
-		caption   string
+		name    string
+		video   string
+		has     bool
+		caption string
 	}{
-		{"replace", withAudio, false, true, ""},
-		{"keepaudio", withAudio, true, true, ""},
-		{"keepaudio without audio stream", noAudio, true, false, ""},
-		{"text with percent and quote", withAudio, false, true, "100% real it's: a \\ test"},
-		{"colour emoji text", plain, false, true, "comment BOOK if you want one! 📖✨"},
+		{"mix with video audio", withAudio, true, ""},
+		{"no audio stream", noAudio, false, ""},
+		{"text with percent and quote", withAudio, true, "100% real it's: a \\ test"},
+		{"colour emoji text", plain, true, "comment BOOK if you want one! 📖✨"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -59,7 +58,7 @@ func TestRenderReal(t *testing.T) {
 				t.Fatalf("probe %+v %v", pr, err)
 			}
 			args := ffmpegArgs(renderSpec{Video: c.video, Music: music, Out: out, Duration: pr.Duration,
-				KeepAudio: c.keep, HasAudio: pr.HasAudio, Overlay: png, MusicVolume: 0.25})
+				HasAudio: pr.HasAudio, Overlay: png, MusicVolume: 0.25})
 			if err := runCmd(context.Background(), "ffmpeg", args); err != nil {
 				t.Fatal(err)
 			}

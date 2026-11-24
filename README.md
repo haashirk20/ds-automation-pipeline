@@ -60,8 +60,16 @@ what is missing.
   videos in it. Videos placed directly in `videos/` count as one extra product with no name.
 - `music/` folder. Put your audio tracks here.
 - `settings` Google Doc. See section 3.
-- `captions` Google Doc. The text burned onto the video, one line per option, for example
-  `comment BOOK if you want one! 📖✨`. Emoji show in colour.
+- `captions` Google Doc. The text burned onto the video, one section per product, one line per option.
+  Each video gets a random line from its product's section. A product with no section uses `burn_text`
+  from settings. Emoji show in colour:
+
+```
+[Velvet Tarot Deck]
+comment BOOK if you want one! 📖✨
+Wait for it 👀
+```
+
 - `products` Google Doc. The text under the video, one section per product:
 
 ```
@@ -80,9 +88,8 @@ Hand-gilded tarot deck ✨ Link in bio #tarot
 Do not rename or duplicate these items. The tool finds them by name and fails if one is missing or
 doubled.
 
-By default a video's own sound is removed and replaced by the music. To keep the original sound
-quietly under the music, put `_keepaudio` in the file name, for example `shop_tour_keepaudio.mp4`.
-The music volume is then set by `music_volume` in settings.
+Every video keeps its own sound at full volume, with the music under it at `music_volume`. A video with
+no sound gets the music at full volume. The music is cut (or looped) to the video's length.
 
 ### c. Meta (Facebook and Instagram)
 
@@ -154,11 +161,11 @@ ignored.
 times = 09:00, 18:00        # each entry is one post; list a time twice for two posts. Required.
 timezone = America/Toronto  # Required.
 platforms = youtube, instagram, facebook, tiktok
-burn_text =                 # pinned on-video text; empty means random line from the captions doc
+burn_text =                 # on-video text for a product with no section in the captions doc
 default_caption =           # post text when a product has no entry in the products doc; may be empty
 hashtags = #shorts #fyp     # appended to post text only; never burned on video
 burn_caption = yes
-music_volume = 0.25         # 0..1, only used for _keepaudio videos
+music_volume = 0.25         # 0..1, music volume under the video's own sound
 youtube_privacy = public    # public | unlisted | private
 paused = no
 ```
@@ -167,8 +174,9 @@ paused = no
   `HH:MM` in the `timezone` you set. To post twice at 09:00, write `09:00, 09:00`.
 - The check runs hourly, so a post can be up to about 1 hour late. A post more than 3 hours late is
   skipped and never made up.
-- `burn_text`: the pinned on-video text. If it has text, every video uses it. If it is empty, each video
-  uses a random line from the `captions` doc. The old `caption` key is no longer allowed.
+- `burn_text`: the on-video text for a product that has no section (or an empty one) in the `captions`
+  doc. If it is empty too, that product's slot fails and nothing posts. The old `caption` key is no
+  longer allowed.
 - `default_caption`: the post text for a video whose product has no entry in the `products` doc. The log
   names the product.
 - `paused = yes`: nothing is posted until you set it back to `no`.
@@ -180,10 +188,11 @@ paused = no
 - Videos: upload to the `videos/` folder in Drive. The Drive phone app works. Videos shorter than 3
   seconds are skipped.
 - Music: upload to the `music/` folder.
-- On-video text: add a line to the `captions` doc. A literal `\n` inside a line makes a line break. Lines
-  starting with `# ` are comments; `#1 seller` is kept.
+- On-video text: add a line under the product's `[name]` in the `captions` doc. A literal `\n` inside a
+  line makes a line break. Lines starting with `# ` are comments; `#1 seller` is kept. Lines above the
+  first `[name]` are ignored.
 - Products: make a subfolder in `videos/`, put videos in it, and add a `[folder name]` section to the
-  `products` doc.
+  `products` doc and to the `captions` doc.
 
 ## 5. Troubleshooting
 

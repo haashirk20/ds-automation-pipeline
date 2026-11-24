@@ -42,11 +42,11 @@ music `mimeType contains 'audio/'`, subfolders `mimeType = 'application/vnd.goog
     times = 09:00, 18:00        # each entry is one post; list a time twice for two posts. Required.
     timezone = America/Toronto  # Required.
     platforms = youtube, instagram, facebook, tiktok
-    burn_text =                 # pinned on-video text; empty means random line from the captions doc
+    burn_text =                 # on-video text for a product with no lines in the captions doc
     default_caption =           # post text for a video with no product entry (may be empty; logs a warning)
     hashtags = #shorts #fyp     # appended to post text only; never burned on video
     burn_caption = yes
-    music_volume = 0.25         # 0..1, only used for _keepaudio videos
+    music_volume = 0.25         # 0..1, music under the video's own sound
     youtube_privacy = public    # public | unlisted | private
     paused = no
 Any parse error, unknown key, bad time, bad timezone or unknown platform: the tick logs the error,
@@ -54,8 +54,11 @@ posts nothing and exits non-zero. Never fall back to defaults.
 The old key `caption` is an error: "caption was split: use burn_text for on-video text; post captions now live in the products doc".
 
 ## captions doc (on-video text)
-One line of burned text per line, e.g. `comment BOOK if you want one! 📖✨`. Comment lines and blank lines ignored.
-A literal `\n` inside a line means a line break. Emoji render in colour.
+`[Product]` sections like the products doc (same header, duplicate and comment rules; text before the
+first header is ignored with a warning). Each line of a section is one burn option, e.g.
+`comment BOOK if you want one! 📖✨`; a random line of the video's product is burned. A product with no
+lines uses `burn_text`; if that is empty too, the slot fails before its claim. Read once per tick, only
+when burn_caption. A literal `\n` inside a line means a line break. Emoji render in colour.
 
 ## products doc (post text)
     # a comment is a lone "#" or "# " plus text; "#tarot" and "#1 seller" are kept
@@ -79,7 +82,7 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
 - `paused = yes`: nothing is due.
 
 ## Per slot pipeline
-1. Pick a random product, then a random video of it (files whose name contains `_keepaudio` mix audio), random music.
+1. Pick a random product, then a random video of it, random music.
    A product counts once however many videos it has. Retry (below) picks a new product and video.
 2. Download both to a temp dir (removed afterwards, also on error).
 3. ffprobe the video: duration, has-audio. Skip (log, pick another, up to 5 tries) if duration < 3 s.
@@ -91,9 +94,8 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
      `\n` are removed and the text is limited to 6 lines and 150 runes (cut at the last space). ffmpeg takes the PNG as input 2 and overlays it at
      `y=(H-h)*0.72`, centred, over a blurred 60% black shadow offset 3 px. Without burn there is no third input.
      Args for both tools are built in pure, unit-tested functions.
-   - audio: replace => music only (`anull`); keepaudio and source has audio =>
-     `amix=inputs=2:duration=first:normalize=0` with music at `music_volume`; keepaudio but no audio
-     stream => replace.
+   - audio: source has audio => `amix=inputs=2:duration=first:normalize=0`, video sound at full volume,
+     music at `music_volume`; no audio stream => music only (`anull`).
    - `-c:v libx264 -preset veryfast -crf 23 -rc-lookahead 10 -threads 2 -pix_fmt yuv420p
       -c:a aac -b:a 128k -fpsmax 60 -movflags +faststart`.
    - Build the ffmpeg args in a pure function (unit-tested); run with exec.CommandContext.

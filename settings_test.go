@@ -61,9 +61,20 @@ func TestParseSettingsErrors(t *testing.T) {
 }
 
 func TestParseCaptions(t *testing.T) {
-	got := parseCaptions("# c\n\nhello\\nworld\n  two  \n")
-	if len(got) != 2 || got[0] != "hello\nworld" || got[1] != "two" {
-		t.Fatalf("%q", got)
+	folders := map[string]bool{"Lamp": true, "Candle": true}
+	all, warns, err := parseCaptions("stray\n# c\n[Lamp]\n\nhello\\nworld\n  two  \n[Candle]\n", folders)
+	got := all["Lamp"]
+	if err != nil || len(got) != 2 || got[0] != "hello\nworld" || got[1] != "two" || len(all["Candle"]) != 0 {
+		t.Fatalf("%q %v", all, err)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "captions line 1: text before") {
+		t.Fatalf("warns %q", warns)
+	}
+	if _, _, err := parseCaptions("[Lamp]\na\n[Lamp]\nb", folders); err == nil || !strings.Contains(err.Error(), "captions line 3: duplicate") {
+		t.Fatalf("err %v", err)
+	}
+	if all, _, err := parseCaptions(defaultCaptions, folders); err != nil || len(all) != 0 {
+		t.Fatalf("default captions doc: %q %v", all, err)
 	}
 }
 
@@ -114,7 +125,8 @@ Hand-gilded tarot deck ✨ Link in bio #tarot
 }
 
 func TestParseCaptionsHashtagLinesKept(t *testing.T) {
-	got := parseCaptions("# note\n#\n#1 seller 🔥\n#tarot")
+	all, _, _ := parseCaptions("[Lamp]\n# note\n#\n#1 seller 🔥\n#tarot", map[string]bool{"Lamp": true})
+	got := all["Lamp"]
 	if len(got) != 2 || got[0] != "#1 seller 🔥" || got[1] != "#tarot" {
 		t.Fatalf("%q", got)
 	}

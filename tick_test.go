@@ -62,7 +62,7 @@ const probeLong = `{"format":{"duration":"12.5"},"streams":[{"codec_type":"video
 func newTickEnv(t *testing.T, settings, probeJSON string) *tickEnv {
 	f := newFkDrive(t)
 	f.add("set", "settings", docMime, "root", settings)
-	f.add("cap", "captions", docMime, "root", "# c\nonly caption\n")
+	f.add("cap", "captions", docMime, "root", "# c\n[Velvet Tarot Deck]\nonly caption\n")
 	f.add("st", "state.json", "application/json", "root", `{"claims":{}}`)
 	f.add("pr", "products", docMime, "root", "[Velvet Tarot Deck]\nVelvet caption\n")
 	f.add("vf", "videos", folderMime, "root", "")
@@ -218,7 +218,9 @@ func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
 	if !strings.Contains(e.pangoArgs(), "--text=only caption") {
 		t.Errorf("pango args %s", e.pangoArgs())
 	}
+	// burn_text is used when the product has no captions section
 	e = newTickEnv(t, settingsOne+"burn_text = comment BOOK \\n now 📖\n", probeLong)
+	e.f.get("cap").content = ""
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -237,9 +239,27 @@ func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
 	}
 }
 
+func TestTickBurnTextFallsBackPerProduct(t *testing.T) {
+	// product without a captions section uses burn_text
+	e := newTickEnv(t, settingsOne+"burn_text = pinned 💡\n", probeLong)
+	e.f.get("cap").content = "[Other]\nnot mine\n"
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.pangoArgs(), "--text=pinned 💡") {
+		t.Errorf("pango args %s", e.pangoArgs())
+	}
+	// no section and no burn_text: the slot fails before claim
+	e = newTickEnv(t, settingsOne, probeLong)
+	e.f.get("cap").content = ""
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || e.claimed("2026-11-12 09:00#1") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestTickFallsBackToDefaultCaption(t *testing.T) {
 	// loose video in videos/ has no product entry
-	e := newTickEnv(t, settingsOne+"default_caption = Shop now\n", probeLong)
+	e := newTickEnv(t, settingsOne+"default_caption = Shop now\nburn_text = b\n", probeLong)
 	e.f.get("v1").parent = "vf"
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
@@ -248,7 +268,7 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 		t.Errorf("%q", c.Text)
 	}
 	// product folder exists but has no entry, and default_caption is empty
-	e = newTickEnv(t, settingsOne, probeLong)
+	e = newTickEnv(t, settingsOne+"burn_text = b\n", probeLong)
 	e.f.get("pf").name = "Other"
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)

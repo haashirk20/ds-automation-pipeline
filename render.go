@@ -49,7 +49,6 @@ func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 type renderSpec struct {
 	Video, Music, Out string
 	Duration          float64
-	KeepAudio         bool   // video name has _keepaudio
 	HasAudio          bool   // source video has an audio stream
 	Overlay           string // transparent PNG with the burned text; empty = no burn
 	MusicVolume       float64
@@ -67,7 +66,7 @@ func ffmpegArgs(s renderSpec) []string {
 		in = append(in, "-i", s.Overlay)
 	}
 	a := "[1:a]anull[a]"
-	if s.KeepAudio && s.HasAudio {
+	if s.HasAudio { // the video's own sound stays at full volume, music under it
 		a = "[1:a]volume=" + strconv.FormatFloat(s.MusicVolume, 'f', -1, 64) + "[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]"
 	}
 	t := min(s.Duration, maxOutSeconds)

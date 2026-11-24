@@ -215,23 +215,25 @@ const defaultSettings = `# one post per time; list a time twice for two posts
 times = 09:00, 18:00
 timezone = America/Toronto
 platforms = youtube, instagram, facebook, tiktok
-# text burned on the video; leave empty to pick a random line from the captions doc
+# text burned on the video when the product has no lines in the captions doc
 burn_text =
 # post text for a video with no product entry in the products doc (may be empty)
 default_caption =
 # added under the product caption in the post text, never burned on the video
 hashtags = #shorts #fyp
 burn_caption = yes
-# 0..1, only used for videos with _keepaudio in the name
+# 0..1, music volume under the video's own sound
 music_volume = 0.25
 youtube_privacy = public
 paused = no
 `
 
-const defaultCaptions = `# text burned on the video: one per line; a literal \n makes a line break
-comment BOOK if you want one! 📖✨
-Wait for it 👀
-You need this in your life 😍
+const defaultCaptions = `# text burned on the video, one section per product; a random line of the section is used
+# the [name] must match the product's folder name in videos/ exactly; a literal \n makes a line break
+# a product with no section uses burn_text from settings
+# [Velvet Tarot Deck]
+# comment BOOK if you want one! 📖✨
+# Wait for it 👀
 `
 
 const defaultProducts = `# post text under the video, one section per product
