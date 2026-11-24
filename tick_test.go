@@ -97,7 +97,7 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 	if due, err := e.tk.isDue(ctx, e.now); err != nil || !due {
 		t.Fatalf("due=%v err=%v", due, err)
 	}
-	if err := e.tk.tick(ctx, e.now); err != nil {
+	if err := e.tk.tick(ctx, e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []string{"youtube", "facebook"} {
@@ -116,7 +116,7 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 		t.Fatal("temp dir not removed")
 	}
 	// run again: claimed, nothing posts, nothing due
-	if err := e.tk.tick(ctx, e.now.Add(time.Minute)); err != nil {
+	if err := e.tk.tick(ctx, e.now.Add(time.Minute), ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.pubs["youtube"].calls) != 1 {
@@ -130,7 +130,7 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 func TestTickOnePlatformFailsOthersRun(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	e.pubs["youtube"].fail = true
-	err := e.tk.tick(context.Background(), e.now)
+	err := e.tk.tick(context.Background(), e.now, "")
 	if err == nil {
 		t.Fatal("want non-nil exit error")
 	}
@@ -145,7 +145,7 @@ func TestTickOnePlatformFailsOthersRun(t *testing.T) {
 func TestTickDryRunSkipsPublishAndClaim(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	e.tk.dryRun = true
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.pubs["youtube"].calls)+len(e.pubs["facebook"].calls) != 0 {
@@ -159,7 +159,7 @@ func TestTickDryRunSkipsPublishAndClaim(t *testing.T) {
 func TestTickClaimFailureAbortsBeforePublish(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	e.f.failUpdate = true
-	if err := e.tk.tick(context.Background(), e.now); err == nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil {
 		t.Fatal("want error")
 	}
 	for _, p := range e.pubs {
@@ -171,11 +171,11 @@ func TestTickClaimFailureAbortsBeforePublish(t *testing.T) {
 
 func TestTickPausedOrBadSettings(t *testing.T) {
 	e := newTickEnv(t, settingsOne+"paused = yes\n", probeLong)
-	if err := e.tk.tick(context.Background(), e.now); err != nil || len(e.pubs["youtube"].calls) != 0 {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil || len(e.pubs["youtube"].calls) != 0 {
 		t.Fatalf("paused: err=%v", err)
 	}
 	e = newTickEnv(t, settingsOne+"bogus = 1\n", probeLong)
-	if err := e.tk.tick(context.Background(), e.now); err == nil || len(e.pubs["youtube"].calls) != 0 {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || len(e.pubs["youtube"].calls) != 0 {
 		t.Fatal("bad settings must error and post nothing")
 	}
 }
@@ -183,7 +183,7 @@ func TestTickPausedOrBadSettings(t *testing.T) {
 func TestTickShortVideoFailsWithoutClaim(t *testing.T) {
 	short := `{"format":{"duration":"2.0"},"streams":[{"codec_type":"video"}]}`
 	e := newTickEnv(t, settingsOne, short)
-	if err := e.tk.tick(context.Background(), e.now); err == nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil {
 		t.Fatal("want error")
 	}
 	if len(e.pubs["youtube"].calls) != 0 {
@@ -197,7 +197,7 @@ func TestTickShortVideoFailsWithoutClaim(t *testing.T) {
 func TestTickMissingCredentialsFailsBeforeClaim(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	delete(e.tk.pubs, "facebook")
-	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "credentials") {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || !strings.Contains(err.Error(), "credentials") {
 		t.Fatalf("err %v", err)
 	}
 	if len(e.pubs["youtube"].calls) != 0 || e.claimed("2026-11-12 09:00#1") {
@@ -212,14 +212,14 @@ func (e *tickEnv) pangoArgs() string {
 
 func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(e.pangoArgs(), "--text=only caption") {
 		t.Errorf("pango args %s", e.pangoArgs())
 	}
 	e = newTickEnv(t, settingsOne+"burn_text = comment BOOK \\n now 📖\n", probeLong)
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(e.pangoArgs(), "--text=comment BOOK \n now 📖") {
@@ -229,7 +229,7 @@ func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
 		t.Errorf("burned text leaked into post text: %q", c.Text)
 	}
 	e = newTickEnv(t, settingsOne+"burn_caption = no\n", probeLong)
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if e.pangoArgs() != "" {
@@ -241,7 +241,7 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 	// loose video in videos/ has no product entry
 	e := newTickEnv(t, settingsOne+"default_caption = Shop now\n", probeLong)
 	e.f.get("v1").parent = "vf"
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if c := e.pubs["youtube"].calls[0]; c.Text != "Shop now\n\n#x" {
@@ -250,7 +250,7 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 	// product folder exists but has no entry, and default_caption is empty
 	e = newTickEnv(t, settingsOne, probeLong)
 	e.f.get("pf").name = "Other"
-	if err := e.tk.tick(context.Background(), e.now); err != nil {
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
 	if c := e.pubs["youtube"].calls[0]; c.Text != "#x" || c.Title != "#x" {
@@ -261,12 +261,12 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 func TestTickProductsDocProblemsFailBeforeClaim(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	e.f.get("pr").name = "gone"
-	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "products") {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || !strings.Contains(err.Error(), "products") {
 		t.Fatalf("err %v", err)
 	}
 	e = newTickEnv(t, settingsOne, probeLong)
 	e.f.get("pr").content = "[Velvet Tarot Deck]\nx\n[Velvet Tarot Deck]\ny"
-	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("err %v", err)
 	}
 	if e.claimed("2026-11-12 09:00#1") || len(e.pubs["youtube"].calls) != 0 {
@@ -293,5 +293,22 @@ func TestPickProductThenVideo(t *testing.T) {
 	}
 	if n < 1800 || n > 2200 {
 		t.Errorf("A picked %d/4000, want about half", n)
+	}
+}
+
+func TestTickManualSlotPostsOnceOutsideSchedule(t *testing.T) {
+	// 09:00 slot is 5h old: nothing scheduled is due, the manual slot still posts
+	e := newTickEnv(t, settingsOne, probeLong)
+	ctx := context.Background()
+	later := e.now.Add(5 * time.Hour)
+	if err := e.tk.tick(ctx, later, "manual 42"); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.pubs["youtube"].calls) != 1 || !e.claimed("manual 42") {
+		t.Fatalf("calls %d claimed %v", len(e.pubs["youtube"].calls), e.claimed("manual 42"))
+	}
+	// a re-run of the same workflow run must not post again
+	if err := e.tk.tick(ctx, later, "manual 42"); err == nil || len(e.pubs["youtube"].calls) != 1 {
+		t.Fatalf("err=%v calls=%d", err, len(e.pubs["youtube"].calls))
 	}
 }

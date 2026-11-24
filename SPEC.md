@@ -107,7 +107,9 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
 - `uploader init` — create the Drive layout (see above).
 - `uploader due` — exit 0 and print `due` if a slot is due now, else print `idle` and exit 0 with
   output `idle`. (Used by the workflow to skip installing ffmpeg.) Reads settings + state only.
-- `uploader tick` — run all due slots.
+- `uploader tick` — run all due slots. With `POST_NOW=<id>` (the workflow sets the run ID when the
+  `post_now` input is ticked) it also runs one extra slot `manual <id>`, ignoring `times` and `paused`;
+  it is claimed like any slot, and an already-claimed manual ID is an error.
 - `uploader auth-google` — one-time helper: prints the consent URL (access_type=offline,
   prompt=consent, loopback redirect `http://127.0.0.1:<port>/`), listens once on 127.0.0.1,
   exchanges the code, prints the refresh token to stdout for the owner to copy. Only command that

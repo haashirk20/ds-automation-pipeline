@@ -9,6 +9,10 @@ on:
         description: 'Dry run: render but do not publish or claim'
         type: boolean
         default: false
+      post_now:
+        description: 'Post one video now, whatever the schedule says'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +35,7 @@ jobs:
       META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
       ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
       DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      POST_NOW: ${{ inputs.post_now && github.run_id || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -43,7 +48,7 @@ jobs:
         run: |
           out=$(./uploader due)
           echo "$out"
-          if [ "$out" = due ]; then echo "due=yes" >> "$GITHUB_OUTPUT"; fi
+          if [ "$out" = due ] || [ -n "$POST_NOW" ]; then echo "due=yes" >> "$GITHUB_OUTPUT"; fi
       - if: steps.due.outputs.due == 'yes'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-color-emoji pango1.0-tools
       - if: steps.due.outputs.due == 'yes'

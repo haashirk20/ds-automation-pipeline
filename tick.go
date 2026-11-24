@@ -67,11 +67,18 @@ func (t *ticker) isDue(ctx context.Context, now time.Time) (bool, error) {
 	return len(l.due) > 0, err
 }
 
-// tick runs every due slot. Claim failure aborts; other failures are counted and returned at the end.
-func (t *ticker) tick(ctx context.Context, now time.Time) error {
+// tick runs every due slot, plus one extra slot with ID manual when manual is not empty (claimed like any slot).
+// Claim failure aborts; other failures are counted and returned at the end.
+func (t *ticker) tick(ctx context.Context, now time.Time, manual string) error {
 	l, err := t.load(ctx, now)
 	if err != nil {
 		return err
+	}
+	if manual != "" {
+		if _, done := l.st.Claims[manual]; done {
+			return fmt.Errorf("slot %q is already claimed", manual)
+		}
+		l.due = append(l.due, slot{ID: manual, At: now})
 	}
 	if len(l.due) == 0 {
 		t.log.Info("nothing due")

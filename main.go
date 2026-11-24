@@ -85,5 +85,9 @@ func run(ctx context.Context, cmd string, now time.Time, getenv func(string) str
 		z := newZernio(key, hc)
 		t.pubs["youtube"], t.pubs["tiktok"] = z.youtube(), z.tiktok()
 	}
-	return t.tick(ctx, now)
+	manual := ""
+	if id := getenv("POST_NOW"); id != "" { // the workflow run ID, so a re-run of the same run cannot post twice
+		manual = "manual " + id
+	}
+	return t.tick(ctx, now, manual)
 }

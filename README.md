@@ -138,7 +138,10 @@ ZERNIO_API_KEY
    Scheduled runs are never dry runs.
 3. A run only does work when a slot is due. To see it work, set a time in `settings` that is within
    the last hour, then run the workflow and read the log. You should see `dry run, publish skipped`.
-4. You can also dry run on your computer: set all the variables and run `DRY_RUN=1 ./uploader tick`.
+4. To post one video right now, whatever the schedule says, run the workflow with **post_now** ticked.
+   It ignores `times` and `paused`, and still posts to the `platforms` in settings. Tick **dry_run** too to
+   test it without posting. Re-running that same run never posts twice.
+5. You can also dry run on your computer: set all the variables and run `DRY_RUN=1 ./uploader tick`.
    This needs `ffmpeg`, `ffprobe`, `pango-view` (package `pango1.0-tools`) and the fonts
    `fonts-dejavu-core` and `fonts-noto-color-emoji` installed.
 
