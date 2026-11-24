@@ -7,7 +7,7 @@ import (
 )
 
 func baseSpec() renderSpec {
-	return renderSpec{Video: "/t/video", Music: "/t/music", Out: "/t/out.mp4", Duration: 20, MusicVolume: 0.25}
+	return renderSpec{Video: "/t/video", Music: "/t/music", NoMusic: "/t/nomusic.mp4", Out: "/t/out.mp4", Duration: 20, MusicVolume: 0.25}
 }
 
 func mustArgs(t *testing.T, s renderSpec) []string {
@@ -23,53 +23,55 @@ func argAfter(args []string, flag string) string {
 	return args[i+1]
 }
 
-func TestFFmpegArgsReplace(t *testing.T) {
+func TestFFmpegArgsFirstPass(t *testing.T) {
 	s := baseSpec()
-	s.Overlay = "/t/text.png"
+	s.Overlay, s.HasAudio = "/t/text.png", true
 	a := mustArgs(t, s)
 	fc := argAfter(a, "-filter_complex")
 	for _, want := range []string{"scale=1080:1920:force_original_aspect_ratio=decrease", "pad=1080:1920", "setsar=1",
-		"[0:v]", "[base];[2:v]format=rgba,split[t][s];", "colorchannelmixer=rr=0:gg=0:bb=0:aa=0.6,boxblur=6[sh]",
-		"[base][sh]overlay=x=(W-w)/2+3:y=(H-h)*0.72+3[b2];[b2][t]overlay=x=(W-w)/2:y=(H-h)*0.72[v]", "[1:a]anull[a]"} {
+		"[0:v]", "[base];[1:v]format=rgba,split[t][s];",
+		"colorchannelmixer=rr=0:gg=0:bb=0,format=yuva444p,dilation,dilation,dilation,dilation[o]",
+		"[base][o]overlay=x=(W-w)/2:y=200[b2];[b2][t]overlay=x=(W-w)/2:y=200[v]"} {
 		if !strings.Contains(fc, want) {
 			t.Errorf("filter missing %q in %s", want, fc)
 		}
 	}
-	if strings.Contains(fc, "amix") {
-		t.Error("replace must not mix")
+	if slices.Contains(a, "/t/music") || strings.Contains(fc, "[1:a]") {
+		t.Errorf("first pass must not use the music: %v", a)
 	}
-	if argAfter(a, "-t") != "20.000" || !slices.Contains(a, "-shortest") || argAfter(a, "-stream_loop") != "-1" {
+	if i := slices.Index(a, "/t/text.png"); i < 0 || a[i-1] != "-i" {
+		t.Errorf("overlay must be input 1: %v", a)
+	}
+	if argAfter(a, "-t") != "20.000" || argAfter(a, "-c:v") != "libx264" || a[len(a)-1] != "/t/nomusic.mp4" {
 		t.Errorf("args %v", a)
 	}
-	if i := slices.Index(a, "/t/text.png"); i < 0 || a[i-1] != "-i" || slices.Index(a, "/t/music") > i {
-		t.Errorf("overlay must be input 2: %v", a)
+	if !strings.Contains(strings.Join(a, " "), "-map [v] -map 0:a:0 -c:a aac") {
+		t.Errorf("video sound must be kept: %v", a)
 	}
-	// -stream_loop must come right before the music input
-	i := slices.Index(a, "-stream_loop")
-	if a[i+2] != "-i" || a[i+3] != "/t/music" {
-		t.Errorf("stream_loop not on music: %v", a)
-	}
-	if a[len(a)-1] != "/t/out.mp4" || argAfter(a, "-c:v") != "libx264" || argAfter(a, "-c:a") != "aac" {
-		t.Errorf("args %v", a)
+	s.HasAudio, s.Overlay = false, ""
+	a = mustArgs(t, s)
+	if !slices.Contains(a, "-an") || strings.Contains(argAfter(a, "-filter_complex"), "overlay") || strings.Count(strings.Join(a, " "), " -i ") != 1 {
+		t.Errorf("no audio, no overlay: %v", a)
 	}
 }
 
-func TestFFmpegArgsKeepAudio(t *testing.T) {
+func TestMusicArgs(t *testing.T) {
 	s := baseSpec()
 	s.HasAudio = true
-	fc := argAfter(mustArgs(t, s), "-filter_complex")
-	if !strings.Contains(fc, "[1:a]volume=0.25[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]") {
+	a := musicArgs(s)
+	if fc := argAfter(a, "-filter_complex"); fc != "[1:a]volume=0.25[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]" {
 		t.Errorf("filter %s", fc)
 	}
-	if strings.Contains(fc, "overlay") || strings.Count(strings.Join(mustArgs(t, s), " "), " -i ") != 2 {
-		t.Error("no overlay and no third input when burn is off")
+	// -stream_loop must come right before the music input; the video is copied, not re-encoded
+	i := slices.Index(a, "-stream_loop")
+	if i < 0 || a[i+1] != "-1" || a[i+2] != "-i" || a[i+3] != "/t/music" || argAfter(a, "-i") != "/t/nomusic.mp4" {
+		t.Errorf("inputs %v", a)
 	}
-	if !strings.Contains(fc, "setsar=1[v];") {
-		t.Errorf("video label %s", fc)
+	if argAfter(a, "-c:v") != "copy" || argAfter(a, "-t") != "20.000" || !slices.Contains(a, "-shortest") || a[len(a)-1] != "/t/out.mp4" {
+		t.Errorf("args %v", a)
 	}
 	s.HasAudio = false // no audio stream: music only
-	fc = argAfter(mustArgs(t, s), "-filter_complex")
-	if strings.Contains(fc, "amix") || !strings.Contains(fc, "[1:a]anull[a]") {
+	if fc := argAfter(musicArgs(s), "-filter_complex"); fc != "[1:a]anull[a]" {
 		t.Errorf("filter %s", fc)
 	}
 }
@@ -106,9 +108,9 @@ func TestBuildPost(t *testing.T) {
 }
 
 func TestPangoArgs(t *testing.T) {
-	got := pangoArgs("comment BOOK 📖✨", "/t/text.png", "DejaVu Sans Bold")
+	got := pangoArgs("comment BOOK 📖✨", "/t/text.png", "Montserrat SemiBold")
 	want := []string{"-q", "-o", "/t/text.png", "--background=transparent", "--foreground=white",
-		"--font=DejaVu Sans Bold 48", "--width=960", "--wrap=word-char", "--align=center",
+		"--font=Montserrat SemiBold 64", "--width=960", "--wrap=word-char", "--align=center",
 		"--margin=20", "--pixels", "--dpi=72", "--text=comment BOOK 📖✨"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)

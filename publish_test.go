@@ -371,6 +371,14 @@ func TestZernioUploadsFileOnce(t *testing.T) {
 	if presigns.Load() != 2 || puts.Load() != 2 || accountLists.Load() != 2 {
 		t.Fatalf("after new slot: presigns=%d puts=%d accountLists=%d", presigns.Load(), puts.Load(), accountLists.Load())
 	}
+	// same slot, a different file (TikTok gets the music version, YouTube does not): upload again
+	p.File = testPost(t).File
+	if _, err := z.tiktok().Publish(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if presigns.Load() != 3 || puts.Load() != 3 {
+		t.Fatalf("other file: presigns=%d puts=%d", presigns.Load(), puts.Load())
+	}
 }
 
 func TestInstagramTransientPollErrorKeepsPolling(t *testing.T) {

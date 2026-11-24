@@ -12,7 +12,7 @@ import (
 	_ "time/tzdata"
 )
 
-const defaultFont = "DejaVu Sans Bold"
+const defaultFont = "Montserrat SemiBold"
 
 func main() {
 	if len(os.Args) != 2 {

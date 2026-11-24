@@ -115,6 +115,9 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 	if _, err := os.Stat(c.File); err == nil {
 		t.Fatal("temp dir not removed")
 	}
+	if filepath.Base(c.File) != "nomusic.mp4" || filepath.Base(e.pubs["facebook"].calls[0].File) != "out.mp4" {
+		t.Fatalf("youtube must get the no-music file: %s, %s", c.File, e.pubs["facebook"].calls[0].File)
+	}
 	// run again: claimed, nothing posts, nothing due
 	if err := e.tk.tick(ctx, e.now.Add(time.Minute), ""); err != nil {
 		t.Fatal(err)

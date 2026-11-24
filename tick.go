@@ -182,8 +182,12 @@ func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) i
 			t.log.Info("dry run, publish skipped", "slot", sl.ID, "platform", name)
 			continue
 		}
+		p := post
+		if name == "youtube" && p.NoMusicFile != "" { // YouTube never gets the added music
+			p.File = p.NoMusicFile
+		}
 		pctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
-		id, err := t.pubs[name].Publish(pctx, post)
+		id, err := t.pubs[name].Publish(pctx, p)
 		cancel()
 		if err != nil {
 			t.log.Error("publish failed", "slot", sl.ID, "platform", name, "err", err.Error())
@@ -249,7 +253,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 		t.log.Warn("no caption for product, using default_caption", "slot", sl.ID, "product", product)
 	}
 
-	spec := renderSpec{Video: vpath, Music: mpath, Out: filepath.Join(dir, "out.mp4"), Duration: pr.Duration,
+	spec := renderSpec{Video: vpath, Music: mpath, NoMusic: filepath.Join(dir, "nomusic.mp4"), Out: filepath.Join(dir, "out.mp4"), Duration: pr.Duration,
 		HasAudio: pr.HasAudio, MusicVolume: l.set.MusicVolume}
 	if l.set.BurnCaption {
 		// a random line from the product's captions section, else burn_text
@@ -269,7 +273,11 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	if err := runCmd(ctx, t.ffmpeg, ffmpegArgs(spec)); err != nil {
 		return post, cleanup, err
 	}
+	if err := runCmd(ctx, t.ffmpeg, musicArgs(spec)); err != nil {
+		return post, cleanup, err
+	}
 	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
+	post.NoMusicFile = spec.NoMusic
 	return post, cleanup, nil
 }
 

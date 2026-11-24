@@ -23,7 +23,8 @@ type zernio struct {
 	// Caches live for one slot only, so a long-running process never reuses a stale account or URL.
 	slot     string
 	accounts []zAccount // fetched once per slot
-	url      string     // presigned publicUrl of this slot's video
+	url      string     // presigned publicUrl of urlFile
+	urlFile  string     // YouTube and TikTok get different files, so the URL is reused only for the same file
 }
 
 type zAccount struct {
@@ -118,7 +119,7 @@ func (t *zernio) account(ctx context.Context, platform string) (string, error) {
 
 // mediaURL presigns and uploads the slot's video once; the slot's other platform reuses the URL.
 func (t *zernio) mediaURL(ctx context.Context, path string) (string, error) {
-	if t.url != "" {
+	if t.url != "" && t.urlFile == path {
 		return t.url, nil
 	}
 	f, size, err := openFile(path)
@@ -140,14 +141,14 @@ func (t *zernio) mediaURL(ctx context.Context, path string) (string, error) {
 	if _, err := callOK(ctx, t.hc, uploadTimeout, "PUT", pre.UploadURL, map[string]string{"Content-Type": "video/mp4"}, f, size); err != nil {
 		return "", err
 	}
-	t.url = pre.PublicURL
+	t.url, t.urlFile = pre.PublicURL, path
 	return pre.PublicURL, nil
 }
 
 func (t *zPublisher) Publish(ctx context.Context, p Post) (string, error) {
 	z, name := t.z, t.platform
 	if z.slot != p.SlotID {
-		z.slot, z.accounts, z.url = p.SlotID, nil, ""
+		z.slot, z.accounts, z.url, z.urlFile = p.SlotID, nil, "", ""
 	}
 	acct, err := z.account(ctx, name)
 	if err != nil {

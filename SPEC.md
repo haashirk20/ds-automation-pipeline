@@ -20,7 +20,7 @@ Priorities, in order: never double-post; lowest memory and money; least code.
 ## Environment variables
 GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, DRIVE_ROOT_ID,
 META_PAGE_ID, META_PAGE_TOKEN, META_IG_USER_ID, ZERNIO_API_KEY,
-FONT_FAMILY (pango font family, default "DejaVu Sans Bold"), DRY_RUN=1 (skip publish calls and claim writes only).
+FONT_FAMILY (pango font family, default "Montserrat SemiBold"), DRY_RUN=1 (skip publish calls and claim writes only).
 
 ## Drive layout (created by `uploader init`)
 Root folder (DRIVE_ROOT_ID, made by the owner). `init` creates inside it, once, and prints their IDs:
@@ -86,19 +86,18 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
    A product counts once however many videos it has. Retry (below) picks a new product and video.
 2. Download both to a temp dir (removed afterwards, also on error).
 3. ffprobe the video: duration, has-audio. Skip (log, pick another, up to 5 tries) if duration < 3 s.
-4. ffmpeg once:
-   - `-stream_loop -1` on the music input, `-t min(duration, 90)`, `-shortest`.
-   - video: scale to fit 1080x1920 and pad (black), `setsar=1`, fps unchanged.
-   - burn text when burn_caption: `pango-view` draws the text to a transparent PNG (white, `FONT_FAMILY` 48 px, 960 px wide,
-     word-wrapped, centred; emoji come from fonts-noto-color-emoji by fontconfig fallback). Control characters except
-     `\n` are removed and the text is limited to 6 lines and 150 runes (cut at the last space). ffmpeg takes the PNG as input 2 and overlays it at
-     `y=(H-h)*0.72`, centred, over a blurred 60% black shadow offset 3 px. Without burn there is no third input.
-     Args for both tools are built in pure, unit-tested functions.
-   - audio: source has audio => `amix=inputs=2:duration=first:normalize=0`, video sound at full volume,
-     music at `music_volume`; no audio stream => music only (`anull`).
-   - `-c:v libx264 -preset veryfast -crf 23 -rc-lookahead 10 -threads 2 -pix_fmt yuv420p
-      -c:a aac -b:a 128k -fpsmax 60 -movflags +faststart`.
-   - Build the ffmpeg args in a pure function (unit-tested); run with exec.CommandContext.
+4. ffmpeg twice. Args for both tools are built in pure, unit-tested functions; run with exec.CommandContext.
+   - Pass 1 (`nomusic.mp4`, the file YouTube gets): video scaled to fit 1080x1920 and padded (black), `setsar=1`,
+     `-t min(duration, 90)`, the video's own sound (aac 128k) or `-an` when it has none.
+     `-c:v libx264 -preset veryfast -crf 23 -rc-lookahead 10 -threads 2 -pix_fmt yuv420p -fpsmax 60 -movflags +faststart`.
+   - burn text when burn_caption, TikTok caption style: `pango-view` draws the text to a transparent PNG (white,
+     `FONT_FAMILY` 64 px, 960 px wide, word-wrapped, centred; emoji come from fonts-noto-color-emoji by fontconfig
+     fallback). Control characters except `\n` are removed and the text is limited to 6 lines and 150 runes (cut at the
+     last space). ffmpeg takes the PNG as input 1 and overlays it centred at `y=200`, over a black outline made from
+     the PNG's alpha grown by 4 `dilation` passes. Without burn there is no second input.
+   - Pass 2 (`out.mp4`, every other platform): `-c:v copy` of pass 1 plus the music (`-stream_loop -1`, `-t`, `-shortest`,
+     so it is looped or cut to the video's length). Source has audio => `amix=inputs=2:duration=first:normalize=0`,
+     video sound at full volume, music at `music_volume`; no audio stream => music only (`anull`). aac 128k, `+faststart`.
 5. Post text = product caption + "\n\n" + hashtags. YouTube title = product caption (first line; if empty, the product name, else "New video") + hashtags, `<` `>`
    stripped, cut to 100 runes. The YouTube description also has `<` `>` stripped. IG caption cut to 2200 runes and at most 30 hashtags.
 6. Publish to each enabled platform in sequence. One failing does not stop the others.
@@ -144,8 +143,9 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   headers `Authorization: OAuth <token>`, `offset: 0`, `file_size`; poll `GET /{container}?fields=status_code`
   every 10 s up to 10 min until FINISHED (ERROR/EXPIRED => fail); `POST /{ig}/media_publish` creation_id. Return media id.
   Uses the Page token (Facebook Login for Business).
-- YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per slot
-  (publicUrl cached for the current slot only); the account list is fetched once per slot. Each platform is its own POST /posts with
+- YouTube gets `Post.NoMusicFile` (pass 1) as its File; the others get pass 2.
+- YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per file
+  (publicUrl cached for the current slot and file only); the account list is fetched once per slot. Each platform is its own POST /posts with
   `Idempotency-Key: <slot id>-<platform>`. YouTube entry: platforms:[{platform:"youtube", accountId,
   platformSpecificData:{title: Title, visibility: Privacy, madeForKids:false}}], content = Text with `<` `>` stripped.
 - TikTok via Zernio (base `https://zernio.com/api/v1`, `Authorization: Bearer <key>`; reference

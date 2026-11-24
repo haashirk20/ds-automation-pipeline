@@ -47,35 +47,53 @@ func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 }
 
 type renderSpec struct {
-	Video, Music, Out string
-	Duration          float64
-	HasAudio          bool   // source video has an audio stream
-	Overlay           string // transparent PNG with the burned text; empty = no burn
-	MusicVolume       float64
+	Video, Music string
+	NoMusic      string // first pass: video, burned text and the video's own sound (YouTube gets this)
+	Out          string // second pass: NoMusic plus the music
+	Duration     float64
+	HasAudio     bool   // source video has an audio stream
+	Overlay      string // transparent PNG with the burned text; empty = no burn
+	MusicVolume  float64
 }
 
-// ffmpegArgs is pure: it builds the one ffmpeg command line for a slot.
-// Inputs: 0 video, 1 music, 2 text PNG (only when Overlay is set).
+// textY is the top of the burned text: near the top, below the apps' own top bar.
+const textY = "200"
+
+// ffmpegArgs is pure: the first pass, which encodes the video once.
+// Inputs: 0 video, 1 text PNG (only when Overlay is set). The text gets a black outline
+// (its alpha grown by 4 dilation passes), like TikTok's own captions.
 func ffmpegArgs(s renderSpec) []string {
 	v := "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1[v]"
-	in := []string{"-i", s.Video, "-stream_loop", "-1", "-i", s.Music}
+	in := []string{"-i", s.Video}
 	if s.Overlay != "" {
 		v = strings.TrimSuffix(v, "[v]") + "[base];" +
-			"[2:v]format=rgba,split[t][s];[s]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.6,boxblur=6[sh];" +
-			"[base][sh]overlay=x=(W-w)/2+3:y=(H-h)*0.72+3[b2];[b2][t]overlay=x=(W-w)/2:y=(H-h)*0.72[v]"
+			"[1:v]format=rgba,split[t][s];[s]colorchannelmixer=rr=0:gg=0:bb=0,format=yuva444p,dilation,dilation,dilation,dilation[o];" +
+			"[base][o]overlay=x=(W-w)/2:y=" + textY + "[b2];[b2][t]overlay=x=(W-w)/2:y=" + textY + "[v]"
 		in = append(in, "-i", s.Overlay)
 	}
+	audio := []string{"-an"}
+	if s.HasAudio {
+		audio = []string{"-map", "0:a:0", "-c:a", "aac", "-b:a", "128k"}
+	}
+	args := append([]string{"-y", "-hide_banner", "-loglevel", "error"}, in...)
+	args = append(args, "-filter_complex", v, "-map", "[v]")
+	args = append(args, audio...)
+	return append(args, "-t", strconv.FormatFloat(min(s.Duration, maxOutSeconds), 'f', 3, 64),
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-rc-lookahead", "10", "-threads", "2", "-pix_fmt", "yuv420p",
+		"-fpsmax", "60", "-movflags", "+faststart", s.NoMusic)
+}
+
+// musicArgs is pure: the second pass copies the video stream and adds the music, looped or cut to the
+// video's length. The video's own sound stays at full volume with the music under it at MusicVolume;
+// a video without sound gets the music alone.
+func musicArgs(s renderSpec) []string {
 	a := "[1:a]anull[a]"
-	if s.HasAudio { // the video's own sound stays at full volume, music under it
+	if s.HasAudio {
 		a = "[1:a]volume=" + strconv.FormatFloat(s.MusicVolume, 'f', -1, 64) + "[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]"
 	}
-	t := min(s.Duration, maxOutSeconds)
-	args := append([]string{"-y", "-hide_banner", "-loglevel", "error"}, in...)
-	return append(args,
-		"-filter_complex", v+";"+a, "-map", "[v]", "-map", "[a]",
-		"-t", strconv.FormatFloat(t, 'f', 3, 64), "-shortest",
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-rc-lookahead", "10", "-threads", "2", "-pix_fmt", "yuv420p",
-		"-c:a", "aac", "-b:a", "128k", "-fpsmax", "60", "-movflags", "+faststart", s.Out)
+	return []string{"-y", "-hide_banner", "-loglevel", "error", "-i", s.NoMusic, "-stream_loop", "-1", "-i", s.Music,
+		"-filter_complex", a, "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+		"-t", strconv.FormatFloat(min(s.Duration, maxOutSeconds), 'f', 3, 64), "-shortest", "-movflags", "+faststart", s.Out}
 }
 
 // burnText cleans text for pango-view: control characters except \n dropped, at most 6 lines,
@@ -105,7 +123,7 @@ func burnText(s string) string {
 // Emoji come out in colour through fontconfig fallback (fonts-noto-color-emoji).
 func pangoArgs(text, out, family string) []string {
 	return []string{"-q", "-o", out, "--background=transparent", "--foreground=white",
-		"--font=" + family + " 48", "--width=960", "--wrap=word-char", "--align=center",
+		"--font=" + family + " 64", "--width=960", "--wrap=word-char", "--align=center",
 		"--margin=20", "--pixels", "--dpi=72", "--text=" + text}
 }
 

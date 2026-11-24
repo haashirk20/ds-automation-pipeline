@@ -12,11 +12,12 @@ import (
 
 // Post is one finished video plus its text, handed to every publisher.
 type Post struct {
-	File    string // path to the final mp4
-	Text    string // post text (caption + hashtags)
-	Title   string // YouTube title, already cut
-	SlotID  string
-	Privacy string // youtube_privacy
+	File        string // path to the final mp4
+	NoMusicFile string // the same video without the added music; publishAll gives it to YouTube
+	Text        string // post text (caption + hashtags)
+	Title       string // YouTube title, already cut
+	SlotID      string
+	Privacy     string // youtube_privacy
 }
 
 type Publisher interface {
