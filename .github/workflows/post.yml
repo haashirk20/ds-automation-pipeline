@@ -34,6 +34,7 @@ jobs:
       META_PAGE_TOKEN: ${{ secrets.META_PAGE_TOKEN }}
       META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
       ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
+      ALERT_DISCORD_WEBHOOK: ${{ secrets.ALERT_DISCORD_WEBHOOK }}
       DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
       POST_NOW: ${{ inputs.post_now && github.run_id || '' }}
     steps:

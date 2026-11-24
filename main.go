@@ -60,8 +60,13 @@ func run(ctx context.Context, cmd string, now time.Time, getenv func(string) str
 	if font == "" {
 		font = defaultFont
 	}
+	hook := getenv("ALERT_DISCORD_WEBHOOK")
+	if hook != "" && !isDiscordWebhook(hook) {
+		slog.Warn("ALERT_DISCORD_WEBHOOK is not a Discord webhook URL; Discord messages are off")
+		hook = ""
+	}
 	t := &ticker{d: d, root: root, pubs: map[string]Publisher{}, font: font, pango: "pango-view", dryRun: getenv("DRY_RUN") == "1",
-		log: slog.Default(), ffmpeg: "ffmpeg", ffprobe: "ffprobe"}
+		log: slog.Default(), ffmpeg: "ffmpeg", ffprobe: "ffprobe", discord: hook, hc: hc}
 	if cmd == "due" {
 		due, err := t.isDue(ctx, now)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,6 +24,8 @@ type ticker struct {
 	log     *slog.Logger
 	ffmpeg  string
 	ffprobe string
+	discord string       // ALERT_DISCORD_WEBHOOK; empty = no Discord message
+	hc      *http.Client // for the Discord webhook
 }
 
 type loaded struct {
@@ -166,7 +169,9 @@ func (t *ticker) tick(ctx context.Context, now time.Time, manual string) error {
 				return fmt.Errorf("claim %s: %w", sl.ID, err)
 			}
 		}
-		failures += t.publishAll(ctx, sl, l, post)
+		n, res := t.publishAll(ctx, sl, l, post)
+		failures += n
+		t.notifyDiscord(ctx, sl, post, res)
 		cleanup()
 	}
 	if failures > 0 {
@@ -175,11 +180,13 @@ func (t *ticker) tick(ctx context.Context, now time.Time, manual string) error {
 	return nil
 }
 
-func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) int {
+func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) (int, []result) {
 	failures := 0
+	var res []result
 	for _, name := range l.set.Platforms {
 		if t.dryRun {
 			t.log.Info("dry run, publish skipped", "slot", sl.ID, "platform", name)
+			res = append(res, result{platform: name})
 			continue
 		}
 		pctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
@@ -188,11 +195,13 @@ func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) i
 		if err != nil {
 			t.log.Error("publish failed", "slot", sl.ID, "platform", name, "err", err.Error())
 			failures++
+			res = append(res, result{platform: name, err: err})
 			continue
 		}
 		t.log.Info("published", "slot", sl.ID, "platform", name, "id", id)
+		res = append(res, result{platform: name, id: id})
 	}
-	return failures
+	return failures, res
 }
 
 // prepare picks the media and caption, renders the video and builds the Post.
@@ -251,6 +260,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 
 	spec := renderSpec{Video: vpath, Music: mpath, NoMusic: filepath.Join(dir, "nomusic.mp4"), Out: filepath.Join(dir, "out.mp4"), Duration: pr.Duration,
 		HasAudio: pr.HasAudio, MusicVolume: l.set.MusicVolume}
+	burned := ""
 	if l.set.BurnCaption {
 		// a random line from the product's captions section, else burn_text
 		text := l.set.BurnText
@@ -260,6 +270,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 			return post, cleanup, fmt.Errorf("no burn text for product %q: no lines in its captions section and settings burn_text is empty", product)
 		}
 		if text = burnText(strings.ReplaceAll(text, `\n`, "\n")); text != "" {
+			burned = text
 			spec.Overlay = filepath.Join(dir, "text.png")
 			if err := runCmd(ctx, t.pango, pangoArgs(text, spec.Overlay, t.font)); err != nil {
 				return post, cleanup, err
@@ -273,6 +284,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 		return post, cleanup, err
 	}
 	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
+	post.Product, post.Burn = product, burned
 	return post, cleanup, nil
 }
 

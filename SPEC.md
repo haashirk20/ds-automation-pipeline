@@ -20,7 +20,8 @@ Priorities, in order: never double-post; lowest memory and money; least code.
 ## Environment variables
 GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, DRIVE_ROOT_ID,
 META_PAGE_ID, META_PAGE_TOKEN, META_IG_USER_ID, ZERNIO_API_KEY,
-FONT_FAMILY (pango font family, default "Montserrat SemiBold"), DRY_RUN=1 (skip publish calls and claim writes only).
+ALERT_DISCORD_WEBHOOK (optional; must start with https://discord.com/api/webhooks/ or https://discordapp.com/api/webhooks/,
+else a warning and no messages), FONT_FAMILY (pango font family, default "Montserrat SemiBold"), DRY_RUN=1 (skip publish calls and claim writes only).
 
 ## Drive layout (created by `uploader init`)
 Root folder (DRIVE_ROOT_ID, made by the owner). `init` creates inside it, once, and prints their IDs:
@@ -102,6 +103,10 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
    stripped, cut to 100 runes. The YouTube description also has `<` `>` stripped. IG caption cut to 2200 runes and at most 30 hashtags.
 6. Publish to each enabled platform in sequence. One failing does not stop the others.
    Each platform has a 12 min timeout. Never retry a publish request after it has been sent. Log `{"slot","platform","id"}` on success.
+6b. After publishing (also in a dry run), with ALERT_DISCORD_WEBHOOK set: one multipart POST to the webhook with
+   `payload_json` {content: slot, product, per-platform ✅ id / ❌ error / ⏭️ dry run, on-video text, caption; cut to
+   1900 runes; allowed_mentions.parse = []} and the final mp4 as `files[0]` when it is at most 10 MiB, streamed with a
+   known Content-Length. 2 min timeout. A failure only logs a warning (status and Discord's message, never the URL).
 7. Exit code: 0 if everything due succeeded or nothing was due; 1 if any slot or platform failed.
 
 ## Commands

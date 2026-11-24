@@ -131,7 +131,13 @@ META_PAGE_ID
 META_PAGE_TOKEN
 META_IG_USER_ID
 ZERNIO_API_KEY
+ALERT_DISCORD_WEBHOOK   # optional: Discord channel webhook URL
 ```
+
+   With `ALERT_DISCORD_WEBHOOK` set, every posted slot sends a message to that Discord channel: which
+   platforms worked or failed, the on-video text, the caption, and the video itself when it is 10 MB
+   or less. Make the webhook in Discord: channel settings, Integrations, Webhooks, New Webhook, Copy
+   Webhook URL. A failed Discord message never stops or fails a post.
 
 3. Important: GitHub runs scheduled workflows only from the repo's default branch. This code is on the
    branch `batch-actions`. Either set `batch-actions` as the default branch (Settings, Branches), or put

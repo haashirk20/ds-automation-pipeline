@@ -16,6 +16,8 @@ type Post struct {
 	Text    string // post text (caption + hashtags)
 	Title   string // YouTube title, already cut
 	SlotID  string
+	Product string // for the Discord message only
+	Burn    string // the text burned on the video, for the Discord message only
 	Privacy string // youtube_privacy
 }
 
