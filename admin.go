@@ -38,7 +38,7 @@ func (a *admin) done(w http.ResponseWriter, r *http.Request, v view) {
 	a.flashMu.Lock()
 	a.flash = &v
 	a.flashMu.Unlock()
-	path := map[string]string{"status": "/", "settings": "/settings", "captions": "/captions", "upload": "/upload"}[v.Page]
+	path := map[string]string{"status": "/", "settings": "/settings", "captions": "/captions", "products": "/products", "upload": "/upload"}[v.Page]
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
@@ -75,7 +75,9 @@ func newAdmin(s *svc, password string, maxUpload int64, port string) (*admin, er
 	a.mux.HandleFunc("GET /captions", a.docPage("captions"))
 	a.mux.HandleFunc("POST /captions", a.saveCaptions)
 	a.mux.HandleFunc("POST /captions/add", a.addCaption)
-	a.mux.HandleFunc("GET /upload", func(w http.ResponseWriter, r *http.Request) { a.render(w, a.take(view{Page: "upload"})) })
+	a.mux.HandleFunc("GET /products", a.docPage("products"))
+	a.mux.HandleFunc("POST /products", a.saveProducts)
+	a.mux.HandleFunc("GET /upload", a.uploadPage)
 	a.mux.HandleFunc("POST /upload", a.upload)
 	a.mux.HandleFunc("POST /post-now", a.postNow)
 	return a, nil
@@ -125,6 +127,8 @@ type claimRow struct{ ID, At string }
 
 type view struct {
 	Page, Msg, Err, Text string
+	Warns                []string // shown, never blocking
+	Products             []string // product folders, for the upload form
 	CSRF, Nonce          string
 	PerDay               int
 	Slots                []slotRow
@@ -238,11 +242,102 @@ func (a *admin) docPage(name string) http.HandlerFunc {
 		if err == nil {
 			v.Text, err = a.s.t.d.exportText(r.Context(), id)
 		}
+		if err == nil && name == "products" {
+			v.Warns, err = a.checkProducts(r.Context(), v.Text)
+		}
 		if err != nil {
 			v.Err = err.Error()
 		}
 		a.render(w, a.take(v))
 	}
+}
+
+// productFolders lists the product folders in videos/ (names trimmed).
+func (a *admin) productFolders(ctx context.Context) ([]driveFile, error) {
+	id, err := a.docID(ctx, "videos")
+	if err != nil {
+		return nil, err
+	}
+	fs, err := a.s.t.d.listFolders(ctx, id)
+	for i := range fs {
+		fs[i].Name = strings.TrimSpace(fs[i].Name)
+	}
+	return fs, err
+}
+
+// checkProducts parses text against the product folders. A parse error blocks; warnings do not.
+func (a *admin) checkProducts(ctx context.Context, text string) ([]string, error) {
+	fs, err := a.productFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]bool{}
+	for _, f := range fs {
+		set[f.Name] = true
+	}
+	_, warns, err := parseProducts(text, set)
+	return warns, err
+}
+
+func (a *admin) saveProducts(w http.ResponseWriter, r *http.Request) {
+	text := cleanText(r.PostFormValue("text"))
+	v := view{Page: "products", Text: text}
+	warns, err := a.checkProducts(r.Context(), text)
+	if err != nil { // never write what the tick would refuse
+		v.Err = "not saved: " + err.Error()
+	} else if err := a.saveDoc(r.Context(), "products", text); err != nil {
+		v.Err = "save failed: " + err.Error()
+	} else {
+		v.Msg, v.Warns = "products saved", warns
+	}
+	a.done(w, r, v)
+}
+
+func (a *admin) uploadPage(w http.ResponseWriter, r *http.Request) {
+	v := view{Page: "upload"}
+	fs, err := a.productFolders(r.Context())
+	if err != nil {
+		v.Err = err.Error()
+	}
+	for _, f := range fs {
+		v.Products = append(v.Products, f.Name)
+	}
+	a.render(w, a.take(v))
+}
+
+const folderNotWritable = "This folder was made in Drive, so the app can't write to it. Upload in the Drive app, or create the product here."
+
+// videoParent returns the folder a video goes into: a new product folder (created here, so the app may
+// write to it), an existing product folder, or videos/ itself. made is true when the app owns the folder.
+func (a *admin) videoParent(ctx context.Context, product, newProduct string) (id string, made bool, err error) {
+	root, err := a.docID(ctx, "videos")
+	if err != nil {
+		return "", false, err
+	}
+	name := strings.Join(strings.Fields(newProduct), " ")
+	if name == "" {
+		name = strings.TrimSpace(product)
+	}
+	if name == "" {
+		return root, true, nil
+	}
+	if strings.ContainsAny(name, "[]/\\\x00") || len(name) > 100 {
+		return "", false, errors.New("product name can't contain [ ] / \\ and must be under 100 characters")
+	}
+	fs, err := a.productFolders(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, f := range fs {
+		if f.Name == name {
+			return f.ID, false, nil
+		}
+	}
+	if newProduct == "" {
+		return "", false, fmt.Errorf("unknown product %q", name)
+	}
+	id, err = a.s.t.d.create(ctx, root, name, folderMime, nil, "")
+	return id, true, err
 }
 
 func cleanText(s string) string {
@@ -337,7 +432,7 @@ func (a *admin) streamUpload(r *http.Request) (id, name string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	kind := ""
+	var kind, product, newProduct string
 	for {
 		p, err := mr.NextPart()
 		if err == io.EOF {
@@ -350,6 +445,13 @@ func (a *admin) streamUpload(r *http.Request) (id, name string, err error) {
 		case "kind":
 			b, _ := io.ReadAll(io.LimitReader(p, 16))
 			kind = string(b)
+		case "product", "newproduct":
+			b, _ := io.ReadAll(io.LimitReader(p, 256))
+			if p.FormName() == "product" {
+				product = string(b)
+			} else {
+				newProduct = string(b)
+			}
 		case "file":
 			k, ok := uploadKinds[kind]
 			if !ok {
@@ -360,11 +462,20 @@ func (a *admin) streamUpload(r *http.Request) (id, name string, err error) {
 			if !ok || strings.ContainsAny(name, "\x00\r\n") {
 				return "", "", fmt.Errorf("file type not allowed for %s", kind)
 			}
-			parent, err := a.docID(r.Context(), k.folder)
+			var parent string
+			made := true
+			if kind == "video" { // product fields are ignored for music
+				parent, made, err = a.videoParent(r.Context(), product, newProduct)
+			} else {
+				parent, err = a.docID(r.Context(), k.folder)
+			}
 			if err != nil {
 				return "", "", err
 			}
 			id, err = a.s.t.d.uploadStream(r.Context(), parent, name, mime, p)
+			if err != nil && !made && (strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "HTTP 404")) {
+				err = errors.New(folderNotWritable)
+			}
 			return id, name, err
 		}
 	}
@@ -376,11 +487,11 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <style>
 body{font:15px/1.4 system-ui,sans-serif;max-width:46rem;margin:1rem auto;padding:0 1rem}
 nav a{margin-right:1rem}textarea{width:100%;height:22rem;font:13px monospace}
-.msg{background:#dfd;padding:.4rem}.err{background:#fdd;padding:.4rem}
+.msg{background:#dfd;padding:.4rem}.warn{background:#ffd;padding:.4rem}.err{background:#fdd;padding:.4rem}
 table{border-collapse:collapse}td,th{padding:.15rem .6rem;text-align:left;border-bottom:1px solid #ddd}
 </style></head><body>
-<nav><a href="/">Status</a><a href="/settings">Settings</a><a href="/captions">Captions</a><a href="/upload">Upload</a></nav>
-{{if .Msg}}<p class="msg">{{.Msg}}</p>{{end}}{{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+<nav><a href="/">Status</a><a href="/settings">Settings</a><a href="/captions">Captions</a><a href="/products">Products</a><a href="/upload">Upload</a></nav>
+{{if .Msg}}<p class="msg">{{.Msg}}</p>{{end}}{{if .Err}}<p class="err">{{.Err}}</p>{{end}}{{range .Warns}}<p class="warn">{{.}}</p>{{end}}
 {{if eq .Page "status"}}
 <h2>Status</h2>
 <p>Videos per day: {{.PerDay}}. Videos: {{.Videos}}, music: {{.Music}}, captions: {{.Caps}}.</p>
@@ -396,15 +507,22 @@ table{border-collapse:collapse}td,th{padding:.15rem .6rem;text-align:left;border
 <form method="post" action="/settings"><input type="hidden" name="csrf" value="{{.CSRF}}">
 <textarea name="text" spellcheck="false">{{.Text}}</textarea><p><button>Save</button> (checked before it is written)</p></form>
 {{else if eq .Page "captions"}}
-<h2>Captions</h2>
+<h2>Captions (text burned on the video)</h2>
 <form method="post" action="/captions/add"><input type="hidden" name="csrf" value="{{.CSRF}}">
 <p><input name="caption" size="50" placeholder="one new caption"> <button>Add</button></p></form>
 <form method="post" action="/captions"><input type="hidden" name="csrf" value="{{.CSRF}}">
 <textarea name="text" spellcheck="false">{{.Text}}</textarea><p><button>Save</button></p></form>
+{{else if eq .Page "products"}}
+<h2>Products (post text per product)</h2>
+<p>One <code>[folder name]</code> section per product folder in videos/, then its caption.</p>
+<form method="post" action="/products"><input type="hidden" name="csrf" value="{{.CSRF}}">
+<textarea name="text" spellcheck="false">{{.Text}}</textarea><p><button>Save</button> (checked before it is written)</p></form>
 {{else}}
 <h2>Upload</h2>
 <form method="post" action="/upload?csrf={{.CSRF}}" enctype="multipart/form-data">
 <p><select name="kind"><option value="video">video (.mp4 .mov .m4v .webm)</option><option value="music">music (.mp3 .m4a .aac .wav .ogg)</option></select></p>
+<p>Product (videos only): <select name="product"><option value="">loose (no product)</option>{{range .Products}}<option>{{.}}</option>{{end}}</select>
+or new product name: <input name="newproduct" size="24"></p>
 <p><input type="file" name="file" required></p><p><button>Upload</button> (max {{.MaxMB}} MB)</p></form>
 {{end}}
 </body></html>`))

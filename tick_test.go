@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,12 +46,14 @@ type tickEnv struct {
 }
 
 // fake ffprobe/ffmpeg shell scripts stand in for the real tools
-func writeTools(t *testing.T, probeJSON string) (ffmpeg, ffprobe string) {
+func writeTools(t *testing.T, probeJSON string) (ffmpeg, ffprobe, pango string) {
 	dir := t.TempDir()
 	ffprobe = filepath.Join(dir, "ffprobe")
 	ffmpeg = filepath.Join(dir, "ffmpeg")
 	os.WriteFile(ffprobe, []byte("#!/bin/sh\ncat <<'EOF'\n"+probeJSON+"\nEOF\n"), 0o755)
 	os.WriteFile(ffmpeg, []byte("#!/bin/sh\nfor a; do last=$a; done\necho rendered > \"$last\"\n"), 0o755)
+	pango = filepath.Join(dir, "pango-view")
+	os.WriteFile(pango, []byte("#!/bin/sh\necho \"$@\" > \"$0.args\"\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\necho png > \"$out\"\n"), 0o755)
 	return
 }
 
@@ -61,13 +64,15 @@ func newTickEnv(t *testing.T, settings, probeJSON string) *tickEnv {
 	f.add("set", "settings", docMime, "root", settings)
 	f.add("cap", "captions", docMime, "root", "# c\nonly caption\n")
 	f.add("st", "state.json", "application/json", "root", `{"claims":{}}`)
+	f.add("pr", "products", docMime, "root", "[Velvet Tarot Deck]\nVelvet caption\n")
 	f.add("vf", "videos", folderMime, "root", "")
+	f.add("pf", "Velvet Tarot Deck ", folderMime, "vf", "")
 	f.add("mf", "music", folderMime, "root", "")
-	f.add("v1", "a.mp4", "video/mp4", "vf", "VID")
+	f.add("v1", "a.mp4", "video/mp4", "pf", "VID")
 	f.add("m1", "a.mp3", "audio/mpeg", "mf", "MUS")
-	ffmpeg, ffprobe := writeTools(t, probeJSON)
+	ffmpeg, ffprobe, pango := writeTools(t, probeJSON)
 	e := &tickEnv{f: f, pubs: map[string]*fakePub{}, now: time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)}
-	e.tk = &ticker{d: f.drive(), root: "root", pubs: map[string]Publisher{}, font: "/font.ttf",
+	e.tk = &ticker{d: f.drive(), root: "root", pubs: map[string]Publisher{}, font: "DejaVu Sans Bold", pango: pango,
 		log: slog.New(slog.NewJSONHandler(io.Discard, nil)), ffmpeg: ffmpeg, ffprobe: ffprobe}
 	for _, n := range allPlatforms {
 		p := &fakePub{name: n, t: t, claimed: e.claimed}
@@ -104,7 +109,7 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 		t.Fatal("tiktok is not enabled")
 	}
 	c := e.pubs["youtube"].calls[0]
-	if c.Text != "only caption\n\n#x" || c.Title != "only caption #x" || c.SlotID != "2026-11-12 09:00#1" || c.Privacy != "public" {
+	if c.Text != "Velvet caption\n\n#x" || c.Title != "Velvet caption #x" || c.SlotID != "2026-11-12 09:00#1" || c.Privacy != "public" {
 		t.Fatalf("%+v", c)
 	}
 	if _, err := os.Stat(c.File); err == nil {
@@ -197,5 +202,96 @@ func TestTickMissingCredentialsFailsBeforeClaim(t *testing.T) {
 	}
 	if len(e.pubs["youtube"].calls) != 0 || e.claimed("2026-11-12 09:00#1") {
 		t.Fatal("missing credentials must fail before claim and publish")
+	}
+}
+
+func (e *tickEnv) pangoArgs() string {
+	b, _ := os.ReadFile(e.tk.pango + ".args")
+	return string(b)
+}
+
+func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
+	e := newTickEnv(t, settingsOne, probeLong)
+	if err := e.tk.tick(context.Background(), e.now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.pangoArgs(), "--text=only caption") {
+		t.Errorf("pango args %s", e.pangoArgs())
+	}
+	e = newTickEnv(t, settingsOne+"burn_text = comment BOOK \\n now 📖\n", probeLong)
+	if err := e.tk.tick(context.Background(), e.now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.pangoArgs(), "--text=comment BOOK \n now 📖") {
+		t.Errorf("pango args %s", e.pangoArgs())
+	}
+	if c := e.pubs["youtube"].calls[0]; strings.Contains(c.Text, "comment BOOK") {
+		t.Errorf("burned text leaked into post text: %q", c.Text)
+	}
+	e = newTickEnv(t, settingsOne+"burn_caption = no\n", probeLong)
+	if err := e.tk.tick(context.Background(), e.now); err != nil {
+		t.Fatal(err)
+	}
+	if e.pangoArgs() != "" {
+		t.Error("no burn: pango-view must not run")
+	}
+}
+
+func TestTickFallsBackToDefaultCaption(t *testing.T) {
+	// loose video in videos/ has no product entry
+	e := newTickEnv(t, settingsOne+"default_caption = Shop now\n", probeLong)
+	e.f.get("v1").parent = "vf"
+	if err := e.tk.tick(context.Background(), e.now); err != nil {
+		t.Fatal(err)
+	}
+	if c := e.pubs["youtube"].calls[0]; c.Text != "Shop now\n\n#x" {
+		t.Errorf("%q", c.Text)
+	}
+	// product folder exists but has no entry, and default_caption is empty
+	e = newTickEnv(t, settingsOne, probeLong)
+	e.f.get("pf").name = "Other"
+	if err := e.tk.tick(context.Background(), e.now); err != nil {
+		t.Fatal(err)
+	}
+	if c := e.pubs["youtube"].calls[0]; c.Text != "#x" || c.Title != "#x" {
+		t.Errorf("%+v", c)
+	}
+}
+
+func TestTickProductsDocProblemsFailBeforeClaim(t *testing.T) {
+	e := newTickEnv(t, settingsOne, probeLong)
+	e.f.get("pr").name = "gone"
+	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "products") {
+		t.Fatalf("err %v", err)
+	}
+	e = newTickEnv(t, settingsOne, probeLong)
+	e.f.get("pr").content = "[Velvet Tarot Deck]\nx\n[Velvet Tarot Deck]\ny"
+	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("err %v", err)
+	}
+	if e.claimed("2026-11-12 09:00#1") || len(e.pubs["youtube"].calls) != 0 {
+		t.Fatal("must fail before claim")
+	}
+}
+
+func TestPickProductThenVideo(t *testing.T) {
+	vs := func(n int) []driveFile { return make([]driveFile, n) }
+	cs := []cand{{"A", vs(1)}, {"B", vs(9)}}
+	// fixed source: first product, then dropping it when its last video is used
+	zero := func(int) int { return 0 }
+	p, _, rest := pick(cs, zero)
+	if p != "A" || len(rest) != 1 || rest[0].product != "B" || len(cs[0].vids) != 1 {
+		t.Fatalf("%q %v", p, rest)
+	}
+	// products are equally likely whatever their video count
+	r := rand.New(rand.NewPCG(1, 2))
+	n := 0
+	for i := 0; i < 4000; i++ {
+		if p, _, _ := pick(cs, r.IntN); p == "A" {
+			n++
+		}
+	}
+	if n < 1800 || n > 2200 {
+		t.Errorf("A picked %d/4000, want about half", n)
 	}
 }

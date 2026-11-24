@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 [ -x ./uploader ] || { echo "build ./uploader first (see SPEC.md, VM branch)" >&2; exit 1; }
 
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-color-emoji pango1.0-tools
 
 id uploader >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin uploader
 

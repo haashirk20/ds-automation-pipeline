@@ -117,6 +117,11 @@ func (d *drive) list(ctx context.Context, parent, mimeContains string) ([]driveF
 	return d.query(ctx, fmt.Sprintf("'%s' in parents and trashed=false and mimeType contains '%s'", qEscape(parent), qEscape(mimeContains)))
 }
 
+// listFolders returns the subfolders of parent.
+func (d *drive) listFolders(ctx context.Context, parent string) ([]driveFile, error) {
+	return d.query(ctx, fmt.Sprintf("'%s' in parents and trashed=false and mimeType = '%s'", qEscape(parent), folderMime))
+}
+
 // resolve finds each named item in root; a missing or duplicated name is an error.
 func (d *drive) resolve(ctx context.Context, root string, names ...string) (map[string]string, error) {
 	ids := map[string]string{}
@@ -211,9 +216,11 @@ const defaultSettings = `# one post per time; list a time twice for two posts
 times = 09:00, 18:00
 timezone = America/Toronto
 platforms = youtube, instagram, facebook, tiktok
-# pinned caption; leave empty to pick a random line from the captions doc
-caption =
-# appended to post text only, never burned on the video
+# text burned on the video; leave empty to pick a random line from the captions doc
+burn_text =
+# post text for a video with no product entry in the products doc (may be empty)
+default_caption =
+# added under the product caption in the post text, never burned on the video
 hashtags = #shorts #fyp
 burn_caption = yes
 # 0..1, only used for videos with _keepaudio in the name
@@ -222,10 +229,17 @@ youtube_privacy = public
 paused = no
 `
 
-const defaultCaptions = `# one caption per line; a literal \n makes a line break
-Wait for it
-You need this in your life
-Tell me this is not satisfying
+const defaultCaptions = `# text burned on the video: one per line; a literal \n makes a line break
+comment BOOK if you want one! 📖✨
+Wait for it 👀
+You need this in your life 😍
+`
+
+const defaultProducts = `# post text under the video, one section per product
+# the [name] must match the product's folder name in videos/ exactly
+# the caption can span several lines; hashtags from settings are added after it
+# [Velvet Tarot Deck]
+# Hand-gilded tarot deck ✨ Link in bio #tarot
 `
 
 // initLayout creates what is missing under root and prints the IDs. It refuses on duplicates.
@@ -239,6 +253,7 @@ func initLayout(ctx context.Context, d *drive, root string, out io.Writer) error
 		{"music", folderMime, "", ""},
 		{"settings", docMime, "text/plain", defaultSettings},
 		{"captions", docMime, "text/plain", defaultCaptions},
+		{"products", docMime, "text/plain", defaultProducts},
 		{"state.json", "application/json", "application/json", `{"claims":{}}`},
 	}
 	found := map[string]string{}

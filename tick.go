@@ -18,7 +18,8 @@ type ticker struct {
 	d       *drive
 	root    string
 	pubs    map[string]Publisher // only platforms with credentials present
-	font    string
+	font    string               // pango font family
+	pango   string
 	dryRun  bool
 	log     *slog.Logger
 	ffmpeg  string
@@ -70,10 +71,14 @@ func (t *ticker) fix(err error) error {
 }
 
 type loaded struct {
-	ids map[string]string
-	set Settings
-	st  state
-	due []slot
+	ids     map[string]string
+	set     Settings
+	st      state
+	due     []slot
+	prod    map[string]string // product name -> post caption
+	folders map[string]bool   // product folders in videos/
+	cands   []cand            // products that have videos
+	musics  []driveFile
 }
 
 // load reads settings and, when a slot is in its window (or force), state, and works out the due slots.
@@ -142,12 +147,50 @@ func (t *ticker) run(ctx context.Context, now time.Time, manual string) error {
 		t.log.Debug("nothing due")
 		return nil
 	}
-	rest, err := t.resolveIDs(ctx, "videos", "music", "captions")
+	rest, err := t.resolveIDs(ctx, "videos", "music", "captions", "products")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (products doc missing? run uploader init)", err)
 	}
 	for k, v := range rest {
 		l.ids[k] = v
+	}
+	// list the media once per tick; every slot picks from this
+	folders, err := t.d.listFolders(ctx, l.ids["videos"])
+	if err != nil {
+		return err
+	}
+	l.folders = map[string]bool{}
+	for _, f := range folders {
+		name := strings.TrimSpace(f.Name)
+		l.folders[name] = true
+		vs, err := t.d.list(ctx, f.ID, "video/")
+		if err != nil {
+			return err
+		}
+		if len(vs) > 0 {
+			l.cands = append(l.cands, cand{name, vs})
+		}
+	}
+	loose, err := t.d.list(ctx, l.ids["videos"], "video/")
+	if err != nil {
+		return err
+	}
+	if len(loose) > 0 { // loose videos in videos/ are the product ""
+		l.cands = append(l.cands, cand{"", loose})
+	}
+	if l.musics, err = t.d.list(ctx, l.ids["music"], "audio/"); err != nil {
+		return err
+	}
+	ptext, err := t.d.exportText(ctx, l.ids["products"])
+	if err != nil {
+		return err
+	}
+	var warns []string
+	if l.prod, warns, err = parseProducts(ptext, l.folders); err != nil {
+		return err
+	}
+	for _, w := range warns {
+		t.log.Warn(w)
 	}
 	for _, name := range l.set.Platforms {
 		if t.pubs[name] == nil {
@@ -225,41 +268,20 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	}
 	cleanup := func() { os.RemoveAll(dir) }
 
-	caption := l.set.Caption
-	if caption == "" {
-		text, err := t.d.exportText(ctx, l.ids["captions"])
-		if err != nil {
-			return post, cleanup, err
-		}
-		cs := parseCaptions(text)
-		if len(cs) == 0 {
-			return post, cleanup, fmt.Errorf("no caption: settings caption is empty and captions doc has no lines")
-		}
-		caption = cs[rand.IntN(len(cs))]
-	} else {
-		caption = strings.ReplaceAll(caption, `\n`, "\n")
+	cands, musics := l.cands, l.musics
+	if len(cands) == 0 || len(musics) == 0 {
+		return post, cleanup, fmt.Errorf("need at least one video and one music file (have %d products with videos, %d music)", len(cands), len(musics))
 	}
 
-	videos, err := t.d.list(ctx, l.ids["videos"], "video/")
-	if err != nil {
-		return post, cleanup, err
-	}
-	musics, err := t.d.list(ctx, l.ids["music"], "audio/")
-	if err != nil {
-		return post, cleanup, err
-	}
-	if len(videos) == 0 || len(musics) == 0 {
-		return post, cleanup, fmt.Errorf("need at least one video and one music file (have %d, %d)", len(videos), len(musics))
-	}
-
-	// pick a video of at least 3 s, trying up to 5 different files
-	rand.Shuffle(len(videos), func(i, j int) { videos[i], videos[j] = videos[j], videos[i] })
+	// pick a random product, then a random video; if it is unusable (under 3 s, bad file) pick again,
+	// up to 5 tries. A file already tried is never picked twice.
 	vpath := filepath.Join(dir, "video")
 	var pr probeResult
-	var vname string
+	var product, vname string
 	picked := false
-	for i := 0; i < len(videos) && i < 5 && !picked; i++ {
-		v := videos[i]
+	for i := 0; i < 5 && len(cands) > 0 && !picked; i++ {
+		var v driveFile
+		product, v, cands = pick(cands, rand.IntN)
 		if err := t.d.download(ctx, v.ID, vpath); err != nil {
 			t.log.Warn("video download failed, trying another", "slot", sl.ID, "file", v.Name, "err", err.Error())
 			continue
@@ -283,36 +305,72 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 		return post, cleanup, err
 	}
 
-	burned := capLines(wrapCaption(strings.TrimSpace(stripSymbols(caption)), 24), 5)
-	tfile := filepath.Join(dir, "caption.txt")
-	if err := os.WriteFile(tfile, []byte(burned), 0o600); err != nil {
+	caption := l.prod[product]
+	if caption == "" {
+		caption = l.set.DefaultCaption
+		t.log.Warn("no caption for product, using default_caption", "slot", sl.ID, "product", product)
+	}
+
+	spec := renderSpec{Video: vpath, Music: mpath, Out: filepath.Join(dir, "out.mp4"), Duration: pr.Duration,
+		KeepAudio: strings.Contains(vname, "_keepaudio"), HasAudio: pr.HasAudio, MusicVolume: l.set.MusicVolume}
+	if l.set.BurnCaption {
+		text := l.set.BurnText
+		if text == "" {
+			ctext, err := t.d.exportText(ctx, l.ids["captions"])
+			if err != nil {
+				return post, cleanup, err
+			}
+			cs := parseCaptions(ctext)
+			if len(cs) == 0 {
+				return post, cleanup, fmt.Errorf("no burn text: settings burn_text is empty and captions doc has no lines")
+			}
+			text = cs[rand.IntN(len(cs))]
+		}
+		if text = burnText(strings.ReplaceAll(text, `\n`, "\n")); text != "" {
+			spec.Overlay = filepath.Join(dir, "text.png")
+			if err := runCmd(ctx, t.pango, pangoArgs(text, spec.Overlay, t.font)); err != nil {
+				return post, cleanup, err
+			}
+		}
+	}
+	if err := runCmd(ctx, t.ffmpeg, ffmpegArgs(spec)); err != nil {
 		return post, cleanup, err
 	}
-	out := filepath.Join(dir, "out.mp4")
-	args, err := ffmpegArgs(renderSpec{
-		Video: vpath, Music: mpath, Out: out, Duration: pr.Duration,
-		KeepAudio: strings.Contains(vname, "_keepaudio"), HasAudio: pr.HasAudio,
-		Burn: l.set.BurnCaption && burned != "", TextFile: tfile, Font: t.font, MusicVolume: l.set.MusicVolume,
-	})
-	if err != nil {
-		return post, cleanup, err
-	}
-	if err := runFFmpeg(ctx, t.ffmpeg, args); err != nil {
-		return post, cleanup, err
-	}
-	post = buildPost(caption, l.set, sl.ID, out)
+	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
 	return post, cleanup, nil
 }
 
-func buildPost(caption string, set Settings, slotID, file string) Post {
-	tags := limitHashtags(set.Hashtags, 30)
-	text := caption
-	if tags != "" {
-		text += "\n\n" + tags
+// cand is one product and its not-yet-tried videos.
+type cand struct {
+	product string
+	vids    []driveFile
+}
+
+// pick chooses a random product, then a random video of it, and returns the rest
+// without that video (a product with no videos left is dropped).
+func pick(cs []cand, intn func(int) int) (string, driveFile, []cand) {
+	i := intn(len(cs))
+	j := intn(len(cs[i].vids))
+	v := cs[i].vids[j]
+	rest := slices.Clone(cs)
+	rest[i].vids = slices.Delete(slices.Clone(cs[i].vids), j, j+1)
+	if len(rest[i].vids) == 0 {
+		rest = slices.Delete(rest, i, i+1)
 	}
+	return cs[i].product, v, rest
+}
+
+func buildPost(caption, product string, set Settings, slotID, file string) Post {
+	tags := limitHashtags(set.Hashtags, 30)
+	text := strings.TrimSpace(caption + "\n\n" + tags)
 	first, _, _ := strings.Cut(caption, "\n")
-	title := strings.TrimSpace(first + " " + tags)
-	title = strings.NewReplacer("<", "", ">", "").Replace(title)
+	title := strings.TrimSpace(strings.NewReplacer("<", "", ">", "").Replace(first + " " + tags))
+	if title == "" {
+		title = product
+	}
+	if title == "" {
+		title = "New video"
+	}
 	return Post{File: file, Text: cutRunes(text, 2200), Title: cutRunes(title, 100), SlotID: slotID, Privacy: set.YouTubePrivacy}
 }
 

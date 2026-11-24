@@ -12,7 +12,7 @@ import (
 	_ "time/tzdata"
 )
 
-const defaultFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+const defaultFont = "DejaVu Sans Bold"
 
 func main() {
 	if len(os.Args) != 2 {
@@ -72,11 +72,14 @@ func run(ctx, stopNew context.Context, cmd string, now time.Time, clock func() t
 		return initLayout(ctx, d, root, os.Stdout)
 	}
 
-	font := getenv("FONT_FILE")
+	if getenv("FONT_FILE") != "" {
+		return fmt.Errorf("FONT_FILE was replaced by FONT_FAMILY")
+	}
+	font := getenv("FONT_FAMILY")
 	if font == "" {
 		font = defaultFont
 	}
-	t := &ticker{d: d, root: root, pubs: map[string]Publisher{}, font: font, dryRun: getenv("DRY_RUN") == "1",
+	t := &ticker{d: d, root: root, pubs: map[string]Publisher{}, font: font, pango: "pango-view", dryRun: getenv("DRY_RUN") == "1",
 		log: slog.Default(), ffmpeg: "ffmpeg", ffprobe: "ffprobe"}
 	if cmd == "due" {
 		due, err := t.isDue(ctx, now)

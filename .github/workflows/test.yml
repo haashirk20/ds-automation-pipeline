@@ -20,5 +20,13 @@ jobs:
           cache-dependency-path: go.mod
       - run: go vet ./...
       - run: go test ./...
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-color-emoji pango1.0-tools
+      - run: mkdir -p "$RUNNER_TEMP/frames"
       - run: go test -tags ffmpeg -run TestRenderReal -v ./...
+        env:
+          FRAME_DIR: ${{ runner.temp }}/frames
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emoji-frame
+          path: ${{ runner.temp }}/frames/frame.png

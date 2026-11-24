@@ -34,6 +34,7 @@ type fkDrive struct {
 	ranges     []string // Content-Range of each resumable chunk
 	upParent   string
 	mediaGets  map[string]int // GET alt=media count per file ID
+	denyParent string         // resumable uploads into this folder ID answer 403
 	shortRange bool           // answer 308 with a Range that is too short
 	srv        *httptest.Server
 }
@@ -41,7 +42,7 @@ type fkDrive struct {
 var (
 	reParent = regexp.MustCompile(`'((?:[^'\\]|\\.)*)' in parents`)
 	reName   = regexp.MustCompile(`name='((?:[^'\\]|\\.)*)'`)
-	reMime   = regexp.MustCompile(`mimeType contains '([^']*)'`)
+	reMime   = regexp.MustCompile(`mimeType (contains|=) '([^']*)'`)
 )
 
 func unq(s string) string { return strings.NewReplacer("\\'", "'", "\\\\", "\\").Replace(s) }
@@ -61,6 +62,15 @@ func (f *fkDrive) drive() *drive {
 
 func (f *fkDrive) add(id, name, mime, parent, content string) {
 	f.files = append(f.files, &fkFile{id, name, mime, parent, content})
+}
+
+func (f *fkDrive) byName(name string) *fkFile {
+	for _, x := range f.files {
+		if x.name == name {
+			return x
+		}
+	}
+	return nil
 }
 
 func (f *fkDrive) get(id string) *fkFile {
@@ -91,7 +101,7 @@ func (f *fkDrive) handle(w http.ResponseWriter, r *http.Request) {
 			if m := reName.FindStringSubmatch(q); m != nil && unq(m[1]) != x.name {
 				continue
 			}
-			if m := reMime.FindStringSubmatch(q); m != nil && !strings.Contains(x.mime, m[1]) {
+			if m := reMime.FindStringSubmatch(q); m != nil && !(m[1] == "=" && x.mime == m[2] || m[1] == "contains" && strings.Contains(x.mime, m[2])) {
 				continue
 			}
 			out = append(out, map[string]string{"id": x.id, "name": x.name, "mimeType": x.mime})
@@ -158,6 +168,10 @@ func (f *fkDrive) handle(w http.ResponseWriter, r *http.Request) {
 			Parents        []string
 		}
 		json.NewDecoder(r.Body).Decode(&meta)
+		if f.denyParent != "" && meta.Parents[0] == f.denyParent {
+			http.Error(w, `{"error":{"message":"forbidden"}}`, 403)
+			return
+		}
 		f.nextID++
 		id := fmt.Sprintf("new%d", f.nextID)
 		f.add(id, meta.Name, meta.MimeType, meta.Parents[0], "")
@@ -266,18 +280,21 @@ func TestInitLayoutIdempotent(t *testing.T) {
 	if err := initLayout(context.Background(), d, "root", &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.files) != 5 || strings.Count(out.String(), "created") != 5 {
+	if len(f.files) != 6 || strings.Count(out.String(), "created") != 6 {
 		t.Fatalf("files %d out %s", len(f.files), out.String())
 	}
 	settings := f.get(strings.Fields(strings.Split(out.String(), "\n")[2])[1])
 	if settings.mime != docMime || !strings.Contains(settings.content, "times = ") {
 		t.Fatalf("settings doc %+v", settings)
 	}
+	if p := f.byName("products"); p == nil || p.mime != docMime || !strings.Contains(p.content, "[Velvet Tarot Deck]") {
+		t.Fatalf("products doc %+v", p)
+	}
 	out.Reset()
 	if err := initLayout(context.Background(), d, "root", &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.files) != 5 || strings.Count(out.String(), "exists") != 5 {
+	if len(f.files) != 6 || strings.Count(out.String(), "exists") != 6 {
 		t.Fatalf("second run created more: %d\n%s", len(f.files), out.String())
 	}
 	f.add("dupe", "music", folderMime, "root", "")

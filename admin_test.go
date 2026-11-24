@@ -140,9 +140,15 @@ func TestAdminAddCaption(t *testing.T) {
 }
 
 func uploadReq(a *admin, csrf, kind, fname string, data []byte) *httptest.ResponseRecorder {
+	return uploadProduct(a, csrf, kind, "", "", fname, data)
+}
+
+func uploadProduct(a *admin, csrf, kind, product, newProduct, fname string, data []byte) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("kind", kind)
+	mw.WriteField("product", product)
+	mw.WriteField("newproduct", newProduct)
 	fw, _ := mw.CreateFormFile("file", fname)
 	fw.Write(data)
 	mw.Close()
@@ -334,5 +340,93 @@ func TestServeLoopRunsDueSlotOnce(t *testing.T) {
 	}
 	if s.lastErr != "" || s.lastAt.IsZero() {
 		t.Fatalf("last %q %v", s.lastErr, s.lastAt)
+	}
+}
+
+func (e *tickEnv) find(name string) *fkFile {
+	for _, f := range e.f.files {
+		if f.name == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func TestAdminProductsPageWarnsButSaves(t *testing.T) {
+	e, a := newAdminEnv(t)
+	text := "[Velvet Tarot Deck]\nNew caption\n[ghost]\nmore\n"
+	w := a.post("/products", url.Values{"csrf": {a.csrf}, "text": {text}})
+	body := w.Body.String()
+	if !strings.Contains(body, "products saved") || !strings.Contains(body, "[ghost] does not match a product folder") {
+		t.Fatalf("%s", body)
+	}
+	if e.f.get("pr").content != text {
+		t.Fatalf("doc %q", e.f.get("pr").content)
+	}
+	if w := a.do("GET", "/products", "127.0.0.1:8080", testPW, nil, nil); !strings.Contains(w.Body.String(), "[ghost] does not match") {
+		t.Error("GET page must show warnings")
+	}
+}
+
+func TestAdminProductsDuplicateNotWritten(t *testing.T) {
+	e, a := newAdminEnv(t)
+	before := e.f.get("pr").content
+	w := a.post("/products", url.Values{"csrf": {a.csrf}, "text": {"[Velvet Tarot Deck]\na\n[Velvet Tarot Deck]\nb\n"}})
+	if !strings.Contains(w.Body.String(), "not saved") || e.f.get("pr").content != before {
+		t.Fatalf("%s", w.Body.String())
+	}
+}
+
+func TestAdminUploadToProductAndNewProduct(t *testing.T) {
+	e, a := newAdminEnv(t)
+	if w := a.do("GET", "/upload", "127.0.0.1:8080", testPW, nil, nil); !strings.Contains(w.Body.String(), "<option>Velvet Tarot Deck</option>") ||
+		!strings.Contains(w.Body.String(), "loose (no product)") {
+		t.Fatalf("form lacks products: %s", w.Body.String())
+	}
+	data := []byte("vid")
+	if w := uploadProduct(a, a.csrf, "video", "Velvet Tarot Deck", "", "p.mp4", data); !strings.Contains(w.Body.String(), "uploaded p.mp4") || e.find("p.mp4").parent != "pf" {
+		t.Fatalf("existing product: %s", w.Body.String())
+	}
+	if w := uploadProduct(a, a.csrf, "video", "", "  Brand   New ", "n.mp4", data); !strings.Contains(w.Body.String(), "uploaded n.mp4") {
+		t.Fatalf("new product: %s", w.Body.String())
+	}
+	nf := e.find("Brand New")
+	if nf == nil || nf.mime != folderMime || nf.parent != "vf" || e.find("n.mp4").parent != nf.id {
+		t.Fatalf("folder %+v", nf)
+	}
+	if w := uploadProduct(a, a.csrf, "video", "", "Brand New", "m.mp4", data); !strings.Contains(w.Body.String(), "uploaded m.mp4") || e.find("m.mp4").parent != nf.id {
+		t.Fatalf("existing new-name must reuse the folder: %s", w.Body.String())
+	}
+	// music ignores the product fields
+	if w := uploadProduct(a, a.csrf, "music", "Velvet Tarot Deck", "Other", "s.mp3", data); !strings.Contains(w.Body.String(), "uploaded s.mp3") ||
+		e.find("s.mp3").parent != "mf" || e.find("Other") != nil {
+		t.Fatalf("music: %s", w.Body.String())
+	}
+	if w := uploadProduct(a, a.csrf, "video", "", "bad[name]", "b.mp4", data); !strings.Contains(w.Body.String(), "product name can&#39;t contain") {
+		t.Fatalf("bad name: %s", w.Body.String())
+	}
+	if w := uploadProduct(a, a.csrf, "video", "Nope", "", "c.mp4", data); !strings.Contains(w.Body.String(), "unknown product") {
+		t.Fatalf("unknown: %s", w.Body.String())
+	}
+}
+
+func TestAdminUploadToOwnerMadeFolderExplains(t *testing.T) {
+	e, a := newAdminEnv(t)
+	e.f.denyParent = "pf"
+	w := uploadProduct(a, a.csrf, "video", "Velvet Tarot Deck", "", "p.mp4", []byte("vid"))
+	if !strings.Contains(w.Body.String(), "This folder was made in Drive, so the app can&#39;t write to it. Upload in the Drive app, or create the product here.") {
+		t.Fatalf("%s", w.Body.String())
+	}
+	// loose uploads are not given that message
+	e.f.denyParent = "vf"
+	if w := uploadReq(a, a.csrf, "video", "l.mp4", []byte("v")); strings.Contains(w.Body.String(), "made in Drive") {
+		t.Fatalf("%s", w.Body.String())
+	}
+}
+
+func TestAdminCaptionsPageSaysOnVideo(t *testing.T) {
+	_, a := newAdminEnv(t)
+	if w := a.do("GET", "/captions", "127.0.0.1:8080", testPW, nil, nil); !strings.Contains(w.Body.String(), "text burned on the video") {
+		t.Fatal("captions page text")
 	}
 }
