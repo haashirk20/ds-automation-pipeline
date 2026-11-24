@@ -53,6 +53,9 @@ func run(ctx context.Context, cmd string, now time.Time, getenv func(string) str
 		return initLayout(ctx, d, root, os.Stdout)
 	}
 
+	if getenv("FONT_FILE") != "" {
+		return fmt.Errorf("FONT_FILE was replaced by FONT_FAMILY")
+	}
 	font := getenv("FONT_FAMILY")
 	if font == "" {
 		font = defaultFont

@@ -26,11 +26,14 @@ type ticker struct {
 }
 
 type loaded struct {
-	ids  map[string]string
-	set  Settings
-	st   state
-	due  []slot
-	prod map[string]string // product name -> post caption
+	ids     map[string]string
+	set     Settings
+	st      state
+	due     []slot
+	prod    map[string]string // product name -> post caption
+	folders map[string]bool   // product folders in videos/
+	cands   []cand            // products that have videos
+	musics  []driveFile
 }
 
 // load reads settings and state and works out the due slots. It is all `due` needs.
@@ -74,24 +77,50 @@ func (t *ticker) tick(ctx context.Context, now time.Time) error {
 		t.log.Info("nothing due")
 		return nil
 	}
-	if fs, err := t.d.find(ctx, t.root, "products"); err != nil {
-		return err
-	} else if len(fs) == 0 {
-		return fmt.Errorf("products doc missing: run uploader init")
-	}
 	rest, err := t.d.resolve(ctx, t.root, "videos", "music", "captions", "products")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (products doc missing? run uploader init)", err)
 	}
 	for k, v := range rest {
 		l.ids[k] = v
+	}
+	// list the media once per tick; every slot picks from this
+	folders, err := t.d.listFolders(ctx, l.ids["videos"])
+	if err != nil {
+		return err
+	}
+	l.folders = map[string]bool{}
+	for _, f := range folders {
+		name := strings.TrimSpace(f.Name)
+		l.folders[name] = true
+		vs, err := t.d.list(ctx, f.ID, "video/")
+		if err != nil {
+			return err
+		}
+		if len(vs) > 0 {
+			l.cands = append(l.cands, cand{name, vs})
+		}
+	}
+	loose, err := t.d.list(ctx, l.ids["videos"], "video/")
+	if err != nil {
+		return err
+	}
+	if len(loose) > 0 { // loose videos in videos/ are the product ""
+		l.cands = append(l.cands, cand{"", loose})
+	}
+	if l.musics, err = t.d.list(ctx, l.ids["music"], "audio/"); err != nil {
+		return err
 	}
 	ptext, err := t.d.exportText(ctx, l.ids["products"])
 	if err != nil {
 		return err
 	}
-	if l.prod, err = parseProducts(ptext); err != nil {
+	var warns []string
+	if l.prod, warns, err = parseProducts(ptext, l.folders); err != nil {
 		return err
+	}
+	for _, w := range warns {
+		t.log.Warn(w)
 	}
 	for _, name := range l.set.Platforms {
 		if t.pubs[name] == nil {
@@ -158,36 +187,13 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	}
 	cleanup := func() { os.RemoveAll(dir) }
 
-	videos, err := t.d.listFolders(ctx, l.ids["videos"])
-	if err != nil {
-		return post, cleanup, err
-	}
-	var cands []cand // one per product; loose videos in videos/ are the product ""
-	for _, f := range videos {
-		vs, err := t.d.list(ctx, f.ID, "video/")
-		if err != nil {
-			return post, cleanup, err
-		}
-		if len(vs) > 0 {
-			cands = append(cands, cand{strings.TrimSpace(f.Name), vs})
-		}
-	}
-	loose, err := t.d.list(ctx, l.ids["videos"], "video/")
-	if err != nil {
-		return post, cleanup, err
-	}
-	if len(loose) > 0 {
-		cands = append(cands, cand{"", loose})
-	}
-	musics, err := t.d.list(ctx, l.ids["music"], "audio/")
-	if err != nil {
-		return post, cleanup, err
-	}
+	cands, musics := l.cands, l.musics
 	if len(cands) == 0 || len(musics) == 0 {
 		return post, cleanup, fmt.Errorf("need at least one video and one music file (have %d products with videos, %d music)", len(cands), len(musics))
 	}
 
-	// pick a random product, then a random video of at least 3 s; up to 5 tries, each a new product and video
+	// pick a random product, then a random video; if it is unusable (under 3 s, bad file) pick again,
+	// up to 5 tries. A file already tried is never picked twice.
 	vpath := filepath.Join(dir, "video")
 	var pr probeResult
 	var product, vname string
@@ -249,7 +255,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	if err := runCmd(ctx, t.ffmpeg, ffmpegArgs(spec)); err != nil {
 		return post, cleanup, err
 	}
-	post = buildPost(caption, l.set, sl.ID, spec.Out)
+	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
 	return post, cleanup, nil
 }
 
@@ -273,12 +279,17 @@ func pick(cs []cand, intn func(int) int) (string, driveFile, []cand) {
 	return cs[i].product, v, rest
 }
 
-func buildPost(caption string, set Settings, slotID, file string) Post {
+func buildPost(caption, product string, set Settings, slotID, file string) Post {
 	tags := limitHashtags(set.Hashtags, 30)
 	text := strings.TrimSpace(caption + "\n\n" + tags)
 	first, _, _ := strings.Cut(caption, "\n")
-	title := strings.TrimSpace(first + " " + tags)
-	title = strings.NewReplacer("<", "", ">", "").Replace(title)
+	title := strings.TrimSpace(strings.NewReplacer("<", "", ">", "").Replace(first + " " + tags))
+	if title == "" {
+		title = product
+	}
+	if title == "" {
+		title = "New video"
+	}
 	return Post{File: file, Text: cutRunes(text, 2200), Title: cutRunes(title, 100), SlotID: slotID, Privacy: set.YouTubePrivacy}
 }
 

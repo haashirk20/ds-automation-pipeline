@@ -65,12 +65,13 @@ what is missing.
 - `products` Google Doc. The text under the video, one section per product:
 
 ```
-# lines starting with "# " are comments
+# a comment is a lone # or "# " plus text; #tarot is kept
 [Velvet Tarot Deck]
 Hand-gilded tarot deck ✨ Link in bio #tarot
 ```
 
-  The name in brackets must match the folder name. The caption can use several lines. The `hashtags`
+  The name in brackets must match the folder name; a bracket line that matches no folder is treated as
+  caption text and the log warns about it. The caption can use several lines. The `hashtags`
   setting is added after it. A video with no entry uses `default_caption`. Two sections with the same
   name make the run fail.
 - `state.json` file. The tool uses it to remember which slots it already posted. Do not edit it.
@@ -177,7 +178,7 @@ paused = no
   seconds are skipped.
 - Music: upload to the `music/` folder.
 - On-video text: add a line to the `captions` doc. A literal `\n` inside a line makes a line break. Lines
-  starting with `#` are ignored.
+  starting with `# ` are comments; `#1 seller` is kept.
 - Products: make a subfolder in `videos/`, put videos in it, and add a `[folder name]` section to the
   `products` doc.
 

@@ -261,11 +261,11 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 func TestTickProductsDocProblemsFailBeforeClaim(t *testing.T) {
 	e := newTickEnv(t, settingsOne, probeLong)
 	e.f.get("pr").name = "gone"
-	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "products doc missing: run uploader init") {
+	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "products") {
 		t.Fatalf("err %v", err)
 	}
 	e = newTickEnv(t, settingsOne, probeLong)
-	e.f.get("pr").content = "[A]\nx\n[A]\ny"
+	e.f.get("pr").content = "[Velvet Tarot Deck]\nx\n[Velvet Tarot Deck]\ny"
 	if err := e.tk.tick(context.Background(), e.now); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("err %v", err)
 	}

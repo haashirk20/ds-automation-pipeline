@@ -79,7 +79,8 @@ func ffmpegArgs(s renderSpec) []string {
 		"-c:a", "aac", "-b:a", "128k", "-fpsmax", "60", "-movflags", "+faststart", s.Out)
 }
 
-// burnText cleans text for pango-view: control characters except \n dropped, at most 150 runes.
+// burnText cleans text for pango-view: control characters except \n dropped, at most 6 lines,
+// at most 150 runes (cut at the last space so an emoji sequence is not split).
 func burnText(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && r != '\n' {
@@ -87,7 +88,18 @@ func burnText(s string) string {
 		}
 		return r
 	}, s)
-	return cutRunes(strings.TrimSpace(s), 150)
+	if lines := strings.Split(strings.TrimSpace(s), "\n"); len(lines) > 6 {
+		s = strings.Join(lines[:6], "\n")
+	}
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > 150 {
+		cut := string(r[:150])
+		if i := strings.LastIndexAny(cut, " \n"); i > 0 {
+			cut = cut[:i]
+		}
+		s = strings.TrimSpace(cut)
+	}
+	return s
 }
 
 // pangoArgs is pure: it builds the pango-view command line that draws text to a transparent PNG.

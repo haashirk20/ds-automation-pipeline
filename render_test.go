@@ -84,15 +84,22 @@ func TestFFmpegArgsDurationCap(t *testing.T) {
 
 func TestBuildPost(t *testing.T) {
 	set := Settings{Hashtags: "#a #b", YouTubePrivacy: "public"}
-	p := buildPost("Hi <b>\nsecond", set, "id", "/f.mp4")
+	p := buildPost("Hi <b>\nsecond", "P", set, "id", "/f.mp4")
 	if p.Text != "Hi <b>\nsecond\n\n#a #b" || p.Title != "Hi b #a #b" {
 		t.Errorf("%+v", p)
 	}
 	set.Hashtags = strings.Repeat("#x ", 40)
-	if n := strings.Count(buildPost("c", set, "id", "f").Text, "#"); n != 30 {
+	if n := strings.Count(buildPost("c", "P", set, "id", "f").Text, "#"); n != 30 {
 		t.Errorf("hashtags %d", n)
 	}
-	long := buildPost(strings.Repeat("é", 150), set, "id", "f")
+	set.Hashtags = ""
+	if got := buildPost("", "Velvet", set, "id", "f").Title; got != "Velvet" {
+		t.Errorf("title %q", got)
+	}
+	if got := buildPost("", "", set, "id", "f").Title; got != "New video" {
+		t.Errorf("title %q", got)
+	}
+	long := buildPost(strings.Repeat("é", 150), "P", set, "id", "f")
 	if len([]rune(long.Title)) != 100 {
 		t.Errorf("title len %d", len([]rune(long.Title)))
 	}
@@ -114,5 +121,13 @@ func TestBurnText(t *testing.T) {
 	}
 	if got := []rune(burnText(strings.Repeat("é", 200))); len(got) != 150 {
 		t.Errorf("len %d", len(got))
+	}
+	if got := burnText("1\n2\n3\n4\n5\n6\n7\n8"); got != "1\n2\n3\n4\n5\n6" {
+		t.Errorf("lines %q", got)
+	}
+	// cut at the last space, so the emoji pair after the limit is not split
+	in := strings.Repeat("word ", 29) + "ab👨‍👩‍👧 tail" // the family emoji straddles rune 150
+	if got := burnText(in); got != strings.TrimSpace(strings.Repeat("word ", 29)) {
+		t.Errorf("cut %q", got)
 	}
 }

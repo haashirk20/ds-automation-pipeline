@@ -33,7 +33,8 @@ and creates only what's missing. It refuses if there are duplicates of a name.
 OAuth scopes: `https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file`. Google is used for Drive only; YouTube posts through Zernio.
 Docs are read with `files/{id}/export?mimeType=text/plain`; strip a UTF-8 BOM and `\r`.
 Products are subfolders of `videos/` (name matched exactly after trimming spaces). Loose videos directly in `videos/`
-are one extra product "". `tick` also fails with "products doc missing: run uploader init" if `products` is absent.
+are one extra product "". `tick` fails (error mentions running init) if `products` is absent or duplicated.
+Product folders and their videos, and music, are listed once per tick and shared by every slot.
 Listing: `pageSize=1000`, follow `nextPageToken`, `trashed=false`, videos `mimeType contains 'video/'`,
 music `mimeType contains 'audio/'`, subfolders `mimeType = 'application/vnd.google-apps.folder'`. Download `files/{id}?alt=media` streamed to disk.
 
@@ -53,15 +54,17 @@ posts nothing and exits non-zero. Never fall back to defaults.
 The old key `caption` is an error: "caption was split: use burn_text for on-video text; post captions now live in the products doc".
 
 ## captions doc (on-video text)
-One line of burned text per line, e.g. `comment BOOK if you want one! 📖✨`. `#` lines and blank lines ignored.
+One line of burned text per line, e.g. `comment BOOK if you want one! 📖✨`. Comment lines and blank lines ignored.
 A literal `\n` inside a line means a line break. Emoji render in colour.
 
 ## products doc (post text)
-    # comments ("# note" or a lone "#"; "#tarot" is a hashtag and is kept)
+    # a comment is a lone "#" or "# " plus text; "#tarot" and "#1 seller" are kept
     [Velvet Tarot Deck]
     Hand-gilded tarot deck ✨ Link in bio #tarot
 The caption runs until the next `[header]` or the end; blank edges are trimmed. Header = folder name in `videos/`.
-A duplicate header or text before the first header is a parse error: the tick fails before any claim.
+A `[Name]` line is a header only if Name is a product folder; otherwise it is caption text and a warning is logged
+(`[x] does not match a product folder`). A duplicate header is a parse error: the tick fails before any claim.
+The `captions` doc uses the same comment rule.
 No entry (or loose video): `default_caption`, with a warning naming the product.
 
 ## Slots and state (at-most-once)
@@ -85,7 +88,7 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
    - video: scale to fit 1080x1920 and pad (black), `setsar=1`, fps unchanged.
    - burn text when burn_caption: `pango-view` draws the text to a transparent PNG (white, `FONT_FAMILY` 48 px, 960 px wide,
      word-wrapped, centred; emoji come from fonts-noto-color-emoji by fontconfig fallback). Control characters except
-     `\n` are removed and the text is cut to 150 runes. ffmpeg takes the PNG as input 2 and overlays it at
+     `\n` are removed and the text is limited to 6 lines and 150 runes (cut at the last space). ffmpeg takes the PNG as input 2 and overlays it at
      `y=(H-h)*0.72`, centred, over a blurred 60% black shadow offset 3 px. Without burn there is no third input.
      Args for both tools are built in pure, unit-tested functions.
    - audio: replace => music only (`anull`); keepaudio and source has audio =>
@@ -94,7 +97,7 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
    - `-c:v libx264 -preset veryfast -crf 23 -rc-lookahead 10 -threads 2 -pix_fmt yuv420p
       -c:a aac -b:a 128k -fpsmax 60 -movflags +faststart`.
    - Build the ffmpeg args in a pure function (unit-tested); run with exec.CommandContext.
-5. Post text = product caption + "\n\n" + hashtags. YouTube title = product caption (first line) + hashtags, `<` `>`
+5. Post text = product caption + "\n\n" + hashtags. YouTube title = product caption (first line; if empty, the product name, else "New video") + hashtags, `<` `>`
    stripped, cut to 100 runes. The YouTube description also has `<` `>` stripped. IG caption cut to 2200 runes and at most 30 hashtags.
 6. Publish to each enabled platform in sequence. One failing does not stop the others.
    Each platform has a 12 min timeout. Never retry a publish request after it has been sent. Log `{"slot","platform","id"}` on success.

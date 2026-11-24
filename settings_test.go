@@ -75,32 +75,47 @@ func TestParseSettingsOldCaptionKey(t *testing.T) {
 }
 
 func TestParseProducts(t *testing.T) {
-	got, err := parseProducts(`# top comment
+	folders := map[string]bool{"Velvet Tarot Deck": true, "Candle": true, "Empty": true}
+	got, warns, err := parseProducts(`# top comment
 
 [Velvet Tarot Deck]
 
 # a note
 Hand-gilded tarot deck ✨ Link in bio #tarot
-second line
+#1 seller 🔥
+[nope]
 
 [ Candle ]
 #only a hashtag line
 [Empty]
-`)
+`, folders)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["Velvet Tarot Deck"] != "Hand-gilded tarot deck ✨ Link in bio #tarot\nsecond line" ||
+	if got["Velvet Tarot Deck"] != "Hand-gilded tarot deck ✨ Link in bio #tarot\n#1 seller 🔥\n[nope]" ||
 		got["Candle"] != "#only a hashtag line" || got["Empty"] != "" || len(got) != 3 {
 		t.Fatalf("%q", got)
 	}
-	if _, err := parseProducts("[A]\nx\n[B]\ny\n[A]\nz"); err == nil {
+	if len(warns) != 1 || !strings.Contains(warns[0], "[nope] does not match a product folder") {
+		t.Fatalf("warns %v", warns)
+	}
+	if _, _, err := parseProducts("[Candle]\nx\n[Empty]\ny\n[Candle]\nz", folders); err == nil {
 		t.Error("duplicate header must fail")
 	}
-	if _, err := parseProducts("stray\n[A]\nx"); err == nil {
-		t.Error("text before first header must fail")
+	if got, _, err := parseProducts("stray\n[Candle]\nx", folders); err != nil || len(got) != 1 {
+		t.Errorf("stray leading text is ignored: %v %v", got, err)
 	}
-	if got, err := parseProducts(defaultProducts); err != nil || len(got) != 0 {
+	if _, w, err := parseProducts("[typo]\n[Candle]\nx", folders); err != nil || len(w) != 1 {
+		t.Errorf("unknown header before first: %v %v", w, err)
+	}
+	if got, _, err := parseProducts(defaultProducts, folders); err != nil || len(got) != 0 {
 		t.Errorf("default products doc: %v %v", got, err)
+	}
+}
+
+func TestParseCaptionsHashtagLinesKept(t *testing.T) {
+	got := parseCaptions("# note\n#\n#1 seller 🔥\n#tarot")
+	if len(got) != 2 || got[0] != "#1 seller 🔥" || got[1] != "#tarot" {
+		t.Fatalf("%q", got)
 	}
 }
