@@ -186,7 +186,7 @@ func (t *zPublisher) Publish(ctx context.Context, p Post) (string, error) {
 		body["tiktokSettings"] = map[string]any{
 			"privacy_level": "PUBLIC_TO_EVERYONE", "allow_comment": allow("allow_comment"), "allow_duet": allow("allow_duet"),
 			"allow_stitch": allow("allow_stitch"), "content_preview_confirmed": true, "express_consent_given": true,
-			"video_made_with_ai": false, "commercialContentType": "brand_organic",
+			"video_made_with_ai": false, // no commercialContentType: the owner chose no "Promotional content" label
 		}
 	}
 

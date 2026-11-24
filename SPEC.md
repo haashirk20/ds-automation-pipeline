@@ -155,6 +155,6 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   to uploadUrl with no Authorization header) → POST /posts with `Idempotency-Key: <slot id>-tiktok`,
   {content: Text, publishNow: true, platforms:[{platform:"tiktok", accountId}], mediaItems:[{type:"video", url: publicUrl}],
   tiktokSettings:{privacy_level, allow_comment, allow_duet, allow_stitch (from creator-info interactionSettings, default true),
-  content_preview_confirmed:true, express_consent_given:true, video_made_with_ai:false, commercialContentType:"brand_organic"}}.
+  content_preview_confirmed:true, express_consent_given:true, video_made_with_ai:false}}. No commercialContentType: the owner chose no "Promotional content" label.
   409 with details.existingPostId => treat as that post. Then poll GET /posts/{id} every 10 s up to 5 min until
   status published (failed => error, still publishing at timeout => log warning, return id).

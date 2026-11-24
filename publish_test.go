@@ -264,7 +264,8 @@ func zServer(t *testing.T, postStatus int, posts *atomic.Int32, polls *atomic.In
 		}
 		if plat == "tiktok" {
 			ts, _ := body["tiktokSettings"].(map[string]any)
-			if ts["allow_duet"] != false || ts["allow_comment"] != true || ts["privacy_level"] != "PUBLIC_TO_EVERYONE" {
+			_, commercial := ts["commercialContentType"]
+			if ts["allow_duet"] != false || ts["allow_comment"] != true || ts["privacy_level"] != "PUBLIC_TO_EVERYONE" || commercial {
 				t.Errorf("bad tiktokSettings %v", ts)
 			}
 		}
