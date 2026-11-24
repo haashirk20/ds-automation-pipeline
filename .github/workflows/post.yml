@@ -50,6 +50,18 @@ jobs:
           echo "$out"
           if [ "$out" = due ] || [ -n "$POST_NOW" ]; then echo "due=yes" >> "$GITHUB_OUTPUT"; fi
       - if: steps.due.outputs.due == 'yes'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-montserrat fonts-noto-color-emoji pango1.0-tools
+        id: apt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('.github/apt.sh') }}
+      - if: steps.due.outputs.due == 'yes'
+        run: sh .github/apt.sh
+      # saved right away (not at job end) so a failed publish still keeps the cache
+      - if: steps.due.outputs.due == 'yes' && steps.apt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('.github/apt.sh') }}
       - if: steps.due.outputs.due == 'yes'
         run: ./uploader tick

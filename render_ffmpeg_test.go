@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,10 @@ func gen(t *testing.T, args ...string) {
 }
 
 func TestRenderReal(t *testing.T) {
+	// pango falls back silently when a font is missing, so check the default font is installed
+	if out, err := exec.Command("fc-match", defaultFont).Output(); err != nil || !strings.Contains(string(out), "Montserrat") {
+		t.Fatalf("fc-match %q: %s %v", defaultFont, out, err)
+	}
 	dir := t.TempDir()
 	withAudio := filepath.Join(dir, "a.mp4")
 	noAudio := filepath.Join(dir, "n.mp4")

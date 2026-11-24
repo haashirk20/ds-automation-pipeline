@@ -20,7 +20,17 @@ jobs:
           cache-dependency-path: go.mod
       - run: go vet ./...
       - run: go test ./...
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-montserrat fonts-noto-color-emoji pango1.0-tools
+      - id: apt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('.github/apt.sh') }}
+      - run: sh .github/apt.sh
+      - if: steps.apt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ hashFiles('.github/apt.sh') }}
       - run: mkdir -p "$RUNNER_TEMP/frames"
       - run: go test -tags ffmpeg -run TestRenderReal -v ./...
         env:
