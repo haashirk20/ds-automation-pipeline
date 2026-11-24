@@ -91,7 +91,6 @@ doubled.
 
 Every video keeps its own sound at full volume, with the music under it at `music_volume`. A video with
 no sound gets the music at full volume. The music is cut (or looped) to the video's length.
-YouTube never gets the music: it gets the same video with only its own sound (silent if it has none).
 
 ### c. Meta (Facebook and Instagram)
 
@@ -214,7 +213,7 @@ paused = no
   They do not share a lock, so both could post the same slot.
 
 - Music from your Drive may get the video muted on TikTok business accounts (TikTok limits business
-  accounts to its commercial music library). YouTube posts carry no added music. Use music you own or
+  accounts to its commercial music library), or claimed by Content ID on YouTube. Use music you own or
   that is cleared for use.
 - Daily limits: Zernio posts are unlimited, but YouTube's own daily upload limits still apply. Facebook allows 30 Reels a
   day. Instagram allows about 50 posts a day. Normal use is far below these.

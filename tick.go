@@ -182,12 +182,8 @@ func (t *ticker) publishAll(ctx context.Context, sl slot, l loaded, post Post) i
 			t.log.Info("dry run, publish skipped", "slot", sl.ID, "platform", name)
 			continue
 		}
-		p := post
-		if name == "youtube" && p.NoMusicFile != "" { // YouTube never gets the added music
-			p.File = p.NoMusicFile
-		}
 		pctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
-		id, err := t.pubs[name].Publish(pctx, p)
+		id, err := t.pubs[name].Publish(pctx, post)
 		cancel()
 		if err != nil {
 			t.log.Error("publish failed", "slot", sl.ID, "platform", name, "err", err.Error())
@@ -277,7 +273,6 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 		return post, cleanup, err
 	}
 	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
-	post.NoMusicFile = spec.NoMusic
 	return post, cleanup, nil
 }
 

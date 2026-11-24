@@ -48,7 +48,7 @@ func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 
 type renderSpec struct {
 	Video, Music string
-	NoMusic      string // first pass: video, burned text and the video's own sound (YouTube gets this)
+	NoMusic      string // first pass: video, burned text and the video's own sound
 	Out          string // second pass: NoMusic plus the music
 	Duration     float64
 	HasAudio     bool   // source video has an audio stream

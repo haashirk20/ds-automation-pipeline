@@ -87,7 +87,7 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
 2. Download both to a temp dir (removed afterwards, also on error).
 3. ffprobe the video: duration, has-audio. Skip (log, pick another, up to 5 tries) if duration < 3 s.
 4. ffmpeg twice. Args for both tools are built in pure, unit-tested functions; run with exec.CommandContext.
-   - Pass 1 (`nomusic.mp4`, the file YouTube gets): video scaled to fit 1080x1920 and padded (black), `setsar=1`,
+   - Pass 1 (`nomusic.mp4`): video scaled to fit 1080x1920 and padded (black), `setsar=1`,
      `-t min(duration, 90)`, the video's own sound (aac 128k) or `-an` when it has none.
      `-c:v libx264 -preset veryfast -crf 23 -rc-lookahead 10 -threads 2 -pix_fmt yuv420p -fpsmax 60 -movflags +faststart`.
    - burn text when burn_caption, TikTok caption style: `pango-view` draws the text to a transparent PNG (white,
@@ -95,7 +95,7 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
      fallback). Control characters except `\n` are removed and the text is limited to 6 lines and 150 runes (cut at the
      last space). ffmpeg takes the PNG as input 1 and overlays it centred at `y=200`, over a black outline made from
      the PNG's alpha grown by 4 `dilation` passes. Without burn there is no second input.
-   - Pass 2 (`out.mp4`, every other platform): `-c:v copy` of pass 1 plus the music (`-stream_loop -1`, `-t`, `-shortest`,
+   - Pass 2 (`out.mp4`, posted to every platform): `-c:v copy` of pass 1 plus the music (`-stream_loop -1`, `-t`, `-shortest`,
      so it is looped or cut to the video's length). Source has audio => `amix=inputs=2:duration=first:normalize=0`,
      video sound at full volume, music at `music_volume`; no audio stream => music only (`anull`). aac 128k, `+faststart`.
 5. Post text = product caption + "\n\n" + hashtags. YouTube title = product caption (first line; if empty, the product name, else "New video") + hashtags, `<` `>`
@@ -143,7 +143,6 @@ Google access tokens come from `func (g *googleAuth) Token(ctx context.Context) 
   headers `Authorization: OAuth <token>`, `offset: 0`, `file_size`; poll `GET /{container}?fields=status_code`
   every 10 s up to 10 min until FINISHED (ERROR/EXPIRED => fail); `POST /{ig}/media_publish` creation_id. Return media id.
   Uses the Page token (Facebook Login for Business).
-- YouTube gets `Post.NoMusicFile` (pass 1) as its File; the others get pass 2.
 - YouTube and TikTok via one shared Zernio client (publish_zernio.go). The presign+PUT happens once per file
   (publicUrl cached for the current slot and file only); the account list is fetched once per slot. Each platform is its own POST /posts with
   `Idempotency-Key: <slot id>-<platform>`. YouTube entry: platforms:[{platform:"youtube", accountId,
