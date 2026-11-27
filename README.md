@@ -59,6 +59,7 @@ what is missing.
 
 - `videos/` folder. Make one subfolder per product, named exactly like the product, and put that product's
   videos in it. Videos placed directly in `videos/` count as one extra product with no name.
+  Only files directly in a product folder are used. Clips inside a subfolder of it (for example `videos/DRAGON/used/`) are ignored.
 - `music/` folder. Put your audio tracks here.
 - `settings` Google Doc. See section 3.
 - `captions` Google Doc. The text burned onto the video, one section per product, one line per option.
@@ -84,6 +85,9 @@ Hand-gilded tarot deck ✨ Link in bio #tarot
   setting is added after it. A video with no entry uses `default_caption`. Two sections with the same
   name make the run fail.
 - `state.json` file. The tool uses it to remember which slots it already posted. Do not edit it.
+  It also keeps a `posted` list of every video clip already posted: a clip is never posted twice, so add new clips
+  to Drive when the tool says "no unposted videos left". The list is never trimmed. Before you go back to an older
+  version of the tool, save a copy of `state.json`, because the old version drops `posted` on its next post.
   Do not delete it.
 
 Do not rename or duplicate these items. The tool finds them by name and fails if one is missing or
@@ -210,6 +214,8 @@ paused = no
 - A slot that failed after it was claimed is not retried. This is on purpose: the tool must never post
   the same video twice. You simply miss that slot. If the failure came before the claim (for example while
   downloading or rendering), the next run tries again while the slot is within 3 hours.
+- Every post text starts with the burned line, then the product caption, then the hashtags. The YouTube title is the burned
+  line without hashtags (else the first caption line, the product name, or "New video"). Each post logs a `picked` line with the clip, music and text.
 - Do not edit or delete `state.json` to "retry" a slot. That can cause a double post.
 - Run `./uploader due` on your computer to see whether a slot is due. It prints `due` or `idle`.
 

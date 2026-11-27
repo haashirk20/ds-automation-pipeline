@@ -86,22 +86,41 @@ func TestFFmpegArgsDurationCap(t *testing.T) {
 
 func TestBuildPost(t *testing.T) {
 	set := Settings{Hashtags: "#a #b", YouTubePrivacy: "public"}
-	p := buildPost("Hi <b>\nsecond", "P", set, "id", "/f.mp4")
-	if p.Text != "Hi <b>\nsecond\n\n#a #b" || p.Title != "Hi b #a #b" {
+	// no burn line: caption + hashtags as before, title without hashtags
+	p := buildPost("Hi <b>\nsecond", "", "P", set, "id", "/f.mp4")
+	if p.Text != "Hi <b>\nsecond\n\n#a #b" || p.Title != "Hi b" {
 		t.Errorf("%+v", p)
 	}
+	// burn line leads the text and is the title, without hashtags, newlines or <>
+	p = buildPost("Cap", "comment \\n BOOK #fyp\nnow <3", "P", set, "id", "f")
+	if p.Text != "comment BOOK now 3\n\nCap\n\n#a #b" || p.Title != "comment BOOK now 3" {
+		t.Errorf("%+v", p)
+	}
+	// burn-line hashtags never add to the IG 30-hashtag count
 	set.Hashtags = strings.Repeat("#x ", 40)
-	if n := strings.Count(buildPost("c", "P", set, "id", "f").Text, "#"); n != 30 {
+	if n := strings.Count(buildPost("c", strings.Repeat("#y ", 20), "P", set, "id", "f").Text, "#"); n != 30 {
+		t.Errorf("hashtags %d", n)
+	}
+	set.Hashtags = "#a #b"
+	// burn line is only hashtags: title falls back to the caption line
+	if got := buildPost("Cap line #z\nmore", "#only", "P", set, "id", "f").Title; got != "Cap line" {
+		t.Errorf("title %q", got)
+	}
+	set.Hashtags = strings.Repeat("#x ", 40)
+	if n := strings.Count(buildPost("c", "", "P", set, "id", "f").Text, "#"); n != 30 {
 		t.Errorf("hashtags %d", n)
 	}
 	set.Hashtags = ""
-	if got := buildPost("", "Velvet", set, "id", "f").Title; got != "Velvet" {
+	if got := buildPost("", "", "Velvet", set, "id", "f").Title; got != "Velvet" {
 		t.Errorf("title %q", got)
 	}
-	if got := buildPost("", "", set, "id", "f").Title; got != "New video" {
-		t.Errorf("title %q", got)
+	if got := buildPost("", "", "", set, "id", "f"); got.Title != "New video" || got.Text != "" {
+		t.Errorf("%+v", got)
 	}
-	long := buildPost(strings.Repeat("é", 150), "P", set, "id", "f")
+	if got := buildPost("", "burn", "", set, "id", "f").Text; got != "burn" {
+		t.Errorf("text %q", got)
+	}
+	long := buildPost("c", strings.Repeat("é", 150), "P", set, "id", "f")
 	if len([]rune(long.Title)) != 100 {
 		t.Errorf("title len %d", len([]rune(long.Title)))
 	}

@@ -35,6 +35,8 @@ OAuth scopes: `https://www.googleapis.com/auth/drive.readonly https://www.google
 Docs are read with `files/{id}/export?mimeType=text/plain`; strip a UTF-8 BOM and `\r`.
 Products are subfolders of `videos/` (name matched exactly after trimming spaces). Loose videos directly in `videos/`
 are one extra product "". `tick` fails (error mentions running init) if `products` is absent or duplicated.
+Listing a product folder is not recursive (Drive query `'ID' in parents`, direct children only), so clips in its
+subfolders (for example `videos/DRAGON/used/`) are not listed and can be used to park clips.
 Product folders and their videos, and music, are listed once per tick and shared by every slot.
 Listing: `pageSize=1000`, follow `nextPageToken`, `trashed=false`, videos `mimeType contains 'video/'`,
 music `mimeType contains 'audio/'`, subfolders `mimeType = 'application/vnd.google-apps.folder'`. Download `files/{id}?alt=media` streamed to disk.
@@ -80,6 +82,12 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
   `files.update` (upload media to the existing ID) BEFORE any publish request. DRY_RUN=1 writes no claim (logs "dry run: claim skipped"). Before any claim, every enabled platform must have its credentials, else the tick fails. A failed claim write
   aborts the whole tick with non-zero exit. Prune claims older than 2 days on each write.
 - A crash after claiming means a missed slot, never a double post. Nothing re-posts a claimed slot.
+- `state.posted` maps a Drive video file ID to `"slotID RFC3339time"`. It is written in the SAME state.json write as the
+  claim (so before any publish), never pruned, and never read back as "retry". A posted clip is never picked again: the
+  pick works on a copy of the candidates without posted IDs (checked against the live state, so two due slots in one
+  tick differ). If nothing unposted is left the slot fails before its claim ("no unposted videos left: add new clips to Drive
+  videos/"). DRY_RUN=1 writes no claim and no `posted` entry. An old state.json with only `claims` loads fine.
+  Rollback warning: an older binary drops `posted` on its next claim write, so back up state.json before rolling back.
 - `paused = yes`: nothing is due.
 
 ## Per slot pipeline
@@ -99,8 +107,10 @@ No entry (or loose video): `default_caption`, with a warning naming the product.
    - Pass 2 (`out.mp4`, posted to every platform): `-c:v copy` of pass 1 plus the music (`-stream_loop -1`, `-t`, `-shortest`,
      so it is looped or cut to the video's length). Source has audio => `amix=inputs=2:duration=first:normalize=0`,
      video sound at full volume, music at `music_volume`; no audio stream => music only (`anull`). aac 128k, `+faststart`.
-5. Post text = product caption + "\n\n" + hashtags. YouTube title = product caption (first line; if empty, the product name, else "New video") + hashtags, `<` `>`
-   stripped, cut to 100 runes. The YouTube description also has `<` `>` stripped. IG caption cut to 2200 runes and at most 30 hashtags.
+   After the pick, one log line `picked` (slot, product, video name, video_id, music name, burn text, width, height; no URLs or secrets).
+5. Post text (all platforms) = burn line (literal `\n` and newlines become spaces, `#` words removed so IG keeps its 30-hashtag cap) + "\n\n" + product caption + "\n\n" + hashtags; empty parts are
+   skipped (no burn_caption => no burn line). YouTube title = the burn line with newlines as spaces, words starting with `#` removed,
+   `<` `>` stripped, trimmed, cut to 100 runes; if empty, the first caption line (hashtag words removed), then the product name, then "New video". The YouTube description also has `<` `>` stripped. IG caption cut to 2200 runes and at most 30 hashtags.
 6. Publish to each enabled platform in sequence. One failing does not stop the others.
    Each platform has a 12 min timeout. Never retry a publish request after it has been sent. Log `{"slot","platform","id"}` on success.
 6b. After publishing (also in a dry run), with ALERT_DISCORD_WEBHOOK set: one multipart POST to the webhook with

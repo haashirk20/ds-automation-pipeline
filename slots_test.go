@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -82,5 +83,18 @@ func TestClaimPrunes(t *testing.T) {
 	}
 	if st.Claims["s"] != "2026-11-12T12:00:00Z" {
 		t.Errorf("claim time %q", st.Claims["s"])
+	}
+}
+
+func TestStateOldFileAndPostedKept(t *testing.T) {
+	var st state
+	if err := json.Unmarshal([]byte(`{"claims":{"old":"2026-01-01T00:00:00Z"}}`), &st); err != nil || st.Posted != nil {
+		t.Fatalf("%v %v", err, st.Posted)
+	}
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	st.Posted = map[string]string{"vid": "s 2025-01-01T00:00:00Z"}
+	claim(&st, "new", now)
+	if _, ok := st.Claims["old"]; ok || st.Claims["new"] == "" || st.Posted["vid"] == "" {
+		t.Errorf("%+v", st)
 	}
 }

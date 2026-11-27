@@ -13,6 +13,8 @@ type slot struct {
 
 type state struct {
 	Claims map[string]string `json:"claims"`
+	// Posted maps a Drive video file ID to "slotID RFC3339time". Never pruned: a posted clip is never reposted.
+	Posted map[string]string `json:"posted,omitempty"`
 }
 
 const slotWindow = 3 * time.Hour

@@ -18,6 +18,7 @@ type Post struct {
 	SlotID  string
 	Product string // for the Discord message only
 	Burn    string // the text burned on the video, for the Discord message only
+	VideoID string // Drive file ID of the source clip
 	Privacy string // youtube_privacy
 }
 

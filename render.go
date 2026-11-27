@@ -16,11 +16,13 @@ const maxOutSeconds = 90
 type probeResult struct {
 	Duration float64
 	HasAudio bool
+	Width    int // for the "picked" log line only
+	Height   int
 }
 
 func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 	out, err := exec.CommandContext(ctx, ffprobe, "-v", "error",
-		"-show_entries", "format=duration:stream=codec_type", "-of", "json", path).Output()
+		"-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", path).Output()
 	if err != nil {
 		return probeResult{}, fmt.Errorf("ffprobe: %w", err)
 	}
@@ -28,6 +30,8 @@ func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 		Format  struct{ Duration string }
 		Streams []struct {
 			CodecType string `json:"codec_type"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
 		}
 	}
 	if err := json.Unmarshal(out, &j); err != nil {
@@ -41,6 +45,9 @@ func probe(ctx context.Context, ffprobe, path string) (probeResult, error) {
 	for _, s := range j.Streams {
 		if s.CodecType == "audio" {
 			r.HasAudio = true
+		}
+		if s.CodecType == "video" && r.Width == 0 {
+			r.Width, r.Height = s.Width, s.Height
 		}
 	}
 	return r, nil

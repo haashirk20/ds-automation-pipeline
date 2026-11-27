@@ -163,6 +163,11 @@ func (t *ticker) tick(ctx context.Context, now time.Time, manual string) error {
 			t.log.Info("dry run: claim skipped", "slot", sl.ID)
 		} else {
 			claim(&l.st, sl.ID, now)
+			// same write as the claim: a crash after this can lose the slot but never repost the clip
+			if l.st.Posted == nil {
+				l.st.Posted = map[string]string{}
+			}
+			l.st.Posted[post.VideoID] = sl.ID + " " + now.UTC().Format(time.RFC3339)
 			b, _ := json.Marshal(l.st)
 			if err := t.d.update(ctx, l.ids["state.json"], b, "application/json"); err != nil {
 				cleanup()
@@ -215,7 +220,18 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	}
 	cleanup := func() { os.RemoveAll(dir) }
 
-	cands, musics := l.cands, l.musics
+	// work on a copy without clips that were already posted (live state, so two slots in one tick differ)
+	var cands []cand
+	for _, c := range l.cands {
+		c.vids = slices.DeleteFunc(slices.Clone(c.vids), func(v driveFile) bool { _, done := l.st.Posted[v.ID]; return done })
+		if len(c.vids) > 0 {
+			cands = append(cands, c)
+		}
+	}
+	musics := l.musics
+	if len(l.cands) > 0 && len(cands) == 0 {
+		return post, cleanup, fmt.Errorf("no unposted videos left: add new clips to Drive videos/ (posted clips are never reposted)")
+	}
 	if len(cands) == 0 || len(musics) == 0 {
 		return post, cleanup, fmt.Errorf("need at least one video and one music file (have %d products with videos, %d music)", len(cands), len(musics))
 	}
@@ -225,6 +241,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 	vpath := filepath.Join(dir, "video")
 	var pr probeResult
 	var product string
+	var vid driveFile
 	picked := false
 	for i := 0; i < 5 && len(cands) > 0 && !picked; i++ {
 		var v driveFile
@@ -241,7 +258,7 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 			t.log.Warn("video too short, trying another", "slot", sl.ID, "file", v.Name)
 			continue
 		}
-		picked = true
+		vid, picked = v, true
 	}
 	if !picked {
 		return post, cleanup, fmt.Errorf("no usable video after up to 5 tries")
@@ -277,14 +294,16 @@ func (t *ticker) prepare(ctx context.Context, sl slot, l loaded) (Post, func(), 
 			}
 		}
 	}
+	t.log.Info("picked", "slot", sl.ID, "product", product, "video", vid.Name, "video_id", vid.ID, "music", m.Name,
+		"burn", burned, "width", pr.Width, "height", pr.Height)
 	if err := runCmd(ctx, t.ffmpeg, ffmpegArgs(spec)); err != nil {
 		return post, cleanup, err
 	}
 	if err := runCmd(ctx, t.ffmpeg, musicArgs(spec)); err != nil {
 		return post, cleanup, err
 	}
-	post = buildPost(caption, product, l.set, sl.ID, spec.Out)
-	post.Product, post.Burn = product, burned
+	post = buildPost(caption, burned, product, l.set, sl.ID, spec.Out)
+	post.Product, post.Burn, post.VideoID = product, burned, vid.ID
 	return post, cleanup, nil
 }
 
@@ -308,18 +327,40 @@ func pick(cs []cand, intn func(int) int) (string, driveFile, []cand) {
 	return cs[i].product, v, rest
 }
 
-func buildPost(caption, product string, set Settings, slotID, file string) Post {
+// oneLine turns literal "\n" and real newlines into spaces, drops '<' '>' and words starting with '#', and collapses spaces.
+func oneLine(s string, keepTags bool) string {
+	s = strings.NewReplacer(`\n`, " ", "\r", " ", "\n", " ", "<", "", ">", "").Replace(s)
+	var keep []string
+	for _, w := range strings.Fields(s) {
+		if keepTags || !strings.HasPrefix(w, "#") {
+			keep = append(keep, w)
+		}
+	}
+	return strings.Join(keep, " ")
+}
+
+// buildPost: the text is burn line, caption, hashtags (empty parts skipped); the title is the burn line without hashtags,
+// else the first caption line, else the product name.
+func buildPost(caption, burn, product string, set Settings, slotID, file string) Post {
 	tags := limitHashtags(set.Hashtags, 30)
-	text := strings.TrimSpace(caption + "\n\n" + tags)
 	first, _, _ := strings.Cut(caption, "\n")
-	title := strings.TrimSpace(strings.NewReplacer("<", "", ">", "").Replace(first + " " + tags))
+	var parts []string
+	for _, p := range []string{oneLine(burn, false), strings.TrimSpace(caption), tags} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	title := oneLine(burn, false)
+	if title == "" {
+		title = oneLine(first, false)
+	}
 	if title == "" {
 		title = product
 	}
 	if title == "" {
 		title = "New video"
 	}
-	return Post{File: file, Text: cutRunes(text, 2200), Title: cutRunes(title, 100), SlotID: slotID, Privacy: set.YouTubePrivacy}
+	return Post{File: file, Text: cutRunes(strings.Join(parts, "\n\n"), 2200), Title: cutRunes(title, 100), SlotID: slotID, Privacy: set.YouTubePrivacy}
 }
 
 // limitHashtags keeps at most n whitespace-separated words starting with '#'.

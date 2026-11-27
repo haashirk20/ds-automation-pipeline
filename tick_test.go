@@ -109,7 +109,7 @@ func TestTickPublishesOnceThenClaimBlocks(t *testing.T) {
 		t.Fatal("tiktok is not enabled")
 	}
 	c := e.pubs["youtube"].calls[0]
-	if c.Text != "Velvet caption\n\n#x" || c.Title != "Velvet caption #x" || c.SlotID != "2026-11-12 09:00#1" || c.Privacy != "public" {
+	if c.Text != "only caption\n\nVelvet caption\n\n#x" || c.Title != "only caption" || c.VideoID != "v1" || c.SlotID != "2026-11-12 09:00#1" || c.Privacy != "public" {
 		t.Fatalf("%+v", c)
 	}
 	if _, err := os.Stat(c.File); err == nil {
@@ -230,8 +230,8 @@ func TestTickBurnTextFromCaptionsDocAndPinned(t *testing.T) {
 	if !strings.Contains(e.pangoArgs(), "--text=comment BOOK \n now 📖") {
 		t.Errorf("pango args %s", e.pangoArgs())
 	}
-	if c := e.pubs["youtube"].calls[0]; strings.Contains(c.Text, "comment BOOK") {
-		t.Errorf("burned text leaked into post text: %q", c.Text)
+	if c := e.pubs["youtube"].calls[0]; !strings.HasPrefix(c.Text, "comment BOOK now 📖\n\nVelvet caption") || c.Title != "comment BOOK now 📖" {
+		t.Errorf("burn line must lead the text and be the title: %+v", c)
 	}
 	e = newTickEnv(t, settingsOne+"burn_caption = no\n", probeLong)
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
@@ -267,7 +267,7 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
-	if c := e.pubs["youtube"].calls[0]; c.Text != "Shop now\n\n#x" {
+	if c := e.pubs["youtube"].calls[0]; c.Text != "b\n\nShop now\n\n#x" {
 		t.Errorf("%q", c.Text)
 	}
 	// product folder exists but has no entry, and default_caption is empty
@@ -276,7 +276,7 @@ func TestTickFallsBackToDefaultCaption(t *testing.T) {
 	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
 		t.Fatal(err)
 	}
-	if c := e.pubs["youtube"].calls[0]; c.Text != "#x" || c.Title != "#x" {
+	if c := e.pubs["youtube"].calls[0]; c.Text != "b\n\n#x" || c.Title != "b" {
 		t.Errorf("%+v", c)
 	}
 }
@@ -333,5 +333,86 @@ func TestTickManualSlotPostsOnceOutsideSchedule(t *testing.T) {
 	// a re-run of the same workflow run must not post again
 	if err := e.tk.tick(ctx, later, "manual 42"); err == nil || len(e.pubs["youtube"].calls) != 1 {
 		t.Fatalf("err=%v calls=%d", err, len(e.pubs["youtube"].calls))
+	}
+}
+
+func (e *tickEnv) posted() map[string]string {
+	var st state
+	json.Unmarshal([]byte(e.f.get("st").content), &st)
+	return st.Posted
+}
+
+func TestTickNeverRepostsAndRecordsAtClaim(t *testing.T) {
+	e := newTickEnv(t, settingsOne, probeLong)
+	e.f.add("v2", "b.mp4", "video/mp4", "pf", "VID2")
+	e.f.get("st").content = `{"claims":{},"posted":{"v1":"old 2026-01-01T00:00:00Z"}}`
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
+		t.Fatal(err)
+	}
+	if c := e.pubs["youtube"].calls[0]; c.VideoID != "v2" {
+		t.Fatalf("picked %q, v1 was already posted", c.VideoID)
+	}
+	p := e.posted()
+	if p["v1"] != "old 2026-01-01T00:00:00Z" || p["v2"] != "2026-11-12 09:00#1 2026-11-12T09:30:00Z" {
+		t.Fatalf("%v", p)
+	}
+}
+
+func TestTickAllPostedFailsBeforeClaim(t *testing.T) {
+	e := newTickEnv(t, settingsOne, probeLong)
+	e.f.get("st").content = `{"claims":{},"posted":{"v1":"x"}}`
+	err := e.tk.tick(context.Background(), e.now, "")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if e.claimed("2026-11-12 09:00#1") || len(e.pubs["youtube"].calls) != 0 || len(e.pubs["facebook"].calls) != 0 {
+		t.Fatal("must not claim or publish")
+	}
+	_, cl, perr := e.tk.prepare(context.Background(), slot{ID: "s"}, mustLoad(t, e))
+	cl()
+	if perr == nil || !strings.Contains(perr.Error(), "no unposted videos left") {
+		t.Fatalf("err %v", perr)
+	}
+}
+
+func mustLoad(t *testing.T, e *tickEnv) loaded {
+	t.Helper()
+	l, err := e.tk.load(context.Background(), e.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.cands = []cand{{"Velvet Tarot Deck", []driveFile{{ID: "v1", Name: "a.mp4"}}}}
+	l.musics = []driveFile{{ID: "m1", Name: "a.mp3"}}
+	return l
+}
+
+func TestTickTwoSlotsPickDifferentFiles(t *testing.T) {
+	e := newTickEnv(t, "times = 09:00, 09:00\ntimezone = UTC\nhashtags = #x\nplatforms = youtube\n", probeLong)
+	e.f.add("v2", "b.mp4", "video/mp4", "pf", "VID2")
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
+		t.Fatal(err)
+	}
+	c := e.pubs["youtube"].calls
+	if len(c) != 2 || c[0].VideoID == c[1].VideoID {
+		t.Fatalf("%+v", c)
+	}
+	if len(e.posted()) != 2 {
+		t.Fatalf("%v", e.posted())
+	}
+	// third slot has nothing left: fails, no extra post
+	e.f.get("st").content = `{"claims":{},"posted":{"v1":"x","v2":"y"}}`
+	if err := e.tk.tick(context.Background(), e.now, ""); err == nil || len(e.pubs["youtube"].calls) != 2 {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestTickDryRunWritesNoPosted(t *testing.T) {
+	e := newTickEnv(t, settingsOne, probeLong)
+	e.tk.dryRun = true
+	if err := e.tk.tick(context.Background(), e.now, ""); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(e.f.get("st").content, "posted") || len(e.posted()) != 0 {
+		t.Fatalf("%s", e.f.get("st").content)
 	}
 }
