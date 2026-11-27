@@ -360,7 +360,7 @@ test('claim bypasses: zero-width characters, fullwidth digits, spoken price, inv
 test('claim bypasses: copy with an invented count and claim hashtags', () => {
   const base = fallbackCopy(brief, aboutScript(script));
   assert.deepEqual(copyProblems(brief, base), []);
-  const withCaption = (caption: string, hashtags = base.youtube.hashtags) => ({ ...base, youtube: { ...base.youtube, caption, hashtags, text: `${caption}\n\n${brief.product.url}\n\n${brief.disclosures.join('\n')}\n\n${hashtags.join(' ')}` } });
+  const withCaption = (caption: string, hashtags = base.youtube.hashtags) => ({ ...base, youtube: { ...base.youtube, caption, hashtags, text: `${caption}\n\n${brief.disclosures.join('\n')}\n\n${hashtags.join(' ')}` } });
   has(copyProblems(brief, withCaption('Over 10,000 sold')), /number 10000/);
   has(copyProblems(brief, withCaption('Warm.', ['#Cozy', '#50OFF', '#Gift'])), /discount/);
   has(copyProblems(brief, withCaption('Warm.', ['#Cozy', '#BlackFridaySale', '#Gift'])), /discount/);

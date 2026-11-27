@@ -8,7 +8,7 @@ import { activateText, EDITABLE_TEXT, fileText as promptFile, isEditable, loadPr
 import { PRICES, monthSpend } from '../llm/client.ts';
 import { productLook } from '../creative/ugc.ts';
 import { videoStyle } from '../shopify/catalog.ts';
-import { buildSummary } from '../ops/summary.ts';
+import { buildSummary, PRIVATE_LABEL } from '../ops/summary.ts';
 import { monthSpendUsd } from '../router/index.ts';
 import { addDays, localDateOf } from '../scheduler/time.ts';
 import type { Brief } from '../contracts.ts';
@@ -763,7 +763,7 @@ ${tile(llm + clips > 0.9 * (cfg.llm.monthlyCapUsd + cfg.tiers.capsUsd.t2) ? 'war
 <tr><th scope="row">Prompt versions in use</th><td>${st.promptVersions && Object.keys(st.promptVersions).length ? Object.entries(st.promptVersions).map(([k, v]) => `${k}: v${v}`).join(', ') : 'files'}</td></tr>
 <tr><th scope="row">Next publication</th><td>${next ? `${fmtTs(next.scheduled_at)} (${next.platform}, ${next.slot_id})` : 'none planned'}</td></tr>
 <tr><th scope="row">Needs attention</th><td>${attention ? html`${badge('bad', String(attention))} <a href="/activity">See Activity log</a>` : '0'}</td></tr>
-<tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
+<tr><th scope="row">Platforms enabled</th><td>${PLATFORMS.filter((p) => cfg.platforms[p].enabled).map((p) => `${PNAME[p]} (${cfg.platforms[p].visibility === 'public' ? 'public' : `private: ${PRIVATE_LABEL[p] ?? 'not public'}`})`).join(', ') || 'none: the pipeline is paused'}</td></tr>
 </tbody></table></div></details>`);
 }
 

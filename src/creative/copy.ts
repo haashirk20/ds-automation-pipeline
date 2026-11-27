@@ -38,7 +38,7 @@ export const aboutConcept = (c: UgcConcept): CopyAbout => ({
 const Item = z.object({ title: z.string(), caption: z.string(), hashtags: z.array(z.string()) });
 const Schema = z.object(Object.fromEntries(PLATFORMS.map((p) => [p, Item])) as Record<Platform, typeof Item>);
 
-const LINKS_CLICKABLE: readonly Platform[] = ['youtube', 'facebook']; // captions on Instagram and TikTok do not link
+const LINKS_CLICKABLE: readonly Platform[] = ['facebook']; // Shorts descriptions (support.google.com/youtube/answer/13748639), Instagram and TikTok captions do not link
 const TITLE_MAX = 90;
 const TEXT_MAX = 2200 - AI_LINE.length; // Instagram's limit, less the line the bridge adds to AI posts
 

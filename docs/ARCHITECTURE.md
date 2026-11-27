@@ -173,7 +173,7 @@ Every system text ends with the brief JSON (`systemPrompt`).
    never reused.
 10. **Copy.** The copy model writes the title, caption and hashtags for the four platforms in one
     call and a second call judges them. Code adds the product link where captions are clickable
-    (YouTube, Facebook) and the brief's disclosures. If the model fails, deterministic copy from the
+    (Facebook only, D-48) and the brief's disclosures. If the model fails, deterministic copy from the
     brief is used.
 11. **Commit.** The one rendered file is copied once per enabled platform. In one transaction the
     slot becomes `ready` and the render rows are written, fenced by the claim time. For a manual

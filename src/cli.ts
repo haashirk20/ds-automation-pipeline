@@ -4,7 +4,7 @@ import { env, loadConfig } from './config/index.ts';
 import { loadEffectiveConfig, resolveConfig } from './config/overrides.ts';
 import { loadPrompts, usePrompts } from './llm/prompts.ts';
 import { hasAlertChannel } from './ops/alert.ts';
-import { backupStatus } from './ops/summary.ts';
+import { backupStatus, privateWarnings } from './ops/summary.ts';
 import { afterRestore } from './ops/snapshot.ts';
 import { kvGet, kvSet, openDb, schemaVersion } from './db/index.ts';
 import { publishDue } from './publish/index.ts';
@@ -136,7 +136,9 @@ async function doctor(now: Date): Promise<number> {
     console.log('heartbeat: ' + (age === null ? 'never' : age < 0 ? 'in the future (clock override?)' : `${age}s ago`));
     console.log('higgsfield: ' + higgsfieldStatus(db, now));
     try {
-      const v = (await resolveConfig(db, now)).version;
+      const r = await resolveConfig(db, now);
+      for (const w of privateWarnings(r.config)) console.log('WARNING ' + w);
+      const v = r.version;
       console.log('settings: ' + (typeof v === 'number' ? `version ${v} active` : v === 'file' ? 'the file (no stored version active)' : `stored version ${v.replace(/^refused: /, 'REFUSED, running on the file: ')}`));
     } catch (e) {
       console.log('settings: unreadable ' + (e as Error).message);

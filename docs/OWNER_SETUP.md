@@ -68,7 +68,7 @@ Both are switched off in `config/pipeline.config.ts`. To switch them on:
 4. Set Instagram's `visibility` to `'public'` when you enable it. Instagram has no private mode,
    and the config refuses `'private'` for an enabled Instagram account.
 
-Put the store link in the Instagram and TikTok bios. Links in their captions are not clickable.
+Put the store link in the Instagram and TikTok bios and in the YouTube channel's About links section. Links in their captions (and in YouTube Shorts descriptions) are not clickable.
 
 ## 3. Going public
 

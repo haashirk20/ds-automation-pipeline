@@ -123,8 +123,8 @@ test('writeCopy (stub) builds platform text: link only where clickable, disclosu
   const db = fresh();
   process.env.LLM_STUB = '1';
   const c = await writeCopy(db, config, brief, aboutScript(sample(0)), NOW, 's1');
-  for (const p of ['youtube', 'facebook'] as const) assert.ok(c[p].text.includes(brief.product.url), p);
-  for (const p of ['instagram', 'tiktok'] as const) assert.ok(!c[p].text.includes('http'), p);
+  for (const p of ['facebook'] as const) assert.ok(c[p].text.includes(brief.product.url), p);
+  for (const p of ['youtube', 'instagram', 'tiktok'] as const) assert.ok(!c[p].text.includes('http'), p);
   for (const p of Object.keys(c) as (keyof typeof c)[]) {
     assert.ok(c[p].text.includes('Power bank not included.'));
     assert.ok(c[p].text.endsWith(c[p].hashtags.join(' ')));

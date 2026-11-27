@@ -31,6 +31,17 @@ export function backupStatus(now: Date): string {
   return s;
 }
 
+// What private means per platform; the summary, doctor and admin pages all use these labels.
+export const PRIVATE_LABEL: Record<string, string> = {
+  youtube: 'only you can see these posts, 0 views expected',
+  tiktok: 'posts go to the TikTok inbox as drafts and are not published',
+  facebook: 'posts are saved as drafts in Publishing Tools and are not published',
+};
+const NAMES: Record<string, string> = { youtube: 'YouTube', tiktok: 'TikTok', facebook: 'Facebook' };
+// One line per enabled platform that is not public. Pass the effective config so admin overrides count.
+export const privateWarnings = (config: Config): string[] =>
+  Object.entries(config.platforms).filter(([, p]) => p.enabled && p.visibility !== 'public').map(([k]) => `${NAMES[k] ?? k}: private (${PRIVATE_LABEL[k] ?? 'not public'})`);
+
 type Pub = { idx: number; platform: string; state: string; post_url: string | null };
 
 export function buildSummary(db: Db, config: Config, now: Date): string {
@@ -66,6 +77,7 @@ export function buildSummary(db: Db, config: Config, now: Date): string {
   const attention = (db.prepare("SELECT COUNT(*) AS n FROM publications WHERE state = 'needs_attention'").get() as { n: number }).n;
   const since = new Date(now.getTime() - 86400000).toISOString();
   const undelivered = (db.prepare("SELECT COUNT(*) AS n FROM events WHERE delivered = 0 AND ts > ? AND kind != 'daily_summary'").get(since) as { n: number }).n;
+  L.push(...privateWarnings(config));
   L.push(`Needs attention: ${attention}`, `Undelivered alerts, last 24h: ${undelivered}`, `Backup: ${backupStatus(now)}`);
 
   const text = L.join('\n');

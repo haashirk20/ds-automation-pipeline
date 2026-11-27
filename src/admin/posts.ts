@@ -7,6 +7,7 @@ import { audit, loadEffectiveConfig } from '../config/overrides.ts';
 import { approveHold, discardHold, manualToday, planManual } from '../scheduler/holds.ts';
 import { html, raw } from './html.ts';
 import { inside, SLOT_ID } from './media.ts';
+import { PRIVATE_LABEL } from '../ops/summary.ts';
 import { autoControl, csrfField, dryRunOn, layout, PNAME, redirect, type Ctx, type Res } from './pages.ts';
 import { badge, confirmRemove, empty, flash, fmtLocal, formRow, money, type Kind } from './ui.ts';
 
@@ -50,7 +51,7 @@ export async function postsPage(ctx: Ctx): Promise<Res> {
   const names = new Map((ctx.db.prepare('SELECT id, name FROM video_models').all() as { id: number; name: string }[]).map((r) => [`custom:${r.id}`, r.name]));
   const modelName = (v: string | null) => (v === null ? 'Usual model' : (names.get(v) ?? v));
   const per = cfg.tiers.t2.usdPerClip;
-  const goes = enabled.map(([k, p]) => `${PNAME[k]} (${VIS[p.visibility]})`).join(', ');
+  const goes = enabled.map(([k, p]) => `${PNAME[k]} (${p.visibility === 'private' ? (PRIVATE_LABEL[k] ?? 'only me') : VIS[p.visibility]})`).join(', ');
   // The factory beats every tick; older than 5 minutes (as on Home and Factory) means it is not running.
   const hb = kvGet(ctx.db, 'heartbeat');
   const alive = !!hb && ctx.now.getTime() - Date.parse(hb) <= 300_000;

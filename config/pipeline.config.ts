@@ -20,9 +20,9 @@ export default {
     // safe: pixels kept clear of text on each edge of the 1080x1920 frame. Estimates for organic
     // posts (the published figures are for paid ads and reserve more). Check them against a real
     // post on each platform and adjust.
-    youtube: { handle: 'shopgiftwell', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in description', safe: { top: 200, bottom: 480, left: 60, right: 160 } },
+    youtube: { handle: 'shopgiftwell', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 200, bottom: 480, left: 60, right: 160 } },
     facebook: { handle: 'Merry Marts', enabled: false, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Shop now', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
-    // Instagram and TikTok caption links are not clickable: put the store link in each bio.
+    // Instagram and TikTok captions and YouTube Shorts descriptions do not link: put the store link in each bio or channel.
     instagram: { handle: 'shopgiftwellgifts', enabled: false, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 480, left: 60, right: 120 } },
     tiktok: { handle: 'merrymarts', enabled: true, visibility: 'private', slots: ['12:15', '19:45'], cta: 'Link in bio', safe: { top: 220, bottom: 520, left: 60, right: 160 } },
   },

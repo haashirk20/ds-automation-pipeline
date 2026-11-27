@@ -47,6 +47,15 @@ test('summary lists yesterday, today, spend, attention, backup', () => {
   assert.match(t, /Backup: not configured/);
 });
 
+test('summary flags enabled non-public platforms only', () => {
+  const db = fresh();
+  const mk = (yt: 'public' | 'private', ytOn: boolean) => ({ ...config, platforms: { ...config.platforms, youtube: { ...config.platforms.youtube, enabled: ytOn, visibility: yt } } });
+  assert.match(buildSummary(db, mk('private', true), AT), /YouTube: private \(only you can see these posts, 0 views expected\)/);
+  assert.match(buildSummary(db, { ...config, platforms: { ...config.platforms, facebook: { ...config.platforms.facebook, enabled: true, visibility: 'private' } } }, AT), /Facebook: private \(posts are saved as drafts in Publishing Tools and are not published\)/);
+  assert.doesNotMatch(buildSummary(db, mk('public', true), AT), /YouTube: private/);
+  assert.doesNotMatch(buildSummary(db, mk('private', false), AT), /YouTube: private/);
+});
+
 test('summary is cut to 1900 characters', () => {
   const db = fresh();
   for (let i = 1; i <= 60; i++) {

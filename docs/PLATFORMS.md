@@ -222,6 +222,10 @@ of a video is ok, we don't allow use of these tools to flood our platform." Cons
 strikes and channel termination.
 [Spam policies](https://support.google.com/youtube/answer/2801973)
 
+**Links.** support.google.com/youtube/answer/13748639: "To reduce spam and scam attempts, URLs placed in
+YouTube Shorts comments and Shorts descriptions are non-clickable." The call to action is "Link in bio"
+(D-48), and the store link goes in the channel's About links.
+
 **Metrics.** `videos.list?part=statistics` for views, likes and comments (1 unit). Average view
 duration needs the YouTube Analytics API `reports.query`.
 

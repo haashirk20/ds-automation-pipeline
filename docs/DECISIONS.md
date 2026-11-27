@@ -1180,6 +1180,24 @@ repeat one.
 
 **Cost.** No dependency, no model call.
 
+## D-48 YouTube Shorts descriptions carry no store link; private visibility is flagged (2026-11-27)
+
+**Chosen.** YouTube's help page (support.google.com/youtube/answer/13748639) says URLs in Shorts
+comments and Shorts descriptions are non-clickable. The copy step no longer appends the store link to
+the YouTube text (`LINKS_CLICKABLE` in `src/creative/copy.ts` is Facebook only), and YouTube's end-card
+call to action is "Link in bio" like Instagram and TikTok; the owner puts the store link on the channel.
+
+**Alternatives.** Keep the link and "Link in description": viewers are told to use a link they cannot
+click. Show the link in the video: it would cost screen space and is still not tappable.
+
+**Private visibility.** Both enabled platforms (YouTube, TikTok) default to `private`, so posts get
+about zero views: a private YouTube video, and a TikTok draft in the inbox that is never published.
+`doctor`, the daily summary and the admin Home now say so, reading the effective config so admin
+overrides count. The default stays private because going public needs the owner's confirmation
+(the `confirm_public` gate on the admin Settings page).
+
+**Cost.** No dependency, no model call.
+
 ## Open questions for the owner
 
 1. Tags such as "bestseller" stay out of ad claims (D-21).
